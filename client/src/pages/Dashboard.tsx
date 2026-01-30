@@ -1,14 +1,17 @@
+
 import { useEffect, useState } from "react";
+import { CFDISATStatus } from "@/components/CFDISATStatus";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
-import { CheckCircle2, AlertCircle, XCircle, TrendingUp, FileText, DollarSign, Download, Moon, Sun, ArrowUpDown, ArrowUp, ArrowDown, Trash2 } from "lucide-react";
+import { CheckCircle2, AlertCircle, XCircle, TrendingUp, FileText, DollarSign, Download, Moon, Sun, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import UploadZone, { UploadedFile } from "@/components/UploadZone";
 import { useXMLValidator, ValidationResult } from "@/hooks/useXMLValidator";
 import { exportToExcel } from "@/lib/excelExporter";
 import { toast } from "sonner";
 import { useTheme } from "@/contexts/ThemeContext";
+import { Link } from "wouter";
 
 type DashboardResult = ValidationResult;
 type SortField = 'fileName' | 'rfcEmisor' | 'total' | 'estatusSAT' | 'resultado' | 'comentarioFiscal';
@@ -271,7 +274,7 @@ export default function Dashboard() {
                 <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-3 overflow-hidden">
                   <div
                     className="bg-gradient-to-r from-blue-500 to-blue-600 h-3 rounded-full transition-all duration-300 ease-out"
-                    style={{ width: `${(progress.current / progress.total) * 100}%` }}
+                    style={{ width: `${(progress.current / progress.total) * 100}% ` }}
                   />
                 </div>
                 <p className="text-xs text-slate-500 dark:text-slate-400 text-center">
@@ -349,13 +352,13 @@ export default function Dashboard() {
                       cx="50%"
                       cy="50%"
                       labelLine={false}
-                      label={({ name, value }) => `${name}: ${value}`}
+                      label={({ name, value }) => `${name}: ${value} `}
                       outerRadius={100}
                       fill="#8884d8"
                       dataKey="value"
                     >
                       {statusData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} />
+                        <Cell key={`cell - ${index} `} fill={entry.color} />
                       ))}
                     </Pie>
                     <Tooltip />
@@ -476,9 +479,13 @@ export default function Dashboard() {
                         <td className="py-3 px-4 text-slate-600 dark:text-slate-400">{result.rfcEmisor}</td>
                         <td className="py-3 px-4 text-slate-900 dark:text-slate-100 font-semibold">${result.total.toFixed(2)}</td>
                         <td className="py-3 px-4">
-                          <Badge variant="outline" className="text-xs">
-                            {result.estatusSAT}
-                          </Badge>
+                          <CFDISATStatus
+                            estatusSAT={result.estatusSAT as any}
+                            estatusCancelacion={result.fechaCancelacion}
+                            rfcEmisorBlacklist={result.rfcEmisorBlacklist}
+                            rfcReceptorBlacklist={result.rfcReceptorBlacklist}
+                            compact={true}
+                          />
                         </td>
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-2">

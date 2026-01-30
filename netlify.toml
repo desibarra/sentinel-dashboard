@@ -1,3 +1,10 @@
+# Proxy para API del SAT (evita CORS)
+[[redirects]]
+  from = "/api/sat/*"
+  to = "https://consultaqr.facturaelectronica.sat.gob.mx/:splat"
+  status = 200
+  force = true
+
 [build]
   command = "npm run build"
   publish = "dist/public"

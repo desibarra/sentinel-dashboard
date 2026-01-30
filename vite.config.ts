@@ -36,6 +36,14 @@ export default defineConfig({
       "localhost",
       "127.0.0.1",
     ],
+    proxy: {
+      '/api/sat': {
+        target: 'https://consultaqr.facturaelectronica.sat.gob.mx',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/sat/, ''),
+        secure: false, // A veces SAT tiene certs extraños
+      },
+    },
     fs: {
       strict: true,
       deny: ["**/.*"],
