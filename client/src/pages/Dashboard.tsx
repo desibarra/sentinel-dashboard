@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
-import { CheckCircle2, AlertCircle, XCircle, TrendingUp, FileText, DollarSign, Download, Moon, Sun, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import { CheckCircle2, AlertCircle, XCircle, TrendingUp, FileText, DollarSign, Download, Moon, Sun, ArrowUpDown, ArrowUp, ArrowDown, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import UploadZone, { UploadedFile } from "@/components/UploadZone";
 import { useXMLValidator, ValidationResult } from "@/hooks/useXMLValidator";
@@ -34,7 +34,7 @@ export default function Dashboard() {
   const handleFilesReady = async (files: UploadedFile[]) => {
     try {
       const validationResults = await validateXMLFiles(files);
-      
+
       // Agregar resultados al dashboard
       setResults((prev) => [...prev, ...validationResults]);
       setHasValidatedResults(true);
@@ -61,6 +61,17 @@ export default function Dashboard() {
     } catch (error) {
       toast.error("Error al exportar el diagnóstico");
       console.error("Export error:", error);
+    }
+  };
+
+  const handleClearData = () => {
+    if (window.confirm("¿Estás seguro de eliminar todos los resultados actuales?")) {
+      setResults([]);
+      setHasValidatedResults(false);
+      setSortField(null);
+      setSortDirection(null);
+      setCurrentPage(1);
+      toast.info("Tablero limpiado correctamente");
     }
   };
 
@@ -103,7 +114,7 @@ export default function Dashboard() {
   // Función de ordenamiento
   const handleSort = (field: SortField) => {
     let newDirection: SortDirection = 'asc';
-    
+
     if (sortField === field) {
       if (sortDirection === 'asc') {
         newDirection = 'desc';
@@ -111,7 +122,7 @@ export default function Dashboard() {
         newDirection = null;
       }
     }
-    
+
     setSortField(newDirection === null ? null : field);
     setSortDirection(newDirection);
   };
@@ -132,7 +143,7 @@ export default function Dashboard() {
     if (!sortField || !sortDirection) return 0;
 
     let comparison = 0;
-    
+
     switch (sortField) {
       case 'fileName':
         comparison = a.fileName.localeCompare(b.fileName);
@@ -213,22 +224,33 @@ export default function Dashboard() {
               )}
             </Button>
             {stats.total > 0 && (
-              <Button
-                onClick={handleExportToExcel}
-                className="gap-2"
-                size="lg"
-              >
-                <Download className="w-4 h-4" />
-                <span className="hidden sm:inline">Exportar diagnóstico (Excel)</span>
-                <span className="sm:hidden">Excel</span>
-              </Button>
+              <>
+                <Button
+                  onClick={handleClearData}
+                  variant="destructive"
+                  size="lg"
+                  className="gap-2"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span className="hidden sm:inline">Limpiar Todo</span>
+                </Button>
+                <Button
+                  onClick={handleExportToExcel}
+                  className="gap-2"
+                  size="lg"
+                >
+                  <Download className="w-4 h-4" />
+                  <span className="hidden sm:inline">Exportar diagnóstico (Excel)</span>
+                  <span className="sm:hidden">Excel</span>
+                </Button>
+              </>
             )}
           </div>
         </div>
 
         {/* Upload Zone */}
-        <UploadZone 
-          onFilesReady={handleFilesReady} 
+        <UploadZone
+          onFilesReady={handleFilesReady}
           isValidating={isValidating}
           hasValidatedResults={hasValidatedResults}
         />
@@ -247,7 +269,7 @@ export default function Dashboard() {
                   </p>
                 </div>
                 <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-3 overflow-hidden">
-                  <div 
+                  <div
                     className="bg-gradient-to-r from-blue-500 to-blue-600 h-3 rounded-full transition-all duration-300 ease-out"
                     style={{ width: `${(progress.current / progress.total) * 100}%` }}
                   />
@@ -472,7 +494,7 @@ export default function Dashboard() {
                   </tbody>
                 </table>
               </div>
-              
+
               {/* ✅ PRODUCCIÓN: Controles de paginación */}
               {totalPages > 1 && (
                 <div className="mt-6 flex items-center justify-between border-t border-slate-200 dark:border-slate-700 pt-4">
