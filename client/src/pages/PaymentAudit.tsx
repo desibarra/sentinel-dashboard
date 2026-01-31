@@ -77,6 +77,10 @@ export default function PaymentAudit() {
         const newPayments: PaymentDoc[] = [];
         const processedUUIDs = new Set<string>(); // Check duplicates in current batch
 
+        // Add existing UUIDs to the set to avoid re-adding duplicates if re-uploaded or cross-checked
+        invoices.forEach(inv => processedUUIDs.add(inv.uuid.toLowerCase()));
+        payments.forEach(pay => processedUUIDs.add(pay.uuid.toLowerCase()));
+
         const parser = new DOMParser();
 
         for (let i = 0; i < files.length; i++) {
