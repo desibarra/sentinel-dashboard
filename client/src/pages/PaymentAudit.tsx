@@ -9,6 +9,13 @@ import { FileText, Download, Trash2, Sun, Moon, DollarSign, CheckCircle2, AlertC
 import * as XLSX from "xlsx";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "wouter";
+import {
+    useReactTable,
+    getCoreRowModel,
+    flexRender,
+    createColumnHelper,
+    getSortedRowModel,
+} from "@tanstack/react-table";
 
 // Interfaces for our specific Audit logic
 interface PaymentRelation {
@@ -334,13 +341,85 @@ export default function PaymentAudit() {
     };
 
     // Stats
+
     const totalFacturado = invoices.reduce((acc, curr) => acc + curr.total, 0);
     const totalPendiente = invoices.reduce((acc, curr) => acc + curr.saldoCalculado, 0);
-    // Paid is Total - Pending (Global view) implies strict matching. 
-    // Or we can sum montoPagadoCalculado for "Evidence Loaded".
-    // Let's use the Balance view for consistency with audit.
-    // Actually, TotalFacturado - TotalPendiente = TotalAmortizado (Real Paid acc to SAT)
     const totalAmortizado = totalFacturado - totalPendiente;
+
+    const columnHelper = createColumnHelper<InvoiceDoc>();
+
+    const columns = [
+        columnHelper.accessor("uuid", {
+            header: "UUID",
+            cell: (info) => (
+                <span className="font-mono text-xs block max-w-[150px] truncate" title={info.getValue()}>
+                    {info.getValue()}
+                </span>
+            ),
+            size: 150,
+        }),
+        columnHelper.accessor((row) => `${row.serie}${row.folio}`, {
+            id: "folio",
+            header: "Folio",
+            cell: (info) => info.getValue(),
+            size: 100,
+        }),
+        columnHelper.accessor("total", {
+            header: "Total",
+            cell: (info) => <span className="font-bold text-slate-900 dark:text-white">${info.getValue().toFixed(2)}</span>,
+            size: 100,
+        }),
+        columnHelper.accessor((row) => row.total - row.saldoCalculado, {
+            id: "amortizado",
+            header: "Amortizado",
+            cell: (info) => <span className="text-green-600">${info.getValue().toFixed(2)}</span>,
+            size: 100,
+        }),
+        columnHelper.accessor("saldoCalculado", {
+            header: "Saldo",
+            cell: (info) => <span className="text-red-600">${info.getValue().toFixed(2)}</span>,
+            size: 100,
+        }),
+        columnHelper.accessor("estadoPago", {
+            header: "Estado",
+            cell: (info) => {
+                const val = info.getValue();
+                if (val === "Pagado") return <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Pagado</Badge>;
+                if (val === "Parcial") return <Badge className="bg-yellow-100 text-yellow-800 hover:bg-yellow-100">Parcial</Badge>;
+                return <Badge className="bg-red-100 text-red-800 hover:bg-red-100">Pendiente</Badge>;
+            },
+            size: 100,
+        }),
+        columnHelper.accessor("pagosRelacionados", {
+            header: "Pagos (Evidencia)",
+            cell: (info) => {
+                const pagos = info.getValue();
+                if (pagos.length === 0) return <span className="text-slate-400 text-xs">Sin evidencia</span>;
+                return (
+                    <ul className="list-disc pl-4 text-xs">
+                        {pagos.map((p, idx) => (
+                            <li key={idx}>
+                                ${p.impPagado.toFixed(2)} (Parc. {p.numParcialidad}) - {p.fechaPago}
+                            </li>
+                        ))}
+                    </ul>
+                );
+            },
+            size: 250,
+        }),
+    ];
+
+    const table = useReactTable({
+        data: invoices,
+        columns,
+        getCoreRowModel: getCoreRowModel(),
+        columnResizeMode: "onChange",
+        defaultColumn: {
+            size: 150, // default column size
+            minSize: 50,
+            maxSize: 500,
+        },
+    });
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 p-4 md:p-8 transition-colors duration-200">
@@ -439,44 +518,59 @@ export default function PaymentAudit() {
                         </CardHeader>
                         <CardContent>
                             <div className="overflow-x-auto">
-                                <table className="w-full text-sm text-left">
+                                <table
+                                    className="w-full text-sm text-left"
+                                    style={{ width: table.getTotalSize() }}
+                                >
                                     <thead className="text-xs text-slate-500 uppercase bg-slate-50 dark:bg-slate-700 dark:text-slate-400">
-                                        <tr>
-                                            <th className="px-6 py-3">UUID</th>
-                                            <th className="px-6 py-3">Folio</th>
-                                            <th className="px-6 py-3">Total</th>
-                                            <th className="px-6 py-3">Amortizado</th>
-                                            <th className="px-6 py-3">Saldo</th>
-                                            <th className="px-6 py-3">Estado</th>
-                                            <th className="px-6 py-3">Pagos (Evidencia)</th>
-                                        </tr>
+                                        {table.getHeaderGroups().map((headerGroup) => (
+                                            <tr key={headerGroup.id}>
+                                                {headerGroup.headers.map((header) => (
+                                                    <th
+                                                        key={header.id}
+                                                        className="px-6 py-3 relative group"
+                                                        style={{ width: header.getSize() }}
+                                                    >
+                                                        {header.isPlaceholder
+                                                            ? null
+                                                            : flexRender(
+                                                                header.column.columnDef.header,
+                                                                header.getContext()
+                                                            )}
+                                                        <div
+                                                            onMouseDown={header.getResizeHandler()}
+                                                            onTouchStart={header.getResizeHandler()}
+                                                            className={`absolute right-0 top-0 h-full w-1.5 cursor-col-resize select-none touch-none hover:bg-blue-300 opacity-0 group-hover:opacity-100 transition-opacity ${header.column.getIsResizing()
+                                                                ? "bg-blue-500 opacity-100"
+                                                                : ""
+                                                                }`}
+                                                            style={{
+                                                                transform: header.column.getIsResizing() ? `translateX(${table.getState().columnSizingInfo.deltaOffset}px)` : '',
+                                                            }}
+                                                        />
+                                                    </th>
+                                                ))}
+                                            </tr>
+                                        ))}
                                     </thead>
                                     <tbody>
-                                        {invoices.map((inv) => (
-                                            <tr key={inv.uuid} className="bg-white border-b dark:bg-slate-800 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700">
-                                                <td className="px-6 py-4 font-mono text-xs max-w-[150px] truncate" title={inv.uuid}>{inv.uuid}</td>
-                                                <td className="px-6 py-4">{inv.serie}{inv.folio}</td>
-                                                <td className="px-6 py-4 font-bold text-slate-900 dark:text-white">${inv.total.toFixed(2)}</td>
-                                                <td className="px-6 py-4 text-green-600">${(inv.total - inv.saldoCalculado).toFixed(2)}</td>
-                                                <td className="px-6 py-4 text-red-600">${inv.saldoCalculado.toFixed(2)}</td>
-                                                <td className="px-6 py-4">
-                                                    {inv.estadoPago === "Pagado" && <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Pagado</Badge>}
-                                                    {inv.estadoPago === "Parcial" && <Badge className="bg-yellow-100 text-yellow-800 hover:bg-yellow-100">Parcial</Badge>}
-                                                    {inv.estadoPago === "Pendiente" && <Badge className="bg-red-100 text-red-800 hover:bg-red-100">Pendiente</Badge>}
-                                                </td>
-                                                <td className="px-6 py-4 text-xs">
-                                                    {inv.pagosRelacionados.length === 0 ? (
-                                                        <span className="text-slate-400">Sin evidencia</span>
-                                                    ) : (
-                                                        <ul className="list-disc pl-4">
-                                                            {inv.pagosRelacionados.map((p, idx) => (
-                                                                <li key={idx}>
-                                                                    ${p.impPagado.toFixed(2)} (Parc. {p.numParcialidad}) - {p.fechaPago}
-                                                                </li>
-                                                            ))}
-                                                        </ul>
-                                                    )}
-                                                </td>
+                                        {table.getRowModel().rows.map((row) => (
+                                            <tr
+                                                key={row.id}
+                                                className="bg-white border-b dark:bg-slate-800 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700"
+                                            >
+                                                {row.getVisibleCells().map((cell) => (
+                                                    <td
+                                                        key={cell.id}
+                                                        className="px-6 py-4"
+                                                        style={{ width: cell.column.getSize() }}
+                                                    >
+                                                        {flexRender(
+                                                            cell.column.columnDef.cell,
+                                                            cell.getContext()
+                                                        )}
+                                                    </td>
+                                                ))}
                                             </tr>
                                         ))}
                                     </tbody>
