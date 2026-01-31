@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import UploadZone, { UploadedFile } from "@/components/UploadZone";
 import { toast } from "sonner";
 import { useTheme } from "@/contexts/ThemeContext";
-import { FileText, Download, Trash2, Sun, Moon, DollarSign, CheckCircle2, AlertCircle, XCircle } from "lucide-react";
+import { FileText, Download, Trash2, Sun, Moon, DollarSign, CheckCircle2, AlertCircle, XCircle, ArrowUpDown, ArrowUp, ArrowDown, Code, Copy } from "lucide-react";
 import * as XLSX from "xlsx";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "wouter";
@@ -15,7 +15,39 @@ import {
     flexRender,
     createColumnHelper,
     getSortedRowModel,
+    SortingState,
 } from "@tanstack/react-table";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
+
+const formatXML = (xml: string) => {
+    let formatted = '';
+    let pad = 0;
+    const tokens = xml.split(/>\s*</);
+    for (let i = 0; i < tokens.length; i++) {
+        let token = tokens[i];
+        if (i !== 0) token = '<' + token;
+        if (i !== tokens.length - 1) token = token + '>';
+        let indent = 0;
+        if (token.match(/^<\/\w/)) {
+            if (pad !== 0) pad -= 1;
+        } else if (token.match(/^<\w[^>]*[^\/]>.*$/)) {
+            indent = 1;
+        } else {
+            indent = 0;
+        }
+        const padding = '  '.repeat(pad);
+        formatted += padding + token + '\n';
+        pad += indent;
+    }
+    return formatted.trim();
+};
 
 // Interfaces for our specific Audit logic
 interface PaymentRelation {
@@ -67,6 +99,8 @@ export default function PaymentAudit() {
     const [payments, setPayments] = useState<PaymentDoc[]>([]);
     const [loading, setLoading] = useState(false);
     const [processedCount, setProcessedCount] = useState({ current: 0, total: 0 });
+    const [sorting, setSorting] = useState<SortingState>([]);
+    const [viewXml, setViewXml] = useState<{ content: string, name: string } | null>(null);
 
     // Custom parser for audit needs
     const parseFiles = async (files: UploadedFile[]) => {
@@ -411,11 +445,36 @@ export default function PaymentAudit() {
             },
             size: 250,
         }),
+        columnHelper.display({
+            id: 'actions',
+            header: 'Acciones',
+            cell: (info) => (
+                <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setViewXml({
+                        content: info.row.original.xmlContent,
+                        name: info.row.original.fileName
+                    })}
+                    className="h-8 w-8 p-0"
+                    title="Ver XML"
+                >
+                    <Code className="w-4 h-4 text-slate-500 hover:text-blue-600" />
+                </Button>
+            ),
+            size: 80,
+            enableSorting: false,
+        }),
     ];
 
     const table = useReactTable({
         data: invoices,
         columns,
+        state: {
+            sorting,
+        },
+        onSortingChange: setSorting,
+        getSortedRowModel: getSortedRowModel(),
         getCoreRowModel: getCoreRowModel(),
         columnResizeMode: "onChange",
         defaultColumn: {
@@ -529,31 +588,49 @@ export default function PaymentAudit() {
                                     <thead className="text-xs text-slate-500 uppercase bg-slate-50 dark:bg-slate-700 dark:text-slate-400">
                                         {table.getHeaderGroups().map((headerGroup) => (
                                             <tr key={headerGroup.id}>
-                                                {headerGroup.headers.map((header) => (
-                                                    <th
-                                                        key={header.id}
-                                                        className="px-6 py-3 relative group"
-                                                        style={{ width: header.getSize() }}
-                                                    >
-                                                        {header.isPlaceholder
-                                                            ? null
-                                                            : flexRender(
-                                                                header.column.columnDef.header,
-                                                                header.getContext()
-                                                            )}
-                                                        <div
-                                                            onMouseDown={header.getResizeHandler()}
-                                                            onTouchStart={header.getResizeHandler()}
-                                                            className={`absolute right-0 top-0 h-full w-1.5 cursor-col-resize select-none touch-none hover:bg-blue-300 opacity-0 group-hover:opacity-100 transition-opacity ${header.column.getIsResizing()
-                                                                ? "bg-blue-500 opacity-100"
-                                                                : ""
-                                                                }`}
-                                                            style={{
-                                                                transform: header.column.getIsResizing() ? `translateX(${table.getState().columnSizingInfo.deltaOffset}px)` : '',
-                                                            }}
-                                                        />
-                                                    </th>
-                                                ))}
+                                                {headerGroup.headers.map((header) => {
+                                                    const canSort = header.column.getCanSort();
+                                                    return (
+                                                        <th
+                                                            key={header.id}
+                                                            className="px-6 py-3 relative group select-none"
+                                                            style={{ width: header.getSize() }}
+                                                        >
+                                                            <div
+                                                                className={`flex items-center gap-2 ${canSort ? 'cursor-pointer hover:text-blue-600 dark:hover:text-blue-400' : ''}`}
+                                                                onClick={header.column.getToggleSortingHandler()}
+                                                            >
+                                                                {header.isPlaceholder
+                                                                    ? null
+                                                                    : flexRender(
+                                                                        header.column.columnDef.header,
+                                                                        header.getContext()
+                                                                    )}
+                                                                {canSort && (
+                                                                    <div className="w-4 h-4">
+                                                                        {{
+                                                                            asc: <ArrowUp className="w-4 h-4 text-blue-600 dark:text-blue-400" />,
+                                                                            desc: <ArrowDown className="w-4 h-4 text-blue-600 dark:text-blue-400" />,
+                                                                        }[header.column.getIsSorted() as string] ?? (
+                                                                                <ArrowUpDown className="w-4 h-4 opacity-40 group-hover:opacity-100 transition-opacity" />
+                                                                            )}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                            <div
+                                                                onMouseDown={header.getResizeHandler()}
+                                                                onTouchStart={header.getResizeHandler()}
+                                                                className={`absolute right-0 top-0 h-full w-1.5 cursor-col-resize select-none touch-none hover:bg-blue-300 opacity-0 group-hover:opacity-100 transition-opacity ${header.column.getIsResizing()
+                                                                    ? "bg-blue-500 opacity-100"
+                                                                    : ""
+                                                                    }`}
+                                                                style={{
+                                                                    transform: header.column.getIsResizing() ? `translateX(${table.getState().columnSizingInfo.deltaOffset}px)` : '',
+                                                                }}
+                                                            />
+                                                        </th>
+                                                    );
+                                                })}
                                             </tr>
                                         ))}
                                     </thead>
@@ -584,6 +661,68 @@ export default function PaymentAudit() {
                     </Card>
                 )}
             </div>
+
+            {/* XML Viewer Modal */}
+            <Dialog open={!!viewXml} onOpenChange={(open) => !open && setViewXml(null)}>
+                <DialogContent className="max-w-4xl h-[80vh] flex flex-col gap-0 p-0">
+                    <DialogHeader className="p-6 pb-2 border-b dark:border-slate-700 bg-slate-50 dark:bg-slate-900 rounded-t-lg">
+                        <DialogTitle className="flex items-center gap-2">
+                            <FileText className="w-5 h-5 text-blue-600" />
+                            Visor XML
+                        </DialogTitle>
+                        <DialogDescription className="font-mono text-xs text-slate-500 truncate max-w-xl">
+                            {viewXml?.name}
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="flex-1 overflow-hidden bg-[#1e1e1e] relative">
+                        <ScrollArea className="h-full w-full">
+                            <pre className="p-4 text-xs font-mono text-gray-300 leading-relaxed tab-4">
+                                <code>{viewXml ? formatXML(viewXml.content) : ''}</code>
+                            </pre>
+                            <ScrollBar orientation="horizontal" />
+                        </ScrollArea>
+                    </div>
+
+                    <div className="p-4 border-t dark:border-slate-700 bg-slate-50 dark:bg-slate-900 rounded-b-lg flex justify-between items-center">
+                        <div className="text-xs text-slate-500">
+                            {viewXml ? (viewXml.content.length / 1024).toFixed(2) : 0} KB
+                        </div>
+                        <div className="flex gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                    if (viewXml) {
+                                        navigator.clipboard.writeText(viewXml.content);
+                                        toast.success("XML copiado al portapapeles");
+                                    }
+                                }}
+                            >
+                                <Copy className="w-4 h-4 mr-2" /> Copiar
+                            </Button>
+                            <Button
+                                variant="default"
+                                size="sm"
+                                onClick={() => {
+                                    if (viewXml) {
+                                        const blob = new Blob([viewXml.content], { type: "text/xml" });
+                                        const url = URL.createObjectURL(blob);
+                                        const link = document.createElement("a");
+                                        link.href = url;
+                                        link.download = viewXml.name || "comprobante.xml";
+                                        document.body.appendChild(link);
+                                        link.click();
+                                        document.body.removeChild(link);
+                                    }
+                                }}
+                            >
+                                <Download className="w-4 h-4 mr-2" /> Descargar
+                            </Button>
+                        </div>
+                    </div>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }
