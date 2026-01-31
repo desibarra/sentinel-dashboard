@@ -14,7 +14,7 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { Link } from "wouter";
 
 type DashboardResult = ValidationResult;
-type SortField = 'fileName' | 'rfcEmisor' | 'total' | 'estatusSAT' | 'resultado' | 'comentarioFiscal';
+type SortField = 'fileName' | 'fechaEmision' | 'rfcEmisor' | 'total' | 'estatusSAT' | 'resultado' | 'comentarioFiscal';
 type SortDirection = 'asc' | 'desc' | null;
 
 export default function Dashboard() {
@@ -23,8 +23,8 @@ export default function Dashboard() {
   const [hasValidatedResults, setHasValidatedResults] = useState(false);
   const { isValidating, validateXMLFiles, progress } = useXMLValidator();
   const { theme, toggleTheme } = useTheme();
-  const [sortField, setSortField] = useState<SortField | null>(null);
-  const [sortDirection, setSortDirection] = useState<SortDirection>(null);
+  const [sortField, setSortField] = useState<SortField | null>('fechaEmision');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [currentPage, setCurrentPage] = useState(1);
   const ITEMS_PER_PAGE = 50;
 
@@ -114,6 +114,13 @@ export default function Dashboard() {
     return <Badge className="bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200">No Usable</Badge>;
   };
 
+  const formatDate = (dateStr: string) => {
+    if (!dateStr || dateStr === "NO DISPONIBLE") return "Sin fecha";
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return "Sin fecha";
+    return date.toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" });
+  };
+
   // Función de ordenamiento
   const handleSort = (field: SortField) => {
     let newDirection: SortDirection = 'asc';
@@ -165,6 +172,9 @@ export default function Dashboard() {
         break;
       case 'comentarioFiscal':
         comparison = a.comentarioFiscal.localeCompare(b.comentarioFiscal);
+        break;
+      case 'fechaEmision':
+        comparison = new Date(a.fechaEmision || '').getTime() - new Date(b.fechaEmision || '').getTime();
         break;
     }
 
@@ -433,6 +443,15 @@ export default function Dashboard() {
                       </th>
                       <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
                         <button
+                          onClick={() => handleSort('fechaEmision')}
+                          className="group flex items-center gap-2 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                        >
+                          Fecha Emisión
+                          {getSortIcon('fechaEmision')}
+                        </button>
+                      </th>
+                      <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
+                        <button
                           onClick={() => handleSort('rfcEmisor')}
                           className="group flex items-center gap-2 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
                         >
@@ -482,6 +501,8 @@ export default function Dashboard() {
                     {paginatedResults.map((result, idx) => (
                       <tr key={idx} className="border-b border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
                         <td className="py-3 px-4 text-slate-900 dark:text-slate-100 font-medium truncate max-w-xs">{result.fileName}</td>
+                        <td className="py-3 px-4 text-slate-900 dark:text-slate-100 whitespace-nowrap">{formatDate(result.fechaEmision)}</td>
+
                         <td className="py-3 px-4 text-slate-600 dark:text-slate-400">{result.rfcEmisor}</td>
                         <td className="py-3 px-4 text-slate-900 dark:text-slate-100 font-semibold">${result.total.toFixed(2)}</td>
                         <td className="py-3 px-4">
