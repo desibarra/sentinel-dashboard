@@ -208,6 +208,12 @@ export default function Dashboard() {
           </div>
           <div className="flex gap-2">
             {/* Theme Toggle */}
+            <Link href="/payment-audit">
+              <Button variant="outline" size="lg" className="gap-2">
+                <DollarSign className="w-4 h-4" />
+                Auditoría Pagos
+              </Button>
+            </Link>
             <Button
               onClick={toggleTheme}
               variant="outline"
