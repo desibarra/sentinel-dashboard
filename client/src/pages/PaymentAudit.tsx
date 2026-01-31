@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import UploadZone, { UploadedFile } from "@/components/UploadZone";
 import { toast } from "sonner";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -15,7 +16,9 @@ import {
     flexRender,
     createColumnHelper,
     getSortedRowModel,
+    getFilteredRowModel,
     SortingState,
+    ColumnFiltersState,
 } from "@tanstack/react-table";
 import {
     Dialog,
@@ -85,6 +88,8 @@ interface InvoiceDoc {
     metodoPago: string; // PUE vs PPD
     xmlContent: string;
     fileName: string;
+    receptorNombre: string;
+    receptorRFC: string;
 
     // Calculated fields
     pagosRelacionados: PaymentRelation[];
@@ -100,6 +105,7 @@ export default function PaymentAudit() {
     const [loading, setLoading] = useState(false);
     const [processedCount, setProcessedCount] = useState({ current: 0, total: 0 });
     const [sorting, setSorting] = useState<SortingState>([]);
+    const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
     const [viewXml, setViewXml] = useState<{ content: string, name: string } | null>(null);
 
     // Custom parser for audit needs
@@ -162,6 +168,11 @@ export default function PaymentAudit() {
 
                 if (tipoDeComprobante === "I" || tipoDeComprobante === "E") {
                     if (tipoDeComprobante === "I") {
+                        // Extract receptor information
+                        const receptorNode = xmlDoc.getElementsByTagName("cfdi:Receptor")[0] || xmlDoc.getElementsByTagName("Receptor")[0];
+                        const receptorNombre = receptorNode?.getAttribute("Nombre") || "";
+                        const receptorRFC = receptorNode?.getAttribute("Rfc") || "";
+
                         newInvoices.push({
                             uuid,
                             serie,
@@ -172,6 +183,8 @@ export default function PaymentAudit() {
                             metodoPago: comprobante.getAttribute("MetodoPago") || "",
                             xmlContent: file.content,
                             fileName: file.name,
+                            receptorNombre,
+                            receptorRFC,
                             pagosRelacionados: [],
                             saldoCalculado: total,
                             montoPagadoCalculado: 0,
@@ -333,6 +346,8 @@ export default function PaymentAudit() {
             "Serie": inv.serie,
             "Folio": inv.folio,
             "Fecha Emisión": inv.fecha,
+            "Cliente (Receptor)": inv.receptorNombre,
+            "RFC Cliente": inv.receptorRFC,
             "Moneda": inv.moneda,
             "Total Factura": inv.total,
             "Método Pago": inv.metodoPago,
@@ -340,6 +355,7 @@ export default function PaymentAudit() {
             "Saldo Pendiente (S. Insoluto)": inv.saldoCalculado,
             "Monto Pagado (Evidencia)": inv.montoPagadoCalculado,
             "Pagos Relacionados": inv.pagosRelacionados.map(p => `$${p.impPagado} (${p.numParcialidad})`).join(", "),
+            "UUIDs Complementos Pago": inv.pagosRelacionados.map(p => p.uuidPago).filter(Boolean).join(", "),
             "Ultima Fecha Pago": inv.pagosRelacionados.length > 0 ? (inv.pagosRelacionados[0].fechaPago || "") : ""
         }));
 
@@ -401,6 +417,16 @@ export default function PaymentAudit() {
             header: "Folio",
             cell: (info) => info.getValue(),
             size: 100,
+        }),
+        columnHelper.accessor("receptorNombre", {
+            header: "Cliente",
+            cell: (info) => (
+                <span className="text-slate-900 dark:text-white text-xs block max-w-[200px] truncate" title={info.getValue()}>
+                    {info.getValue() || "N/A"}
+                </span>
+            ),
+            size: 200,
+            enableColumnFilter: true,
         }),
         columnHelper.accessor("total", {
             header: "Total",
@@ -472,9 +498,12 @@ export default function PaymentAudit() {
         columns,
         state: {
             sorting,
+            columnFilters,
         },
         onSortingChange: setSorting,
+        onColumnFiltersChange: setColumnFilters,
         getSortedRowModel: getSortedRowModel(),
+        getFilteredRowModel: getFilteredRowModel(),
         getCoreRowModel: getCoreRowModel(),
         columnResizeMode: "onChange",
         defaultColumn: {
@@ -631,6 +660,24 @@ export default function PaymentAudit() {
                                                         </th>
                                                     );
                                                 })}
+                                            </tr>
+                                        ))}
+                                        {/* Filter Row */}
+                                        {table.getHeaderGroups().map((headerGroup) => (
+                                            <tr key={`filter-${headerGroup.id}`}>
+                                                {headerGroup.headers.map((header) => (
+                                                    <th key={header.id} className="px-2 py-2">
+                                                        {header.column.getCanFilter() ? (
+                                                            <Input
+                                                                type="text"
+                                                                value={(header.column.getFilterValue() ?? '') as string}
+                                                                onChange={(e) => header.column.setFilterValue(e.target.value)}
+                                                                placeholder={`Filtrar...`}
+                                                                className="h-8 text-xs"
+                                                            />
+                                                        ) : null}
+                                                    </th>
+                                                ))}
                                             </tr>
                                         ))}
                                     </thead>
