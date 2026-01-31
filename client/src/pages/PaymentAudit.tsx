@@ -140,22 +140,19 @@ export default function PaymentAudit() {
                     if (pagosNode) {
                         const pagos = pagosNode.getElementsByTagName("pago10:Pago");
                         const pagos20 = pagosNode.getElementsByTagName("pago20:Pago");
-                        const genericPagos = pagosNode.getElementsByTagName("Pago"); // Fallback
+                        const genericPagos = pagosNode.getElementsByTagName("Pago");
 
                         const allPagoNodes = [...Array.from(pagos), ...Array.from(pagos20), ...Array.from(genericPagos)];
-
                         const paymentRelations: PaymentRelation[] = [];
                         let montoTotalPago = 0;
 
                         for (const pago of allPagoNodes) {
                             montoTotalPago += parseFloat(pago.getAttribute("Monto") || "0");
-                            const fechaPago = pago.getAttribute("FechaPago") || fecha; // Fallback to Document Date
+                            const fechaPago = pago.getAttribute("FechaPago") || fecha;
 
-                            // Extract DoctoRelacionado
                             const doctos = pago.getElementsByTagName("pago10:DoctoRelacionado");
                             const doctos20 = pago.getElementsByTagName("pago20:DoctoRelacionado");
                             const doctosGeneric = pago.getElementsByTagName("DoctoRelacionado");
-
                             const allDoctos = [...Array.from(doctos), ...Array.from(doctos20), ...Array.from(doctosGeneric)];
 
                             for (const doc of allDoctos) {
