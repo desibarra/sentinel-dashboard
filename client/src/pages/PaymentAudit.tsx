@@ -418,6 +418,21 @@ export default function PaymentAudit() {
             cell: (info) => info.getValue(),
             size: 100,
         }),
+        columnHelper.accessor("fecha", {
+            header: "Fecha",
+            cell: (info) => {
+                const fecha = info.getValue();
+                if (!fecha) return "N/A";
+                const date = new Date(fecha);
+                return date.toLocaleDateString("es-MX", {
+                    day: "2-digit",
+                    month: "short",
+                    year: "numeric"
+                });
+            },
+            size: 110,
+            enableColumnFilter: true,
+        }),
         columnHelper.accessor("receptorNombre", {
             header: "Cliente",
             cell: (info) => (
