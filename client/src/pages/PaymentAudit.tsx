@@ -406,17 +406,17 @@ export default function PaymentAudit() {
         columnHelper.accessor("uuid", {
             header: "UUID",
             cell: (info) => (
-                <span className="font-mono text-xs block max-w-[150px] truncate" title={info.getValue()}>
+                <span className="font-mono text-xs block max-w-[180px] truncate" title={info.getValue()}>
                     {info.getValue()}
                 </span>
             ),
-            size: 150,
+            size: 180,
         }),
         columnHelper.accessor((row) => `${row.serie}${row.folio}`, {
             id: "folio",
             header: "Folio",
             cell: (info) => info.getValue(),
-            size: 100,
+            size: 120,
         }),
         columnHelper.accessor("fecha", {
             header: "Fecha",
@@ -430,34 +430,34 @@ export default function PaymentAudit() {
                     year: "numeric"
                 });
             },
-            size: 110,
+            size: 130,
             enableColumnFilter: true,
         }),
         columnHelper.accessor("receptorNombre", {
             header: "Cliente",
             cell: (info) => (
-                <span className="text-slate-900 dark:text-white text-xs block max-w-[200px] truncate" title={info.getValue()}>
+                <span className="text-slate-900 dark:text-white text-xs block max-w-[220px] truncate" title={info.getValue()}>
                     {info.getValue() || "N/A"}
                 </span>
             ),
-            size: 200,
+            size: 220,
             enableColumnFilter: true,
         }),
         columnHelper.accessor("total", {
             header: "Total",
             cell: (info) => <span className="font-bold text-slate-900 dark:text-white">${info.getValue().toFixed(2)}</span>,
-            size: 100,
+            size: 130,
         }),
         columnHelper.accessor((row) => row.total - row.saldoCalculado, {
             id: "amortizado",
             header: "Amortizado",
             cell: (info) => <span className="text-green-600">${info.getValue().toFixed(2)}</span>,
-            size: 100,
+            size: 140,
         }),
         columnHelper.accessor("saldoCalculado", {
             header: "Saldo",
             cell: (info) => <span className="text-red-600">${info.getValue().toFixed(2)}</span>,
-            size: 100,
+            size: 130,
         }),
         columnHelper.accessor("estadoPago", {
             header: "Estado",
@@ -467,7 +467,7 @@ export default function PaymentAudit() {
                 if (val === "Parcial") return <Badge className="bg-yellow-100 text-yellow-800 hover:bg-yellow-100">Parcial</Badge>;
                 return <Badge className="bg-red-100 text-red-800 hover:bg-red-100">Pendiente</Badge>;
             },
-            size: 100,
+            size: 120,
         }),
         columnHelper.accessor("pagosRelacionados", {
             header: "Pagos (Evidencia)",
@@ -484,7 +484,7 @@ export default function PaymentAudit() {
                     </ul>
                 );
             },
-            size: 250,
+            size: 280,
         }),
         columnHelper.display({
             id: 'actions',
