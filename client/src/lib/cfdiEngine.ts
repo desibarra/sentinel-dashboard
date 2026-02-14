@@ -374,8 +374,37 @@ export const classifyCFDI = (
     let comentarioFiscal = "";
     let nivelValidacion = esNomina ? "ESTRUCTURAL, NÓMINA" : "ESTRUCTURAL, SAT, NEGOCIO, RIESGO";
 
-    // 1. DETECTORES PARA REGLAS DE NEGOCIO
+    // 1. EXTRACCIÓN DE DATOS PARA CLASIFICACIÓN (Fallback si no vienen en pads)
+    const emisorMatch = xmlContent.match(/Emisor[^>]*Nombre="([^"]+)"/i);
+    const nombreEmisor = emisorMatch ? emisorMatch[1].toUpperCase() : "";
+
+    // 2. DETECTORES PARA REGLAS DE NEGOCIO
     const tieneECC = xmlContent.includes("ecc12:EstadoDeCuentaCombustible");
+
+    // Identificadores de Rubros Exentos "Buenos" (Educación, Salud)
+    const esRubroExentoBueno = (
+        /UNIVERSIDAD|COLEGIO|COLEGIATURA|INSTITUTO|ESCUELA|EDUCACI[OÓ]N/i.test(nombreEmisor) ||
+        taxes.desglosePorConcepto?.some((c: ConceptoDesglose) =>
+            (c.descripcion && /Colegiatura|Servicio Educativo|Ense[ñn]anza/i.test(c.descripcion)) ||
+            (c.claveProdServ && c.claveProdServ.startsWith("86")) // Servicios educativos
+        ) ||
+        /HOSPITAL|CLINICA|M[EÉ]DICO/i.test(nombreEmisor) ||
+        taxes.desglosePorConcepto?.some((c: ConceptoDesglose) =>
+            c.claveProdServ && c.claveProdServ.startsWith("85") // Servicios de salud
+        )
+    );
+
+    // Identificadores de Consumo General (Riesgo en ObjetoImp=02)
+    const esConsumoGeneral = (
+        /WALMART|SORIANA|CHEDRAUI|COSTCO|OXXO|7-ELEVEN|TIENDA|MISCELANEA|RESTAURANTE|BAR|CAFE|DEPARTAMENTAL|S\.A\. DE C\.V\.|COMERCIAL/i.test(nombreEmisor) ||
+        taxes.desglosePorConcepto?.some((c: ConceptoDesglose) =>
+            c.claveProdServ && (
+                c.claveProdServ.startsWith("50") || // Alimentos/Bebidas
+                c.claveProdServ.startsWith("52") || // Cuidado doméstico
+                c.claveProdServ.startsWith("53")    // Ropa/Accesorios
+            )
+        )
+    );
 
     // Búsqueda de Riesgo IVA: ObjetoImp=02 con IVA 0%
     const tieneObjetoImp02IVA0 = taxes.desglosePorConcepto?.some((c: ConceptoDesglose) => {
@@ -394,9 +423,9 @@ export const classifyCFDI = (
         return esObjeto01 && esBonificadoTotal;
     }) || false;
 
-    // 2. LÓGICA DE PRIORIDADES (Orden: Errores Críticos > Totales > Riesgos > Informativos)
+    // 3. LÓGICA DE PRIORIDADES (Orden: Errores Críticos > Totales > Riesgos > Informativos)
 
-    // A. Errores Estructurales de Nómina o Pagos (Sierra el proceso)
+    // A. Errores Estructurales de Nómina o Pagos
     if (esNomina && nominaInfo && !nominaInfo.esValida) {
         return {
             resultado: "🔴 NO USABLE",
@@ -418,30 +447,35 @@ export const classifyCFDI = (
         resultado = "🔴 NO USABLE";
         comentarioFiscal = `ERROR FISCAL: Total declarado no coincide con cálculo SAT. Diferencia de $${validation.diferencia}.`;
     } else if (tieneECC) {
-        // Regla: Nunca marcar como NO USABLE por totales si tiene ECC12
         resultado = "🟡 CON ALERTAS";
         comentarioFiscal = "CFDI con complemento de Estado de Cuenta de Combustible. La información relevante de litros, importes e impuestos viene en el complemento. Revisar deducibilidad y acreditamiento de IVA conforme a política interna.";
     } else {
-        // Caso Comercial Sano Base
+        // Caso Base Sano
         resultado = "🟢 USABLE";
         comentarioFiscal = "CFDI válido. Total correcto calculado por concepto considerando impuestos y retenciones. Sin inconsistencias relevantes detectadas.";
     }
 
-    // C. Riesgo de IVA 0% (ObjetoImp=02) - Gana sobre "Sano" pero no sobre "🔴 Error Totales"
+    // C. Clasificación de IVA (Exento vs Riesgo)
     if (resultado !== "🔴 NO USABLE" && tieneObjetoImp02IVA0) {
-        resultado = "🔴 NO USABLE (Riesgo IVA)";
-        const notaRiesgo = "[CRÍTICO] ObjetoImp=02 con IVA 0 % en productos típicamente gravados. Riesgo de no poder acreditar IVA o de que la deducción sea rechazada en revisión.";
-        comentarioFiscal = notaRiesgo + " " + comentarioFiscal;
+        if (esRubroExentoBueno) {
+            // Caso Exento "Bueno" (Educación/Salud)
+            resultado = "🟢 USABLE";
+            comentarioFiscal = "Servicio potencialmente exento (educación/salud). CFDI estructuralmente válido; sin observaciones fiscales relevantes sobre IVA.";
+        } else if (esConsumoGeneral) {
+            // Caso Riesgo (Supermercados/Retail)
+            resultado = "🔴 NO USABLE (Riesgo IVA)";
+            const notaRiesgo = "[CRÍTICO] ObjetoImp=02 con IVA 0 % en productos típicamente gravados. Riesgo de no poder acreditar IVA o de que la deducción sea rechazada en revisión.";
+            comentarioFiscal = notaRiesgo + " " + (comentarioFiscal.includes("válido") ? "" : comentarioFiscal);
+        }
     }
 
-    // D. Conceptos Bonificados (ObjetoImp=01) - Informativo, no penaliza a Rojo
+    // D. Conceptos Bonificados (ObjetoImp=01)
     if (tieneBonificadosTotalmente) {
         const notaBonificado = "Incluye conceptos bonificados (ObjetoImp=01 con descuento total); revisar solo para efectos de control interno.";
         comentarioFiscal += (comentarioFiscal ? " " : "") + notaBonificado;
-        // Si el resultado era verde, se mantiene verde o sube a amarillo si se prefiere (aquí lo mantenemos según reglas).
     }
 
-    // E. Ajustes por Carta Porte (Alertas informativas)
+    // E. Ajustes por Carta Porte
     if (resultado === "🟢 USABLE" || resultado === "🟡 CON ALERTAS") {
         if (requiereCartaPorte === "SÍ" && cartaPorteInfo.presente === "NO") {
             resultado = "🟡 CON ALERTAS";
@@ -454,10 +488,9 @@ export const classifyCFDI = (
 
     // F. EVALUACIÓN DE MATERIALIDAD (Razón de Negocio)
     if (giroEmpresa && taxes.desglosePorConcepto) {
-        const materialidad = evaluarMaterialidadGasto(giroEmpresa, taxes.desglosePorConcepto, "");
+        const materialidad = evaluarMaterialidadGasto(giroEmpresa, taxes.desglosePorConcepto, nombreEmisor || "");
         if (materialidad.tieneRiesgo) {
             comentarioFiscal += (comentarioFiscal ? " " : "") + materialidad.mensaje;
-            // No cambiamos resultado a rojo, se mantiene según reglas previas.
         }
     }
 

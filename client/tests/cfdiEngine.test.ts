@@ -129,12 +129,14 @@ describe('Sentinel Express - Motor Fiscal (Audit Tests)', () => {
     it('Test-CAT-02: Riesgo ObjetoImp="02" con IVA 0% en producto gravado', () => {
         const taxes = {
             desglosePorConcepto: [{
+                claveProdServ: '50192100', // Alimentos
                 objetoImp: '02',
                 traslados: [{ impuesto: '002', tasa: '0', importe: 0 }]
             }]
         };
         const validation = { isValid: true };
-        const result = engine.classifyCFDI('<xml/>', '4.0', 'I', taxes, validation, false, null, { presente: 'NO APLICA' }, { presente: 'NO APLICA' }, 'NO', 'Histórico');
+        const xml = '<cfdi:Comprobante><cfdi:Emisor Nombre="TIENDA DE CONVENIENCIA S.A. DE C.V."/></cfdi:Comprobante>';
+        const result = engine.classifyCFDI(xml, '4.0', 'I', taxes, validation, false, null, { presente: 'NO APLICA' }, { presente: 'NO APLICA' }, 'NO', 'Histórico');
 
         expect(result.resultado).toBe('🔴 NO USABLE (Riesgo IVA)');
         expect(result.comentarioFiscal).toContain('Riesgo de no poder acreditar IVA');
@@ -212,5 +214,42 @@ describe('Sentinel Express - Motor Fiscal (Audit Tests)', () => {
         expect(result.resultado).toBe('🟢 USABLE'); // Se mantiene verde según reglas
         expect(result.comentarioFiscal).toContain('ALERTA DE GIRO');
         expect(result.comentarioFiscal).toContain('Transporte de carga');
+    });
+
+    // --- PRUEBAS DE RIESGO IVA (REFRESCADO V1.2.1) ---
+
+    it('Test-IVA-01: Supermercado con ObjetoImp=02 e IVA 0% -> RIESGO IVA', () => {
+        const taxes = {
+            desglosePorConcepto: [{
+                claveProdServ: '50192100',
+                descripcion: 'ABARROTES VARIOS',
+                objetoImp: '02',
+                traslados: [{ impuesto: '002', tasa: '0', importe: 0 }]
+            }]
+        };
+        const validation = { isValid: true };
+        const xml = '<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfdv40"><cfdi:Emisor Nombre="TIENDAS SORIANA S.A. DE C.V."/></cfdi:Comprobante>';
+        const result = engine.classifyCFDI(xml, '4.0', 'I', taxes, validation, false, null, { presente: 'NO APLICA' }, { presente: 'NO APLICA' }, 'NO', 'Histórico');
+
+        expect(result.resultado).toBe('🔴 NO USABLE (Riesgo IVA)');
+        expect(result.comentarioFiscal).toContain('[CRÍTICO]');
+    });
+
+    it('Test-IVA-02: Universidad (Exento) con ObjetoImp=02 e IVA 0% -> USABLE', () => {
+        const taxes = {
+            desglosePorConcepto: [{
+                claveProdServ: '86121701', // Universidad
+                descripcion: 'COLEGIATURA ENERO',
+                objetoImp: '02',
+                traslados: [{ impuesto: '002', tasa: '0', importe: 0 }]
+            }]
+        };
+        const validation = { isValid: true };
+        const xml = '<cfdi:Comprobante><cfdi:Emisor Nombre="INSTITUTO TECNOLOGICO DE ESTUDIOS SUPERIORES"/></cfdi:Comprobante>';
+        const result = engine.classifyCFDI(xml, '4.0', 'I', taxes, validation, false, null, { presente: 'NO APLICA' }, { presente: 'NO APLICA' }, 'NO', 'Histórico');
+
+        expect(result.resultado).toBe('🟢 USABLE');
+        expect(result.comentarioFiscal).toContain('Servicio potencialmente exento');
+        expect(result.comentarioFiscal).not.toContain('Riesgo IVA');
     });
 });

@@ -61,6 +61,7 @@ export function exportToExcel(results: ValidationResult[]) {
     Comentario_Fiscal: r.comentarioFiscal,
     Observaciones_Tecnicas: r.observacionesTecnicas,
     Observaciones_Contador: r.observacionesContador,
+    Giro_Empresa: r.giroEmpresa || 'NO DEFINIDO',
     UUIDs_Relacionados: r.uuids_relacionados?.join(', ') || 'NO APLICA',
   }));
 
@@ -123,7 +124,8 @@ export function exportToExcel(results: ValidationResult[]) {
     { wch: 50 }, // AZ: Comentario_Fiscal
     { wch: 50 }, // BA: Observaciones_Tecnicas
     { wch: 40 }, // BB: Observaciones_Contador
-    { wch: 60 }, // BC: UUIDs_Relacionados
+    { wch: 20 }, // BC: Giro_Empresa
+    { wch: 60 }, // BD: UUIDs_Relacionados
   ];
 
   (ws as any)['!cols'] = colWidths;
@@ -154,7 +156,7 @@ export function exportToExcel(results: ValidationResult[]) {
   (ws as any)['!rows'] = [{ hpx: 30 }];
 
   // Activar filtros (actualizado para incluir todas las nuevas columnas)
-  (ws as any)['!autofilter'] = { ref: `A1:BC1` };
+  (ws as any)['!autofilter'] = { ref: `A1:BD1` };
 
   // Congelar fila 1
   (ws as any)['!panes'] = { ySplit: 1, topLeftCell: 'A2', activePane: 'bottomLeft', state: 'frozen' };

@@ -670,7 +670,7 @@ export default function Dashboard() {
 
         {/* Footer */}
         <div className="mt-8 text-center text-slate-600 text-sm">
-          <p>Sentinel Express © 2026 - Validador de CFDI 4.0 con cumplimiento fiscal</p>
+          <p>Motor Fiscal Sentinel Express v1.2.1 © 2026 - Validador de CFDI 4.0 con cumplimiento fiscal</p>
         </div>
       </div>
     </div>

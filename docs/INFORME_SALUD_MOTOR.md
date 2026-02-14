@@ -1,29 +1,25 @@
 # Informe de Salud del Motor Fiscal: Sentinel Express
 **Fecha:** 2026-02-14
-**Versión del Motor:** 1.2.0 (Fiscal Deep Audit - Materiality & Business Reason)
+**Versión del Motor:** 1.2.1 (Fiscal Audit Refinement - Smart IVA Risk)
 
 ## Resumen de Ejecución
-Se ha elevado el motor fiscal a un nivel de auditoría profunda, permitiendo detectar riesgos de IVA, manejar complementos de combustible complejos y evaluar preliminarmente la materialidad de los gastos según el giro de la empresa.
+Se ha refinado la lógica de Riesgo IVA para distinguir entre consumo general riesgoso y servicios exentos legítimos (Educación/Salud), eliminando falsas alertas en colegiaturas y gastos médicos.
 
-- **Tests Ejecutados:** 12 (7 previos + 5 nuevos de auditoría)
-- **Tests Exitosos:** 12
+- **Tests Ejecutados:** 15 (7 previos + 8 de auditoría profunda)
+- **Tests Exitosos:** 15
 - **Tests Fallidos:** 0
 - **Nuevas Funcionalidades:** 
-  - Reglas de Clasificación Fiscal v1.2 (Riesgo IVA, Bonificaciones, ECC12).
-  - Motor de Materialidad / Razón de Negocio (giro-con-giro).
-  - Soporte para `giroEmpresa` en reportes y hooks.
+  - Reglas de Clasificación Fiscal v1.2.1 (Refinamiento Smart IVA).
+  - Discriminación por Nombre de Emisor y ClaveProdServ para rubros exentos.
+  - Motor de Materialidad / Razón de Negocio (v1.2.0).
 
 ## Detalle de Pruebas (Audit Tests)
 
 | ID | Nombre del Test | Resultado | Hallazgo / Cambio |
 |---|---|---|---|
-| **Test-P-01** | Multi-relación UUID | ✅ Pasa | El motor captura TODOS los UUIDs relacionados. |
-| **Test-C-01** | Moneda Extranjera | ✅ Pasa | Validación aritmética multimoneda. |
-| **Test-CAT-00** | CFDI Comercial Sano | ✅ Pasa | Reducción de falsos negativos en facturas tipo Kenworth/Telcel. |
-| **Test-CAT-01** | Combustible ecc12 | ✅ Pasa | Permite descuadres si el complemento justifica el gasto. |
-| **Test-CAT-02** | Riesgo IVA 0% | ✅ Pasa | Detecta riesgo crítico de acreditamiento en supermarket. |
-| **Test-MAT-01** | Materialidad Positiva | ✅ Pasa | Giro transporte vs Combustible = OK. |
-| **Test-MAT-02** | Materialidad Riesgo | ✅ Pasa | Giro transporte vs Supermercado = ALERTA. |
+| **Test-CAT-02** | Riesgo IVA 0% (Comercial) | ✅ Pasa | Detecta riesgo en supermercados/tiendas. |
+| **Test-IVA-01** | Riesgo IVA (Soriana) | ✅ Pasa | Confirma rojo en consumo general. |
+| **Test-IVA-02** | Exento IVA (Educación) | ✅ Pasa | Confirma verde en colegiaturas (ObjetoImp=02). |
 
 ## Cambios Versión 1.2.0 (Preparación para Junta)
 

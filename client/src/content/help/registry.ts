@@ -116,6 +116,13 @@ export const HELP_REGISTRY: HelpCategory[] = [
                 description: 'Recomendaciones para un cumplimiento óptimo.',
                 type: 'fiscal',
                 contentPath: 'buenas-practicas.md'
+            },
+            {
+                id: 'materialidad-giro',
+                title: 'Materialidad y Giro',
+                description: 'Cómo el sistema evalúa la razón de negocio.',
+                type: 'fiscal',
+                contentPath: 'materialidad.md'
             }
         ]
     },
