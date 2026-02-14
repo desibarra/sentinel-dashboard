@@ -1,7 +1,7 @@
 import { toast } from "sonner";
 
 interface CFDIStatusSAT {
-    estado: 'Vigente' | 'Cancelado' | 'No Encontrado';
+    estado: 'Vigente' | 'Cancelado' | 'No Encontrado' | 'Error Conexión';
     esCancelable: string;
     estatusCancelacion: string;
     codigoEstatus: string;
@@ -72,10 +72,10 @@ export async function checkCFDIStatusSAT(
     } catch (error) {
         console.error("Error consultando SAT:", error);
         return {
-            estado: "No Encontrado",
-            esCancelable: "Error de conexión",
-            estatusCancelacion: "No disponible",
-            codigoEstatus: "Error de red",
+            estado: "Error Conexión",
+            esCancelable: "Error de red",
+            estatusCancelacion: "Tiempo de procesamiento excedido / Timeout",
+            codigoEstatus: "N/A - Error de red",
             validatedAt: new Date()
         };
     }

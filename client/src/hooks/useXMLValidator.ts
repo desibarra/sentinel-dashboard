@@ -40,7 +40,7 @@ export function useXMLValidator() {
 
     const BATCH_SIZE = 20; // Procesar 20 XMLs por lote
     const BATCH_DELAY = 50; // 50ms entre lotes para no bloquear UI
-    const XML_TIMEOUT = 10000; // 10 segundos máximo por XML
+    const XML_TIMEOUT = 30000; // 30 segundos máximo por XML (SAT puede ser lento)
 
     const allResults: ValidationResult[] = [];
 
@@ -466,6 +466,11 @@ export function useXMLValidator() {
       let resultado = classification.resultado;
       let comentarioFiscal = classification.comentarioFiscal;
       let nivelValidacion = classification.nivelValidacion;
+
+      // Guardar copia original del motor antes de ajustes SAT/Listas Negras
+      const resultadoMotor = resultado;
+      const comentarioMotor = comentarioFiscal;
+
       let observacionesTecnicas = "Sincronizado con Motor Fiscal v1.1";
 
       const desglose = esNomina
@@ -562,10 +567,6 @@ export function useXMLValidator() {
         }
 
         if (!shouldUseCache) {
-          // Ejecutar validación SAT en segundo plano (promesa no bloqueante para UI pero sí para resultado final)
-          // Nota: Para procesamiento masivo, esto podría ralentizar. 
-          // En esta implementación lo hacemos "await" para asegurar integridad del reporte.
-          // Si es muy lento, se podría mover a un useEffect post-carga.
           try {
             const satStatus = await checkCFDIStatusSAT(uuid, rfcEmisor, rfcReceptor, totalXML);
             finalEstatusSAT = satStatus.estado;
@@ -575,19 +576,27 @@ export function useXMLValidator() {
           } catch (error) {
             console.error("Error validating with SAT:", error);
             finalEstatusSAT = "Error Conexión";
+            finalEstatusCancelacion = "Error de red / Timeout";
           }
         }
       }
 
+      const ultimoRefrescoSAT = new Date().toISOString();
+
       // REGLA CRÍTICA: Si está CANCELADO, anular validez fiscal
       if (finalEstatusSAT === "Cancelado") {
         finalResultado = `🔴 NO DISPONIBLE (CANCELADO)`;
-        finalComentarioFiscal = `[CRÍTICO] CFDI CANCELADO en SAT. ${finalEstatusCancelacion}. No tiene efectos fiscales. ` + comentarioFiscal;
+        finalComentarioFiscal = `[CRÍTICO] CFDI CANCELADO en SAT. ${finalEstatusCancelacion}. No tiene efectos fiscales. ` + comentarioMotor;
         finalNivelValidacion = "ERROR";
         finalScore = 0;
       } else if (finalEstatusSAT === "No Encontrado") {
-        // No penalizar tan fuerte porque puede ser recién timbrado
-        comentarioFiscal = `[ALERTA] UUID no encontrado en SAT (puede ser muy reciente o apócrifo). ` + comentarioFiscal;
+        finalComentarioFiscal = `[ALERTA] UUID no encontrado en SAT (puede ser muy reciente o apócrifo). ` + comentarioMotor;
+      } else if (finalEstatusSAT === "Error Conexión") {
+        // No penalizar pero avisar
+        finalComentarioFiscal = `[AVISO] No se pudo verificar estatus en SAT (Timeout). ` + comentarioMotor;
+      } else {
+        // En Vigente o No verificado, usamos el comentario base del motor
+        finalComentarioFiscal = comentarioMotor;
       }
 
       return {
@@ -665,7 +674,10 @@ export function useXMLValidator() {
         totalOtrosPagos: nominaInfo.totalOtrosPagos,
         isrRetenidoNomina: nominaInfo.isrRetenido,
         totalCalculadoNomina: validation.calculado,
-        observacionesContador: ""
+        observacionesContador: "",
+        resultadoMotor,
+        comentarioMotor,
+        ultimoRefrescoSAT
       };
     } catch (error) {
       console.error(error);
@@ -679,6 +691,9 @@ export function useXMLValidator() {
   const createErrorResult = (fileName: string, errorMsg: string): ValidationResult => ({
     fileName,
     uuid: "NO DISPONIBLE",
+    resultadoMotor: "🔴 NO USABLE",
+    comentarioMotor: errorMsg,
+    ultimoRefrescoSAT: new Date().toISOString(),
     versionCFDI: "NO DISPONIBLE",
     tipoCFDI: "NO DISPONIBLE",
     serie: "NO DISPONIBLE",

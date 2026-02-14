@@ -89,7 +89,10 @@ export interface ValidationResult {
     totalOtrosPagos: number;
     isrRetenidoNomina: number;
     totalCalculadoNomina: number;
-    observacionesContador: string;
+    observacionesContador?: string;
+    resultadoMotor?: string; // Sin considerar SAT
+    comentarioMotor?: string; // Sin considerar SAT
+    ultimoRefrescoSAT?: string; // ISO Date de cuándo se verificó por última vez
     giroEmpresa?: string; // ✅ Nuevo: Giro declarado de la empresa para análisis de materialidad
 }
 

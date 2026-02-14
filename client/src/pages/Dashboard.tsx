@@ -4,7 +4,7 @@ import { CFDISATStatus } from "@/components/CFDISATStatus";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
-import { CheckCircle2, AlertCircle, XCircle, TrendingUp, FileText, DollarSign, Download, Moon, Sun, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Settings, BookOpen } from "lucide-react";
+import { CheckCircle2, AlertCircle, XCircle, TrendingUp, FileText, DollarSign, Download, Moon, Sun, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Settings, BookOpen, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import UploadZone, { UploadedFile } from "@/components/UploadZone";
 import { useXMLValidator } from "@/hooks/useXMLValidator";
@@ -23,7 +23,7 @@ import { History, RefreshCcw, Save } from "lucide-react";
 import { checkCFDIStatusSAT } from "@/utils/satStatusValidator";
 
 type DashboardResult = ValidationResult;
-type SortField = 'fileName' | 'fechaEmision' | 'rfcEmisor' | 'total' | 'estatusSAT' | 'resultado' | 'comentarioFiscal';
+type SortField = 'fileName' | 'uuid' | 'fechaEmision' | 'rfcEmisor' | 'total' | 'estatusSAT' | 'resultado' | 'comentarioFiscal';
 type SortDirection = 'asc' | 'desc' | null;
 
 export default function Dashboard() {
@@ -113,23 +113,6 @@ export default function Dashboard() {
     const newResults = [...results];
     newResults[index].observacionesContador = note;
     setResults(newResults);
-  };
-
-  const handleRevalidateSAT = async (index: number) => {
-    const result = results[index];
-    if (result.uuid === "NO DISPONIBLE") return;
-
-    toast.loading("Revalidando estatus SAT...", { id: `rev-${index}` });
-    try {
-      const status = await checkCFDIStatusSAT(result.uuid, result.rfcEmisor, result.rfcReceptor, result.total);
-      const newResults = [...results];
-      newResults[index].estatusSAT = status.estado;
-      newResults[index].fechaCancelacion = status.estatusCancelacion || "";
-      setResults(newResults);
-      toast.success("Estatus actualizado", { id: `rev-${index}` });
-    } catch (error) {
-      toast.error("Error al conectar con SAT", { id: `rev-${index}` });
-    }
   };
 
   const handleExportToExcel = () => {
@@ -233,6 +216,9 @@ export default function Dashboard() {
       case 'fileName':
         comparison = a.fileName.localeCompare(b.fileName);
         break;
+      case 'uuid':
+        comparison = (a.uuid || '').localeCompare(b.uuid || '');
+        break;
       case 'rfcEmisor':
         comparison = a.rfcEmisor.localeCompare(b.rfcEmisor);
         break;
@@ -255,6 +241,65 @@ export default function Dashboard() {
 
     return sortDirection === 'asc' ? comparison : -comparison;
   });
+
+  const handleRevalidateSAT = async (index: number) => {
+    const result = sortedResults[index];
+    if (!result || result.uuid === "NO DISPONIBLE") return;
+
+    // Encontrar el índice original en la lista de 'results' si estamos usando sortedResults filtrados
+    // Pero aquí index parece ser del State results o paginated. 
+    // En el render: {paginatedResults.map((result, idx) => { const absoluteIndex = (currentPage - 1) * ITEMS_PER_PAGE + idx; ... handleRevalidateSAT(absoluteIndex)
+    // Así que 'index' es el índice absoluto en 'results'.
+
+    toast.loading("Revalidando estatus SAT...", { id: `rev-${index}` });
+    try {
+      const status = await checkCFDIStatusSAT(result.uuid, result.rfcEmisor, result.rfcReceptor, result.total);
+
+      // Si ya no podemos confiar en el índice por filtros concurrentes, buscar por UUID
+      const targetIdx = results.findIndex(r => r.uuid === result.uuid);
+      if (targetIdx === -1) {
+        toast.error("No se pudo localizar el registro para actualizar", { id: `rev-${index}` });
+        return;
+      }
+
+      const newResults = [...results];
+      const item = { ...newResults[targetIdx] };
+
+      // Actualizar campos base de SAT
+      item.estatusSAT = status.estado;
+      item.fechaCancelacion = status.estatusCancelacion || "";
+      item.ultimoRefrescoSAT = status.validatedAt.toISOString();
+
+      // Re-aplicar reglas de negocio usando los fallbacks del motor
+      const resBase = item.resultadoMotor || item.resultado;
+      const comBase = item.comentarioMotor || item.comentarioFiscal;
+
+      if (status.estado === "Cancelado") {
+        item.resultado = "🔴 NO DISPONIBLE (CANCELADO)";
+        item.comentarioFiscal = `[CRÍTICO] CFDI CANCELADO en SAT. ${item.fechaCancelacion}. No tiene efectos fiscales. ` + comBase;
+      } else if (status.estado === "No Encontrado") {
+        item.resultado = resBase;
+        item.comentarioFiscal = `[ALERTA] UUID no encontrado en SAT (puede ser muy reciente o apócrifo). ` + comBase;
+      } else if (status.estado === "Error Conexión") {
+        // Si falló la conexión, mantenemos el resultado previo pero avisamos en el comentario
+        item.resultado = resBase;
+        item.comentarioFiscal = `[AVISO] No se pudo actualizar el estatus en SAT (Timeout). ` + comBase;
+
+        toast.error("No se pudo conectar con el SAT (Timeout)", { id: `rev-${index}` });
+      } else {
+        // Vigente
+        item.resultado = resBase;
+        item.comentarioFiscal = comBase;
+        toast.success("Estatus actualizado exitosamente", { id: `rev-${index}` });
+      }
+
+      newResults[targetIdx] = item;
+      setResults(newResults);
+    } catch (error) {
+      console.error("Revalidation error:", error);
+      toast.error("Error inesperado al revalidar", { id: `rev-${index}` });
+    }
+  };
 
   // ✅ PRODUCCIÓN: Paginación para evitar render masivo
   const totalPages = Math.ceil(sortedResults.length / ITEMS_PER_PAGE);
@@ -513,6 +558,15 @@ export default function Dashboard() {
                       </th>
                       <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
                         <button
+                          onClick={() => handleSort('uuid')}
+                          className="group flex items-center gap-2 hover:text-primary transition-colors"
+                        >
+                          UUID
+                          {getSortIcon('uuid')}
+                        </button>
+                      </th>
+                      <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
+                        <button
                           onClick={() => handleSort('fechaEmision')}
                           className="group flex items-center gap-2 hover:text-primary transition-colors"
                         >
@@ -567,6 +621,14 @@ export default function Dashboard() {
                       return (
                         <tr key={idx} className="border-b border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
                           <td className="py-3 px-4 text-slate-900 dark:text-slate-100 font-medium truncate max-w-[150px]" title={result.fileName}>{result.fileName}</td>
+                          <td className="py-3 px-4">
+                            <div className="flex flex-col gap-0.5 max-w-[220px]">
+                              <span className="font-mono text-[10px] text-slate-700 dark:text-slate-300 break-all leading-tight select-all">
+                                {result.uuid}
+                              </span>
+                              <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold">UUID</span>
+                            </div>
+                          </td>
                           <td className="py-3 px-4 text-slate-900 dark:text-slate-100 whitespace-nowrap">{formatDate(result.fechaEmision)}</td>
                           <td className="py-3 px-4 text-slate-600 dark:text-slate-400 font-mono text-xs">{result.rfcEmisor}</td>
                           <td className="py-3 px-4 text-slate-900 dark:text-slate-100 font-bold">${result.total.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</td>
@@ -578,6 +640,12 @@ export default function Dashboard() {
                               rfcReceptorBlacklist={result.rfcReceptorBlacklist}
                               compact={true}
                             />
+                            {result.ultimoRefrescoSAT && (
+                              <div className="mt-1 text-[8px] text-slate-400 dark:text-slate-500 flex items-center gap-1 italic" title={`Última validación: ${new Date(result.ultimoRefrescoSAT).toLocaleString()}`}>
+                                <Clock className="w-2.5 h-2.5" />
+                                {new Date(result.ultimoRefrescoSAT).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </div>
+                            )}
                           </td>
                           <td className="py-3 px-4">
                             <div className="flex flex-col gap-1">
@@ -596,7 +664,9 @@ export default function Dashboard() {
                               variant="ghost"
                               size="sm"
                               onClick={() => handleRevalidateSAT(absoluteIndex)}
-                              className="text-primary hover:text-primary/80 hover:bg-primary/5"
+                              disabled={!result.uuid || result.uuid === "NO DISPONIBLE"}
+                              className="text-primary hover:text-primary/80 hover:bg-primary/5 disabled:opacity-30"
+                              title={!result.uuid || result.uuid === "NO DISPONIBLE" ? "No se puede revalidar sin UUID" : "Actualizar estatus SAT"}
                             >
                               <RefreshCcw className="w-4 h-4" />
                             </Button>

@@ -106,7 +106,7 @@ export default function PaymentAudit() {
     const [processedCount, setProcessedCount] = useState({ current: 0, total: 0 });
     const [sorting, setSorting] = useState<SortingState>([]);
     const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
-    const [viewXml, setViewXml] = useState<{ content: string, name: string } | null>(null);
+    const [viewXml, setViewXml] = useState<{ content: string; name: string; uuid?: string } | null>(null);
 
     // Custom parser for audit needs
     const parseFiles = async (files: UploadedFile[]) => {
@@ -406,11 +406,14 @@ export default function PaymentAudit() {
         columnHelper.accessor("uuid", {
             header: "UUID",
             cell: (info) => (
-                <span className="font-mono text-xs block max-w-[180px] truncate" title={info.getValue()}>
-                    {info.getValue()}
-                </span>
+                <div className="flex flex-col gap-0.5 min-w-[320px]">
+                    <span className="font-mono text-[10px] md:text-xs text-slate-700 dark:text-slate-300 break-all leading-tight select-all">
+                        {info.getValue()}
+                    </span>
+                    <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold">UUID</span>
+                </div>
             ),
-            size: 180,
+            size: 320,
         }),
         columnHelper.accessor((row) => `${row.serie}${row.folio}`, {
             id: "folio",
@@ -495,7 +498,8 @@ export default function PaymentAudit() {
                     size="sm"
                     onClick={() => setViewXml({
                         content: info.row.original.xmlContent,
-                        name: info.row.original.fileName
+                        name: info.row.original.fileName,
+                        uuid: info.row.original.uuid
                     })}
                     className="h-8 w-8 p-0"
                     title="Ver XML"
@@ -732,9 +736,16 @@ export default function PaymentAudit() {
                             <FileText className="w-5 h-5 text-blue-600" />
                             Visor XML
                         </DialogTitle>
-                        <DialogDescription className="font-mono text-xs text-slate-500 truncate max-w-xl">
-                            {viewXml?.name}
-                        </DialogDescription>
+                        <div className="flex flex-col mt-1">
+                            <DialogDescription className="text-xs text-slate-500 truncate max-w-xl">
+                                {viewXml?.name}
+                            </DialogDescription>
+                            {viewXml?.uuid && (
+                                <span className="font-mono text-[10px] text-slate-400 break-all select-all">
+                                    UUID: {viewXml.uuid}
+                                </span>
+                            )}
+                        </div>
                     </DialogHeader>
 
                     <div className="flex-1 overflow-hidden bg-[#1e1e1e] relative">
