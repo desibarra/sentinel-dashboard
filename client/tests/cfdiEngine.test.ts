@@ -103,6 +103,58 @@ describe('Sentinel Express - Motor Fiscal (Audit Tests)', () => {
         expect(result).toBe('NO');
     });
 
+    // --- PRUEBAS DE CLASIFICACIÓN (CATEGORÍAS ESPECIALES) ---
+
+    it('Test-CAT-00: CFDI Comercial Sano', () => {
+        const taxes = { desglosePorConcepto: [] };
+        const validation = { isValid: true };
+        const result = engine.classifyCFDI('<xml/>', '4.0', 'I', taxes, validation, false, null, { presente: 'NO APLICA' }, { presente: 'NO APLICA' }, 'NO', 'Histórico');
+
+        expect(result.resultado).toBe('🟢 USABLE');
+        expect(result.comentarioFiscal).toContain('Total correcto calculado');
+    });
+
+    it('Test-CAT-01: Gasolina con complemento ecc12', () => {
+        const xml = `<cfdi:Comprobante xmlns:ecc12="http://www.sat.gob.mx/EstadoDeCuentaCombustible12">
+            <cfdi:Complemento><ecc12:EstadoDeCuentaCombustible Version="1.2" /></cfdi:Complemento>
+        </cfdi:Comprobante>`;
+        const taxes = { desglosePorConcepto: [] };
+        const validation = { isValid: false, diferencia: 100 }; // Simulamos que no cuadra
+        const result = engine.classifyCFDI(xml, '4.0', 'I', taxes, validation, false, null, { presente: 'NO APLICA' }, { presente: 'NO APLICA' }, 'NO', 'Histórico');
+
+        expect(result.resultado).toBe('🟡 CON ALERTAS');
+        expect(result.comentarioFiscal).toContain('Estado de Cuenta de Combustible');
+    });
+
+    it('Test-CAT-02: Riesgo ObjetoImp="02" con IVA 0% en producto gravado', () => {
+        const taxes = {
+            desglosePorConcepto: [{
+                objetoImp: '02',
+                traslados: [{ impuesto: '002', tasa: '0', importe: 0 }]
+            }]
+        };
+        const validation = { isValid: true };
+        const result = engine.classifyCFDI('<xml/>', '4.0', 'I', taxes, validation, false, null, { presente: 'NO APLICA' }, { presente: 'NO APLICA' }, 'NO', 'Histórico');
+
+        expect(result.resultado).toBe('🔴 NO USABLE (Riesgo IVA)');
+        expect(result.comentarioFiscal).toContain('Riesgo de no poder acreditar IVA');
+    });
+
+    it('Test-CAT-03: Bonificados con ObjetoImp="01"', () => {
+        const taxes = {
+            desglosePorConcepto: [{
+                objetoImp: '01',
+                importe: 100,
+                descuento: 100
+            }]
+        };
+        const validation = { isValid: true };
+        const result = engine.classifyCFDI('<xml/>', '4.0', 'I', taxes, validation, false, null, { presente: 'NO APLICA' }, { presente: 'NO APLICA' }, 'NO', 'Histórico');
+
+        expect(result.resultado).toBe('🟢 USABLE');
+        expect(result.comentarioFiscal).toContain('conceptos bonificados');
+    });
+
     // --- PRUEBAS DE EXCEL / PERFORMANCE ---
 
     it('Test-E-01: Simulación de gran volumen (1000 registros)', () => {
@@ -123,5 +175,42 @@ describe('Sentinel Express - Motor Fiscal (Audit Tests)', () => {
 
         // Procesar 1000 registros en memoria debería ser casi instantáneo
         expect(duration).toBeLessThan(100);
+    });
+
+    // --- PRUEBAS DE MATERIALIDAD / RAZÓN DE NEGOCIO ---
+
+    it('Test-MAT-01: Transporte de carga con gasto relacionado (Combustible)', () => {
+        const taxes = {
+            desglosePorConcepto: [{
+                claveProdServ: '15101506', // Gasolina magna
+                descripcion: 'GASOLINA 87 OCTANOS',
+                objetoImp: '02',
+                traslados: []
+            }]
+        };
+        const validation = { isValid: true };
+        const giro = 'Transporte de carga';
+        const result = engine.classifyCFDI('<xml/>', '4.0', 'I', taxes, validation, false, null, { presente: 'NO APLICA' }, { presente: 'NO APLICA' }, 'NO', 'Histórico', giro);
+
+        expect(result.resultado).toBe('🟢 USABLE');
+        expect(result.comentarioFiscal).not.toContain('ALERTA DE GIRO');
+    });
+
+    it('Test-MAT-02: Transporte de carga con gasto NO relacionado (Supermercado)', () => {
+        const taxes = {
+            desglosePorConcepto: [{
+                claveProdServ: '50192100', // Aperitivos/Dulces
+                descripcion: 'ROSCA DE REYES TAMAÑO FAMILIAR',
+                objetoImp: '02',
+                traslados: []
+            }]
+        };
+        const validation = { isValid: true };
+        const giro = 'Transporte de carga';
+        const result = engine.classifyCFDI('<xml/>', '4.0', 'I', taxes, validation, false, null, { presente: 'NO APLICA' }, { presente: 'NO APLICA' }, 'NO', 'Histórico', giro);
+
+        expect(result.resultado).toBe('🟢 USABLE'); // Se mantiene verde según reglas
+        expect(result.comentarioFiscal).toContain('ALERTA DE GIRO');
+        expect(result.comentarioFiscal).toContain('Transporte de carga');
     });
 });

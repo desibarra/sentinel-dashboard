@@ -1,24 +1,29 @@
 # Interpretación de Resultados
 
-Sentinel Express utiliza un sistema de semáforos para clasificar la validez fiscal de cada comprobante.
+Sentinel Express (Motor 1.2.0) utiliza un sistema de semáforos para clasificar la validez fiscal de cada comprobante según su riesgo.
 
 ## 🟢 USABLE (Verde)
 El comprobante cumple con todas las reglas estructurales y de cálculo del SAT.
 - **Acción:** Puede integrarse a la contabilidad y es deducible/acreditable.
-- **Criterio:** Diferencia de totales ≤ 0.01 y sin alertas en complementos.
+- **Criterio:** Diferencia de totales ≤ 0.01 y sin alertas críticas en complementos.
+- **Ejemplo:** Factura comercial sana (Kenworth, Telcel) con totales correctos.
 
 ## 🟡 CON ALERTAS (Amarillo)
-El comprobante es estructuralmente válido, pero presenta omisiones que podrían causar problemas en una revisión.
-- **Ejemplo:** Falta información opcional pero recomendada en Carta Porte.
-- **Acción:** Revisar el comentario fiscal y evaluar si se solicita la refacturación.
+El comprobante es estructuralmente válido, pero presenta observaciones que requieren atención del auditor.
+- **Ejemplos:**
+  - **Combustibles:** CFDI con complemento `ecc12` donde el detalle está en el complemento aunque el total principal sea simbólico.
+  - **Carta Porte:** Complemento presente pero incompleto.
+  - **Bonificaciones:** Incluye conceptos bonificados (`ObjetoImp=01`) que no invalidan el resto de la factura.
+- **Acción:** Revisar el comentario fiscal y evaluar conforme a política interna.
 
 ## 🔴 NO USABLE (Rojo)
-El comprobante tiene errores críticos que invalidan su deducibilidad.
-- **Causas Comunes:**
-  - Totales no cuadran (error de cálculo).
-  - El emisor está en la lista negra (EFOS).
-  - Falta un complemento obligatorio (ej. Carta Porte en traslados).
-- **Acción:** **RECHAZAR** el comprobante y solicitar corrección inmediata al proveedor.
+El comprobante tiene errores críticos o riesgos elevados que comprometen su deducibilidad.
+- **Causas Críticas:**
+  - **Riesgo IVA (Nuevo):** `ObjetoImp=02` con IVA 0% en productos típicamente gravados (riesgo de rechazo de acreditamiento).
+  - **Error en Totales:** Diferencia de cálculo > 0.01 (sin complemento ecc12 que lo justifique).
+  - **Listas Negras:** Emisor en lista 69-B (operaciones inexistentes).
+  - **Estatus SAT:** El comprobante aparece como **CANCELADO**.
+- **Acción:** **RECHAZAR** el comprobante y solicitar corrección inmediata.
 
 ---
 | Estado | Riesgo Fiscal | Acción Recomendada |

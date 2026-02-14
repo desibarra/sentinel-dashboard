@@ -32,6 +32,13 @@ export const HELP_REGISTRY: HelpCategory[] = [
                 description: 'Cómo transitan los datos desde la carga hasta el reporte.',
                 type: 'tecnico',
                 contentPath: 'flujo-general.md'
+            },
+            {
+                id: 'limitaciones',
+                title: 'Limitaciones Conocidas',
+                description: 'Lo que el sistema no hace y consideraciones de alcance.',
+                type: 'operativo',
+                contentPath: 'limitaciones.md'
             }
         ]
     },

@@ -1,16 +1,19 @@
 # Excel como Papel de Trabajo
 
-La exportación de Sentinel Express no es un simple listado, es un diagnóstico fiscal completo.
+La exportación de Sentinel Express genera un diagnóstico fiscal completo diseñado para servir como papel de trabajo auditable.
 
 ## 📈 Estructura del Reporte
-El Excel generado cuenta con **53 columnas** divididas en secciones:
-- **Identificación:** Datos del archivo y UUID.
-- **Fiscal:** RFCs, Nombres y Regímenes.
-- **Impuestos:** Desglose de Base, IVA, ISR e IEPS.
-- **Auditoría:** Total calculado vs declarado y resultado del diagnóstico.
+El Excel generado incluye columnas estratégicas para el auditor:
+- **Identificación:** Archivo, UUID, Versión y Tipo de CFDI.
+- **Fiscal:** RFC y Nombre (Emisor/Receptor), Régimen y CP Receptor.
+- **Impuestos:** Desglose por tasa (16%, 8%, 0%, Exento), IVA, ISR e IEPS (traslados y retenciones).
+- **Materialidad:** **Giro de la Empresa** y campo para análisis de razón de negocio.
+- **Auditoría:** Total calculado, Diferencia, Resultado (Semáforo), **Comentario Fiscal** y Observaciones Técnicas.
+- **Nómina:** Columnas específicas para Percepciones, Deducciones y otros pagos.
 
 ## 🛡️ Uso en Defensa Fiscal
-Este reporte puede ser anexado a tus expedientes de auditoría para demostrar:
-1. **Debida Diligencia:** Comprobaste que el proveedor no está en listas negras.
-2. **Revisión de Cálculo:** Validaste que el XML es matemáticamente correcto.
-3. **Estatus SAT:** Verificaste que el comprobante estaba vigente al momento de la revisión.
+Este reporte permite demostrar la **Debida Diligencia**:
+1. **Validación SAT:** Verificación de vigencia y estatus del CFDI.
+2. **Listas Negras:** Comprobación de que el emisor no es un EFOS (Art. 69-B).
+3. **Audit Trail:** El comentario fiscal causa raíz (ej. "Total correcto calculado por concepto...") sirve como evidencia de revisión.
+4. **Análisis de Giro:** Documentación de la coherencia del gasto frente al giro declarado.

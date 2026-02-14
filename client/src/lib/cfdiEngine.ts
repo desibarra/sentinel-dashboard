@@ -1,11 +1,16 @@
 
 import { BlacklistValidation } from "@/utils/blacklistValidator";
+import { evaluarMaterialidadGasto } from "./materialityRules";
 
 export interface ConceptoDesglose {
     numero: number;
     importe: number;
-    traslados: Array<{ impuesto: string; tasa: string; importe: number }>;
-    retenciones: Array<{ impuesto: string; tasa: string; importe: number }>;
+    descuento: number;
+    objetoImp: string;
+    claveProdServ: string;
+    descripcion: string;
+    traslados: Array<{ impuesto: string; tasa: string; importe: number; base: number }>;
+    retenciones: Array<{ impuesto: string; tasa: string; importe: number; base: number }>;
     subtotalAcumulado: number;
     totalParcial: number;
 }
@@ -84,6 +89,7 @@ export interface ValidationResult {
     isrRetenidoNomina: number;
     totalCalculadoNomina: number;
     observacionesContador: string;
+    giroEmpresa?: string; // ✅ Nuevo: Giro declarado de la empresa para análisis de materialidad
 }
 
 export const detectCFDIVersion = (xmlContent: string): string => {
@@ -190,9 +196,16 @@ export const extractTaxesByConcepto = (xmlDoc: XMLDocument, version: string) => 
             if ((nodo.localName || nodo.nodeName) !== "Concepto") continue;
             conceptoNumero++;
             const importe = parseFloat(nodo.getAttribute("Importe") || "0");
-            subtotalCalculado += importe;
+            const descuento = parseFloat(nodo.getAttribute("Descuento") || "0");
+            const objetoImp = nodo.getAttribute("ObjetoImp") || "01";
+            const claveProdServ = nodo.getAttribute("ClaveProdServ") || "";
+            const descripcion = nodo.getAttribute("Descripcion") || "";
+
+            subtotalCalculado += (importe - descuento);
+
             const trasladosConcepto: any[] = [], retencionesConcepto: any[] = [];
             const impuestosConcepto = Array.from(nodo.children).find(h => (h.localName || h.nodeName) === "Impuestos");
+
             if (impuestosConcepto) {
                 const children = Array.from(impuestosConcepto.getElementsByTagName("*"));
                 children.forEach((nodoImpuesto: any) => {
@@ -200,7 +213,7 @@ export const extractTaxesByConcepto = (xmlDoc: XMLDocument, version: string) => 
                     if (tagImpuesto === "Traslado") {
                         const tasa = nodoImpuesto.getAttribute("TasaOCuota") || "0", base = parseFloat(nodoImpuesto.getAttribute("Base") || "0"), importeTraslado = parseFloat(nodoImpuesto.getAttribute("Importe") || "0"), impuesto = nodoImpuesto.getAttribute("Impuesto") || "002";
                         trasladosTotales += importeTraslado;
-                        trasladosConcepto.push({ impuesto, tasa, importe: importeTraslado });
+                        trasladosConcepto.push({ impuesto, tasa, importe: importeTraslado, base });
                         if (impuesto === "002") {
                             if (tasa === "0.16" || tasa === "0.160000") baseIVA16 += base;
                             else if (tasa === "0.08" || tasa === "0.080000") baseIVA8 += base;
@@ -208,17 +221,17 @@ export const extractTaxesByConcepto = (xmlDoc: XMLDocument, version: string) => 
                             ivaTraslado += importeTraslado;
                         } else if (impuesto === "003") iepsTraslado += importeTraslado;
                     } else if (tagImpuesto === "Retencion") {
-                        const impuesto = nodoImpuesto.getAttribute("Impuesto") || "002", importeRetencion = parseFloat(nodoImpuesto.getAttribute("Importe") || "0"), tasa = nodoImpuesto.getAttribute("TasaOCuota") || "0";
+                        const impuesto = nodoImpuesto.getAttribute("Impuesto") || "002", importeRetencion = parseFloat(nodoImpuesto.getAttribute("Importe") || "0"), tasa = nodoImpuesto.getAttribute("TasaOCuota") || "0", base = parseFloat(nodoImpuesto.getAttribute("Base") || "0");
                         retencionesTotales += importeRetencion;
-                        retencionesConcepto.push({ impuesto, tasa, importe: importeRetencion });
+                        retencionesConcepto.push({ impuesto, tasa, importe: importeRetencion, base });
                         if (impuesto === "002") ivaRetenido += importeRetencion;
                         else if (impuesto === "001") isrRetenido += importeRetencion;
                         else if (impuesto === "003") iepsRetenido += importeRetencion;
                     }
                 });
             }
-            const totalParcial = importe + trasladosConcepto.reduce((sum, t) => sum + t.importe, 0) - retencionesConcepto.reduce((sum, r) => sum + r.importe, 0);
-            desglosePorConcepto.push({ numero: conceptoNumero, importe, traslados: trasladosConcepto, retenciones: retencionesConcepto, subtotalAcumulado: subtotalCalculado, totalParcial });
+            const totalParcial = importe - descuento + trasladosConcepto.reduce((sum, t) => sum + t.importe, 0) - retencionesConcepto.reduce((sum, r) => sum + r.importe, 0);
+            desglosePorConcepto.push({ numero: conceptoNumero, importe, descuento, objetoImp, claveProdServ, descripcion, traslados: trasladosConcepto, retenciones: retencionesConcepto, subtotalAcumulado: subtotalCalculado, totalParcial });
         }
     }
     const todosNodos = comprobante?.getElementsByTagName("*");
@@ -309,7 +322,7 @@ export const extractPagosInfo = (xmlContent: string, tipoCFDI: string, version: 
 
 export const detectarEncoding = (xmlContent: string) => {
     const match = xmlContent.match(/<\?xml[^>]*encoding=["']([^"']+)["']/i);
-    if (!match) return { encoding: "UTF-8", soportado: true };
+    if (!match) return { encoding: "UTF-8", soportado: true, errorMsg: "" };
     const enc = match[1].toUpperCase();
     const supported = ["UTF-8", "ISO-8859-1", "WINDOWS-1252"].includes(enc.replace("UTF8", "UTF-8").replace("LATIN1", "ISO-8859-1"));
     return { encoding: enc, soportado: supported, errorMsg: supported ? "" : `Encoding ${enc} no soportado` };
@@ -326,7 +339,7 @@ export const detectarNomina = (xmlContent: string, tipoCFDI: string) => tipoCFDI
 export const extractNominaInfo = (xmlDoc: XMLDocument, xmlContent: string) => {
     const nodes = Array.from(xmlDoc.getElementsByTagName("*"));
     const node = nodes.find(n => (n.localName || n.nodeName).includes("Nomina"));
-    if (!node) return { versionNomina: "NO DISPONIBLE", esValida: false, errorMsg: "No hay nodo Nómina" };
+    if (!node) return { versionNomina: "NO DISPONIBLE", totalPercepciones: 0, totalDeducciones: 0, totalOtrosPagos: 0, isrRetenido: 0, esValida: false, errorMsg: "No hay nodo Nómina" };
     const version = node.getAttribute("Version") || "1.2";
     const pMatch = xmlContent.match(/Percepciones[^>]*TotalGravado="([^"]+)"[^>]*TotalExento="([^"]+)"/);
     const totalP = pMatch ? parseFloat(pMatch[1] || "0") + parseFloat(pMatch[2] || "0") : 0;
@@ -340,4 +353,113 @@ export const extractNominaInfo = (xmlDoc: XMLDocument, xmlContent: string) => {
 export const validateNominaTotals = (p: number, d: number, o: number, total: number) => {
     const calc = p + o - d;
     return { isValid: Math.abs(calc - total) <= 0.01, calculado: Math.round(calc * 100) / 100, diferencia: Math.abs(calc - total) };
+};
+
+export const classifyCFDI = (
+    xmlContent: string,
+    version: string,
+    tipoCFDI: string,
+    taxes: any,
+    validation: any,
+    esNomina: boolean,
+    nominaInfo: any,
+    pagosInfo: any,
+    cartaPorteInfo: any,
+    requiereCartaPorte: string,
+    contextoHistorico: string,
+    giroEmpresa?: string // ✅ Nuevo: Giro para evaluación de materialidad
+): { resultado: string, comentarioFiscal: string, nivelValidacion: string } => {
+
+    let resultado = "🟢 USABLE";
+    let comentarioFiscal = "";
+    let nivelValidacion = esNomina ? "ESTRUCTURAL, NÓMINA" : "ESTRUCTURAL, SAT, NEGOCIO, RIESGO";
+
+    // 1. DETECTORES PARA REGLAS DE NEGOCIO
+    const tieneECC = xmlContent.includes("ecc12:EstadoDeCuentaCombustible");
+
+    // Búsqueda de Riesgo IVA: ObjetoImp=02 con IVA 0%
+    const tieneObjetoImp02IVA0 = taxes.desglosePorConcepto?.some((c: ConceptoDesglose) => {
+        const esObjeto02 = c.objetoImp === "02";
+        const tieneIVA0 = c.traslados?.some(t =>
+            t.impuesto === "002" &&
+            (t.tasa === "0" || t.tasa === "0.000000" || parseFloat(t.tasa) === 0)
+        );
+        return esObjeto02 && tieneIVA0;
+    }) || false;
+
+    // Búsqueda de conceptos bonificados (ObjetoImp=01 con descuento total)
+    const tieneBonificadosTotalmente = taxes.desglosePorConcepto?.some((c: ConceptoDesglose) => {
+        const esObjeto01 = c.objetoImp === "01";
+        const esBonificadoTotal = Math.abs(c.descuento - c.importe) < 0.01 && c.importe > 0;
+        return esObjeto01 && esBonificadoTotal;
+    }) || false;
+
+    // 2. LÓGICA DE PRIORIDADES (Orden: Errores Críticos > Totales > Riesgos > Informativos)
+
+    // A. Errores Estructurales de Nómina o Pagos (Sierra el proceso)
+    if (esNomina && nominaInfo && !nominaInfo.esValida) {
+        return {
+            resultado: "🔴 NO USABLE",
+            comentarioFiscal: `ERROR EN NÓMINA: ${nominaInfo.errorMsg}`,
+            nivelValidacion
+        };
+    }
+
+    if (pagosInfo && pagosInfo.valido === "NO") {
+        return {
+            resultado: "🔴 NO USABLE",
+            comentarioFiscal: `ERROR EN PAGOS: ${pagosInfo.errorMsg}`,
+            nivelValidacion
+        };
+    }
+
+    // B. Validación de Totales vs ECC12 (Combustibles)
+    if (!validation.isValid && !tieneECC) {
+        resultado = "🔴 NO USABLE";
+        comentarioFiscal = `ERROR FISCAL: Total declarado no coincide con cálculo SAT. Diferencia de $${validation.diferencia}.`;
+    } else if (tieneECC) {
+        // Regla: Nunca marcar como NO USABLE por totales si tiene ECC12
+        resultado = "🟡 CON ALERTAS";
+        comentarioFiscal = "CFDI con complemento de Estado de Cuenta de Combustible. La información relevante de litros, importes e impuestos viene en el complemento. Revisar deducibilidad y acreditamiento de IVA conforme a política interna.";
+    } else {
+        // Caso Comercial Sano Base
+        resultado = "🟢 USABLE";
+        comentarioFiscal = "CFDI válido. Total correcto calculado por concepto considerando impuestos y retenciones. Sin inconsistencias relevantes detectadas.";
+    }
+
+    // C. Riesgo de IVA 0% (ObjetoImp=02) - Gana sobre "Sano" pero no sobre "🔴 Error Totales"
+    if (resultado !== "🔴 NO USABLE" && tieneObjetoImp02IVA0) {
+        resultado = "🔴 NO USABLE (Riesgo IVA)";
+        const notaRiesgo = "[CRÍTICO] ObjetoImp=02 con IVA 0 % en productos típicamente gravados. Riesgo de no poder acreditar IVA o de que la deducción sea rechazada en revisión.";
+        comentarioFiscal = notaRiesgo + " " + comentarioFiscal;
+    }
+
+    // D. Conceptos Bonificados (ObjetoImp=01) - Informativo, no penaliza a Rojo
+    if (tieneBonificadosTotalmente) {
+        const notaBonificado = "Incluye conceptos bonificados (ObjetoImp=01 con descuento total); revisar solo para efectos de control interno.";
+        comentarioFiscal += (comentarioFiscal ? " " : "") + notaBonificado;
+        // Si el resultado era verde, se mantiene verde o sube a amarillo si se prefiere (aquí lo mantenemos según reglas).
+    }
+
+    // E. Ajustes por Carta Porte (Alertas informativas)
+    if (resultado === "🟢 USABLE" || resultado === "🟡 CON ALERTAS") {
+        if (requiereCartaPorte === "SÍ" && cartaPorteInfo.presente === "NO") {
+            resultado = "🟡 CON ALERTAS";
+            comentarioFiscal += " ALERTA: Requiere complemento Carta Porte pero no se detectó.";
+        } else if (cartaPorteInfo.presente === "SÍ" && cartaPorteInfo.completa === "NO") {
+            resultado = "🟡 CON ALERTAS";
+            comentarioFiscal += " ALERTA: Carta Porte incompleta.";
+        }
+    }
+
+    // F. EVALUACIÓN DE MATERIALIDAD (Razón de Negocio)
+    if (giroEmpresa && taxes.desglosePorConcepto) {
+        const materialidad = evaluarMaterialidadGasto(giroEmpresa, taxes.desglosePorConcepto, "");
+        if (materialidad.tieneRiesgo) {
+            comentarioFiscal += (comentarioFiscal ? " " : "") + materialidad.mensaje;
+            // No cambiamos resultado a rojo, se mantiene según reglas previas.
+        }
+    }
+
+    return { resultado, comentarioFiscal, nivelValidacion };
 };
