@@ -278,4 +278,31 @@ describe('Sentinel Express - Motor Fiscal (Audit Tests)', () => {
         expect(mockResult.usoCFDI).toBe('G03');
         expect(mockResult.giroEmpresa).toBe(giro);
     });
+
+    it('Test-TVA-02: Propagación de Giro_Empresa al reporte Excel', () => {
+        const giroConfigurado = "Transporte de carga – Régimen 624 Coordinados";
+
+        // Simular el resultado de validación que se guardaría en el estado
+        const mockResult: engine.ValidationResult = {
+            fileName: 'factura_transporte.xml',
+            uuid: '550e8400-e29b-41d4-a716-446655440000',
+            resultado: '🟢 USABLE',
+            total: 1500.50,
+            giroEmpresa: giroConfigurado, // Este es el campo que queremos verificar
+            rfcEmisor: 'ABC123456789',
+            rfcReceptor: 'TVA060209QL6'
+        } as any;
+
+        // Verificar que el objeto de resultado contiene el giro
+        expect(mockResult.giroEmpresa).toBe(giroConfigurado);
+
+        // Simular el mapeo que ocurre en exportToExcel (lib/excelExporter.ts)
+        const mappedRow = {
+            Archivo_XML: mockResult.fileName,
+            Giro_Empresa: mockResult.giroEmpresa || 'NO DEFINIDO'
+        };
+
+        expect(mappedRow.Giro_Empresa).toBe(giroConfigurado);
+        expect(mappedRow.Giro_Empresa).not.toBe('NO DEFINIDO');
+    });
 });

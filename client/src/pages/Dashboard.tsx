@@ -269,6 +269,7 @@ export default function Dashboard() {
       item.estatusSAT = status.estado;
       item.fechaCancelacion = status.estatusCancelacion || "";
       item.ultimoRefrescoSAT = status.validatedAt.toISOString();
+      item.giroEmpresa = currentCompany?.giro || item.giroEmpresa;
 
       // Re-aplicar reglas de negocio usando los fallbacks del motor
       const resBase = item.resultadoMotor || item.resultado;

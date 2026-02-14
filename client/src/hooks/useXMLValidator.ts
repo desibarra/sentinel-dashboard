@@ -68,7 +68,8 @@ export function useXMLValidator() {
             file.name,
             error instanceof Error && error.message.includes("Timeout")
               ? "Error: Tiempo de procesamiento excedido"
-              : "Error al procesar archivo"
+              : "Error al procesar archivo",
+            giroEmpresa
           );
         }
       });
@@ -113,14 +114,14 @@ export function useXMLValidator() {
 
       // Si encoding no soportado → NO USABLE
       if (!encodingInfo.soportado) {
-        return createErrorResult(fileName, encodingInfo.errorMsg);
+        return createErrorResult(fileName, encodingInfo.errorMsg, giroEmpresa);
       }
 
       const parser = new DOMParser();
       const xmlDoc = parser.parseFromString(xmlContent, "text/xml");
 
       if (xmlDoc.getElementsByTagName("parsererror").length > 0) {
-        return createErrorResult(fileName, "Error al procesar XML: formato inválido");
+        return createErrorResult(fileName, "Error al procesar XML: formato inválido", giroEmpresa);
       }
 
       const comprobante = xmlDoc.documentElement;
@@ -132,7 +133,8 @@ export function useXMLValidator() {
       if (!versionesValidas.includes(version)) {
         return createErrorResult(
           fileName,
-          `Versión no soportada: ${version}. Se aceptan CFDI 2.0, 2.2, 3.0, 3.2, 3.3 y 4.0 según contexto histórico SAT.`
+          `Versión no soportada: ${version}. Se aceptan CFDI 2.0, 2.2, 3.0, 3.2, 3.3 y 4.0 según contexto histórico SAT.`,
+          giroEmpresa
         );
       }
 
@@ -683,16 +685,18 @@ export function useXMLValidator() {
       console.error(error);
       return createErrorResult(
         fileName,
-        error instanceof Error ? error.message : "Error desconocido al procesar XML"
+        error instanceof Error ? error.message : "Error desconocido al procesar XML",
+        giroEmpresa
       );
     }
   };
 
-  const createErrorResult = (fileName: string, errorMsg: string): ValidationResult => ({
+  const createErrorResult = (fileName: string, errorMsg: string, giroEmpresa?: string): ValidationResult => ({
     fileName,
     uuid: "NO DISPONIBLE",
     resultadoMotor: "🔴 NO USABLE",
     comentarioMotor: errorMsg,
+    giroEmpresa,
     ultimoRefrescoSAT: new Date().toISOString(),
     versionCFDI: "NO DISPONIBLE",
     tipoCFDI: "NO DISPONIBLE",
