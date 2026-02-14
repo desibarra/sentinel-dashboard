@@ -52,19 +52,19 @@ export function CFDISATStatus({
     // 1. SAT Status
     if (estatusSAT === 'Vigente') {
         badges.push(
-            <span key="sat-ok" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-xs' : 'px-3 py-1 text-sm'} font-medium bg-green-100 text-green-800 border border-green-200 rounded-full`}>
+            <span key="sat-ok" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-[10px]' : 'px-3 py-1 text-sm'} font-bold bg-emerald-50 text-emerald-800 border border-emerald-100 rounded-full`}>
                 ✅ Vigente
             </span>
         );
     } else if (estatusSAT === 'Cancelado') {
         badges.push(
-            <span key="sat-cancel" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-xs' : 'px-3 py-1 text-sm'} font-medium bg-red-100 text-red-800 border border-red-200 rounded-full`}>
+            <span key="sat-cancel" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-[10px]' : 'px-3 py-1 text-sm'} font-bold bg-red-50 text-red-800 border border-red-100 rounded-full`}>
                 🚫 Cancelado
             </span>
         );
     } else if (estatusSAT === 'No Encontrado') {
         badges.push(
-            <span key="sat-warn" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-xs' : 'px-3 py-1 text-sm'} font-medium bg-yellow-100 text-yellow-800 border border-yellow-200 rounded-full`}>
+            <span key="sat-warn" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-[10px]' : 'px-3 py-1 text-sm'} font-bold bg-amber-50 text-amber-800 border border-amber-100 rounded-full`}>
                 ⚠️ No Encontrado
             </span>
         );
@@ -132,7 +132,7 @@ export function CFDISATStatus({
                     </div>
                 </div>
             ) : estatusSAT === 'Vigente' ? (
-                <div className="flex items-center gap-3 p-4 bg-green-50 border-2 border-green-500 rounded-lg text-green-800 font-semibold shadow-sm">
+                <div className="flex items-center gap-3 p-4 bg-emerald-50 border-2 border-emerald-500 rounded-lg text-emerald-800 font-bold shadow-sm">
                     <span className="text-xl">✅</span>
                     <span>CFDI Vigente en SAT</span>
                 </div>

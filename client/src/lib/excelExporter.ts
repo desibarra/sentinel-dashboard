@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { ValidationResult } from '@/hooks/useXMLValidator';
+import { ValidationResult } from '@/lib/cfdiEngine';
 
 export function exportToExcel(results: ValidationResult[]) {
   // Crear workbook
@@ -60,6 +60,8 @@ export function exportToExcel(results: ValidationResult[]) {
     Resultado: r.resultado,
     Comentario_Fiscal: r.comentarioFiscal,
     Observaciones_Tecnicas: r.observacionesTecnicas,
+    Observaciones_Contador: r.observacionesContador,
+    UUIDs_Relacionados: r.uuids_relacionados?.join(', ') || 'NO APLICA',
   }));
 
   // Crear sheet
@@ -120,6 +122,8 @@ export function exportToExcel(results: ValidationResult[]) {
     { wch: 20 }, // AY: Resultado
     { wch: 50 }, // AZ: Comentario_Fiscal
     { wch: 50 }, // BA: Observaciones_Tecnicas
+    { wch: 40 }, // BB: Observaciones_Contador
+    { wch: 60 }, // BC: UUIDs_Relacionados
   ];
 
   (ws as any)['!cols'] = colWidths;
@@ -150,7 +154,7 @@ export function exportToExcel(results: ValidationResult[]) {
   (ws as any)['!rows'] = [{ hpx: 30 }];
 
   // Activar filtros (actualizado para incluir todas las nuevas columnas)
-  (ws as any)['!autofilter'] = { ref: `A1:BA1` };
+  (ws as any)['!autofilter'] = { ref: `A1:BC1` };
 
   // Congelar fila 1
   (ws as any)['!panes'] = { ySplit: 1, topLeftCell: 'A2', activePane: 'bottomLeft', state: 'frozen' };

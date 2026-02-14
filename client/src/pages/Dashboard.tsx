@@ -4,14 +4,23 @@ import { CFDISATStatus } from "@/components/CFDISATStatus";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
-import { CheckCircle2, AlertCircle, XCircle, TrendingUp, FileText, DollarSign, Download, Moon, Sun, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Settings } from "lucide-react";
+import { CheckCircle2, AlertCircle, XCircle, TrendingUp, FileText, DollarSign, Download, Moon, Sun, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Settings, BookOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import UploadZone, { UploadedFile } from "@/components/UploadZone";
-import { useXMLValidator, ValidationResult } from "@/hooks/useXMLValidator";
+import { useXMLValidator } from "@/hooks/useXMLValidator";
+import { ValidationResult } from "@/lib/cfdiEngine";
 import { exportToExcel } from "@/lib/excelExporter";
 import { toast } from "sonner";
 import { useTheme } from "@/contexts/ThemeContext";
 import { Link } from "wouter";
+import { useCompany } from "@/contexts/CompanyContext";
+import { CompanySelector } from "@/components/CompanySelector";
+import { HistorySidebar } from "@/components/HistorySidebar";
+import { appDB, ValidationHistory } from "@/db/appDB";
+import { startMainTour } from "@/utils/tourScript";
+import { Input } from "@/components/ui/input";
+import { History, RefreshCcw, Save } from "lucide-react";
+import { checkCFDIStatusSAT } from "@/utils/satStatusValidator";
 
 type DashboardResult = ValidationResult;
 type SortField = 'fileName' | 'fechaEmision' | 'rfcEmisor' | 'total' | 'estatusSAT' | 'resultado' | 'comentarioFiscal';
@@ -23,26 +32,44 @@ export default function Dashboard() {
   const [hasValidatedResults, setHasValidatedResults] = useState(false);
   const { isValidating, validateXMLFiles, progress } = useXMLValidator();
   const { theme, toggleTheme } = useTheme();
+  const { currentCompany } = useCompany();
   const [sortField, setSortField] = useState<SortField | null>('fechaEmision');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [currentPage, setCurrentPage] = useState(1);
   const ITEMS_PER_PAGE = 50;
 
-  // ⚠️ PRODUCCIÓN: No cargar datos automáticamente
-  // El dashboard debe iniciar VACÍO hasta que el usuario cargue XMLs reales
+  // Onboarding
   useEffect(() => {
     setLoading(false);
+    const hasSeenTour = localStorage.getItem('has_seen_main_tour');
+    if (!hasSeenTour) {
+      setTimeout(() => {
+        startMainTour();
+        localStorage.setItem('has_seen_main_tour', 'true');
+      }, 1000);
+    }
   }, []);
 
+  // Limpiar dashboard si cambia la empresa
+  useEffect(() => {
+    setResults([]);
+    setHasValidatedResults(false);
+  }, [currentCompany?.id]);
+
   const handleFilesReady = async (files: UploadedFile[]) => {
+    if (!currentCompany) {
+      toast.error("Selecciona una empresa antes de cargar XMLs");
+      return;
+    }
     try {
       const validationResults = await validateXMLFiles(files);
-
-      // Agregar resultados al dashboard
-      setResults((prev) => [...prev, ...validationResults]);
+      const newResults = [...results, ...validationResults];
+      setResults(newResults);
       setHasValidatedResults(true);
 
-      // Mostrar mensaje de éxito
+      // Guardar en histórico automáticamente
+      await saveToHistory(newResults);
+
       const usable = validationResults.filter((r) => r.resultado.includes("🟢")).length;
       const alertas = validationResults.filter((r) => r.resultado.includes("🟡")).length;
       const noUsable = validationResults.filter((r) => r.resultado.includes("🔴")).length;
@@ -54,6 +81,54 @@ export default function Dashboard() {
     } catch (error) {
       toast.error("Error al validar los archivos XML");
       console.error("Validation error:", error);
+    }
+  };
+
+  const saveToHistory = async (validationResults: ValidationResult[]) => {
+    if (!currentCompany || validationResults.length === 0) return;
+
+    const historyEntry: ValidationHistory = {
+      id: crypto.randomUUID(),
+      companyId: currentCompany.id,
+      timestamp: Date.now(),
+      fileName: `Proceso ${new Date().toLocaleDateString()}`,
+      xmlCount: validationResults.length,
+      usableCount: validationResults.filter((r) => r.resultado.includes("🟢")).length,
+      alertCount: validationResults.filter((r) => r.resultado.includes("🟡")).length,
+      errorCount: validationResults.filter((r) => r.resultado.includes("🔴")).length,
+      totalAmount: validationResults.reduce((sum, r) => sum + r.total, 0),
+      results: validationResults
+    };
+
+    await appDB.saveHistory(historyEntry);
+  };
+
+  const handleLoadHistory = (history: ValidationHistory) => {
+    setResults(history.results);
+    setHasValidatedResults(true);
+    toast.success("Proceso cargado desde el historial");
+  };
+
+  const handleNoteUpdate = (index: number, note: string) => {
+    const newResults = [...results];
+    newResults[index].observacionesContador = note;
+    setResults(newResults);
+  };
+
+  const handleRevalidateSAT = async (index: number) => {
+    const result = results[index];
+    if (result.uuid === "NO DISPONIBLE") return;
+
+    toast.loading("Revalidando estatus SAT...", { id: `rev-${index}` });
+    try {
+      const status = await checkCFDIStatusSAT(result.uuid, result.rfcEmisor, result.rfcReceptor, result.total);
+      const newResults = [...results];
+      newResults[index].estatusSAT = status.estado;
+      newResults[index].fechaCancelacion = status.estatusCancelacion || "";
+      setResults(newResults);
+      toast.success("Estatus actualizado", { id: `rev-${index}` });
+    } catch (error) {
+      toast.error("Error al conectar con SAT", { id: `rev-${index}` });
     }
   };
 
@@ -90,9 +165,9 @@ export default function Dashboard() {
 
   // Datos para gráficos
   const statusData = [
-    { name: "Usable", value: stats.usable, color: "#22c55e" },
-    { name: "Alertas", value: stats.alertas, color: "#eab308" },
-    { name: "No Usable", value: stats.noUsable, color: "#ef4444" },
+    { name: "Usable", value: stats.usable, color: "#166534" },
+    { name: "Alertas", value: stats.alertas, color: "#B45309" },
+    { name: "No Usable", value: stats.noUsable, color: "#991B1B" },
   ];
 
   const trendData = results.map((r, idx) => ({
@@ -103,15 +178,15 @@ export default function Dashboard() {
   }));
 
   const getStatusIcon = (resultado: string) => {
-    if (resultado.includes("🟢")) return <CheckCircle2 className="w-5 h-5 text-green-600" />;
-    if (resultado.includes("🟡")) return <AlertCircle className="w-5 h-5 text-yellow-600" />;
-    return <XCircle className="w-5 h-5 text-red-600" />;
+    if (resultado.includes("🟢")) return <CheckCircle2 className="w-5 h-5 text-emerald-800" />;
+    if (resultado.includes("🟡")) return <AlertCircle className="w-5 h-5 text-amber-700" />;
+    return <XCircle className="w-5 h-5 text-red-800" />;
   };
 
   const getStatusBadge = (resultado: string) => {
-    if (resultado.includes("🟢")) return <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">Usable</Badge>;
-    if (resultado.includes("🟡")) return <Badge className="bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">Alertas</Badge>;
-    return <Badge className="bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200">No Usable</Badge>;
+    if (resultado.includes("🟢")) return <Badge className="bg-emerald-50 text-emerald-900 border-emerald-100 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-200">Usable</Badge>;
+    if (resultado.includes("🟡")) return <Badge className="bg-amber-50 text-amber-900 border-amber-100 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-200">Alertas</Badge>;
+    return <Badge className="bg-red-50 text-red-900 border-red-100 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-200">No Usable</Badge>;
   };
 
   const formatDate = (dateStr: string) => {
@@ -143,9 +218,9 @@ export default function Dashboard() {
       return <ArrowUpDown className="w-4 h-4 opacity-40 group-hover:opacity-100 transition-opacity" />;
     }
     if (sortDirection === 'asc') {
-      return <ArrowUp className="w-4 h-4 text-blue-600 dark:text-blue-400" />;
+      return <ArrowUp className="w-4 h-4 text-primary" />;
     }
-    return <ArrowDown className="w-4 h-4 text-blue-600 dark:text-blue-400" />;
+    return <ArrowDown className="w-4 h-4 text-primary" />;
   };
 
   // Aplicar ordenamiento a los resultados
@@ -195,10 +270,10 @@ export default function Dashboard() {
 
   if (loading && results.length === 0) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-slate-600">Cargando resultados...</p>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-slate-600">Cargando resultados de Sentinel Express...</p>
         </div>
       </div>
     );
@@ -208,61 +283,58 @@ export default function Dashboard() {
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 p-4 md:p-8 transition-colors duration-200">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
-        <div className="mb-8 flex items-start justify-between">
+        <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border dark:border-slate-800">
           <div>
-            <div className="flex items-center gap-3 mb-2">
-              <FileText className="w-8 h-8 text-blue-600 dark:text-blue-400" />
-              <h1 className="text-3xl md:text-4xl font-bold text-slate-900 dark:text-slate-100">Sentinel Express</h1>
+            <div className="flex items-center gap-3 mb-1">
+              <img src="/assets/logo.png" alt="Mentores Logo" className="w-10 h-10 object-contain" />
+              <h1 className="text-2xl md:text-3xl font-bold text-primary tracking-tight uppercase">SENTINEL<span className="text-accent font-black">EXPRESS</span></h1>
             </div>
-            <p className="text-slate-600 dark:text-slate-400">Validador Masivo de CFDI 4.0</p>
+            <p className="text-slate-500 dark:text-slate-400 text-xs font-semibold uppercase tracking-widest">Daily Accounting Compliance Engine</p>
           </div>
-          <div className="flex gap-2">
-            {/* Theme Toggle */}
-            <Link href="/payment-audit">
-              <Button variant="outline" size="lg" className="gap-2">
-                <DollarSign className="w-4 h-4" />
-                Auditoría Pagos
+
+          <div className="flex flex-wrap items-center gap-3">
+            <CompanySelector />
+
+            <div className="h-8 w-[1px] bg-slate-200 dark:bg-slate-800 hidden md:block mx-2" />
+
+            <HistorySidebar onLoadHistory={handleLoadHistory} />
+
+            <Link href="/help">
+              <Button variant="ghost" size="sm" className="gap-2 text-slate-600 dark:text-slate-400" id="help-center-btn">
+                <BookOpen className="w-4 h-4" />
+                Ayuda
               </Button>
             </Link>
+
             <Button
               onClick={toggleTheme}
-              variant="outline"
-              size="lg"
-              className="gap-2"
+              variant="ghost"
+              size="icon"
+              className="text-slate-600 dark:text-slate-400"
             >
-              {theme === "dark" ? (
-                <>
-                  <Sun className="w-4 h-4" />
-                  <span className="hidden sm:inline">Modo Claro</span>
-                </>
-              ) : (
-                <>
-                  <Moon className="w-4 h-4" />
-                  <span className="hidden sm:inline">Modo Oscuro</span>
-                </>
-              )}
+              {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </Button>
+
             {stats.total > 0 && (
-              <>
+              <div className="flex gap-2 ml-2">
                 <Button
                   onClick={handleClearData}
-                  variant="destructive"
-                  size="lg"
-                  className="gap-2"
+                  variant="outline"
+                  size="sm"
+                  className="text-red-600 hover:bg-red-50 dark:hover:bg-red-900/10 border-red-200 dark:border-red-900/30"
                 >
                   <Trash2 className="w-4 h-4" />
-                  <span className="hidden sm:inline">Limpiar Todo</span>
                 </Button>
                 <Button
                   onClick={handleExportToExcel}
-                  className="gap-2"
-                  size="lg"
+                  className="bg-accent hover:bg-accent/90 text-primary font-bold shadow-accent/20 shadow-lg gap-2 border-none"
+                  size="sm"
+                  id="export-excel"
                 >
                   <Download className="w-4 h-4" />
-                  <span className="hidden sm:inline">Exportar diagnóstico (Excel)</span>
-                  <span className="sm:hidden">Excel</span>
+                  Excel
                 </Button>
-              </>
+              </div>
             )}
           </div>
         </div>
@@ -283,13 +355,13 @@ export default function Dashboard() {
                   <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
                     Procesando XMLs...
                   </p>
-                  <p className="text-sm font-bold text-blue-600 dark:text-blue-400">
+                  <p className="text-sm font-bold text-primary">
                     {progress.current} / {progress.total}
                   </p>
                 </div>
                 <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-3 overflow-hidden">
                   <div
-                    className="bg-gradient-to-r from-blue-500 to-blue-600 h-3 rounded-full transition-all duration-300 ease-out"
+                    className="bg-gradient-to-r from-primary to-accent h-3 rounded-full transition-all duration-300 ease-out"
                     style={{ width: `${(progress.current / progress.total) * 100}% ` }}
                   />
                 </div>
@@ -312,29 +384,27 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          <Card className="border-0 shadow-sm border-l-4 border-l-green-600 dark:bg-slate-800 dark:border-slate-700">
+          <Card className="bg-white border-none shadow-[0_4px_20px_rgba(0,0,0,0.05)] dark:bg-slate-800">
             <CardContent className="pt-6">
               <div className="text-center">
-                <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">🟢 Usables</p>
-                <p className="text-3xl font-bold text-green-600 dark:text-green-400">{stats.usable}</p>
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">🟢 Usables</p>
+                <p className="text-3xl font-bold text-emerald-800 dark:text-emerald-400">{stats.usable}</p>
               </div>
             </CardContent>
           </Card>
-
-          <Card className="border-0 shadow-sm border-l-4 border-l-yellow-600 dark:bg-slate-800 dark:border-slate-700">
+          <Card className="bg-white border-none shadow-[0_4px_20px_rgba(0,0,0,0.05)] dark:bg-slate-800">
             <CardContent className="pt-6">
               <div className="text-center">
-                <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">🟡 Con Alertas</p>
-                <p className="text-3xl font-bold text-yellow-600 dark:text-yellow-400">{stats.alertas}</p>
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">🟡 Alertas</p>
+                <p className="text-3xl font-bold text-amber-700 dark:text-amber-400">{stats.alertas}</p>
               </div>
             </CardContent>
           </Card>
-
-          <Card className="border-0 shadow-sm border-l-4 border-l-red-600 dark:bg-slate-800 dark:border-slate-700">
+          <Card className="bg-white border-none shadow-[0_4px_20px_rgba(0,0,0,0.05)] dark:bg-slate-800">
             <CardContent className="pt-6">
               <div className="text-center">
-                <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">🔴 No Usables</p>
-                <p className="text-3xl font-bold text-red-600 dark:text-red-400">{stats.noUsable}</p>
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">🔴 No Usables</p>
+                <p className="text-3xl font-bold text-red-800 dark:text-red-400">{stats.noUsable}</p>
               </div>
             </CardContent>
           </Card>
@@ -435,7 +505,7 @@ export default function Dashboard() {
                       <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
                         <button
                           onClick={() => handleSort('fileName')}
-                          className="group flex items-center gap-2 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                          className="group flex items-center gap-2 hover:text-primary transition-colors"
                         >
                           Archivo
                           {getSortIcon('fileName')}
@@ -444,7 +514,7 @@ export default function Dashboard() {
                       <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
                         <button
                           onClick={() => handleSort('fechaEmision')}
-                          className="group flex items-center gap-2 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                          className="group flex items-center gap-2 hover:text-primary transition-colors"
                         >
                           Fecha Emisión
                           {getSortIcon('fechaEmision')}
@@ -453,7 +523,7 @@ export default function Dashboard() {
                       <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
                         <button
                           onClick={() => handleSort('rfcEmisor')}
-                          className="group flex items-center gap-2 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                          className="group flex items-center gap-2 hover:text-primary transition-colors"
                         >
                           RFC Emisor
                           {getSortIcon('rfcEmisor')}
@@ -462,7 +532,7 @@ export default function Dashboard() {
                       <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
                         <button
                           onClick={() => handleSort('total')}
-                          className="group flex items-center gap-2 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                          className="group flex items-center gap-2 hover:text-primary transition-colors"
                         >
                           Total
                           {getSortIcon('total')}
@@ -471,7 +541,7 @@ export default function Dashboard() {
                       <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
                         <button
                           onClick={() => handleSort('estatusSAT')}
-                          className="group flex items-center gap-2 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                          className="group flex items-center gap-2 hover:text-primary transition-colors"
                         >
                           Estatus SAT
                           {getSortIcon('estatusSAT')}
@@ -480,51 +550,60 @@ export default function Dashboard() {
                       <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
                         <button
                           onClick={() => handleSort('resultado')}
-                          className="group flex items-center gap-2 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                          className="group flex items-center gap-2 hover:text-primary transition-colors"
                         >
                           Resultado
                           {getSortIcon('resultado')}
                         </button>
                       </th>
                       <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
-                        <button
-                          onClick={() => handleSort('comentarioFiscal')}
-                          className="group flex items-center gap-2 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
-                        >
-                          Comentario
-                          {getSortIcon('comentarioFiscal')}
-                        </button>
+                        Acciones
                       </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {paginatedResults.map((result, idx) => (
-                      <tr key={idx} className="border-b border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
-                        <td className="py-3 px-4 text-slate-900 dark:text-slate-100 font-medium truncate max-w-xs">{result.fileName}</td>
-                        <td className="py-3 px-4 text-slate-900 dark:text-slate-100 whitespace-nowrap">{formatDate(result.fechaEmision)}</td>
-
-                        <td className="py-3 px-4 text-slate-600 dark:text-slate-400">{result.rfcEmisor}</td>
-                        <td className="py-3 px-4 text-slate-900 dark:text-slate-100 font-semibold">${result.total.toFixed(2)}</td>
-                        <td className="py-3 px-4">
-                          <CFDISATStatus
-                            estatusSAT={result.estatusSAT as any}
-                            estatusCancelacion={result.fechaCancelacion}
-                            rfcEmisorBlacklist={result.rfcEmisorBlacklist}
-                            rfcReceptorBlacklist={result.rfcReceptorBlacklist}
-                            compact={true}
-                          />
-                        </td>
-                        <td className="py-3 px-4">
-                          <div className="flex items-center gap-2">
-                            {getStatusIcon(result.resultado)}
-                            {getStatusBadge(result.resultado)}
-                          </div>
-                        </td>
-                        <td className="py-3 px-4 text-slate-600 dark:text-slate-400 text-xs max-w-xs truncate" title={result.comentarioFiscal}>
-                          {result.comentarioFiscal}
-                        </td>
-                      </tr>
-                    ))}
+                    {paginatedResults.map((result, idx) => {
+                      const absoluteIndex = (currentPage - 1) * ITEMS_PER_PAGE + idx;
+                      return (
+                        <tr key={idx} className="border-b border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
+                          <td className="py-3 px-4 text-slate-900 dark:text-slate-100 font-medium truncate max-w-[150px]" title={result.fileName}>{result.fileName}</td>
+                          <td className="py-3 px-4 text-slate-900 dark:text-slate-100 whitespace-nowrap">{formatDate(result.fechaEmision)}</td>
+                          <td className="py-3 px-4 text-slate-600 dark:text-slate-400 font-mono text-xs">{result.rfcEmisor}</td>
+                          <td className="py-3 px-4 text-slate-900 dark:text-slate-100 font-bold">${result.total.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</td>
+                          <td className="py-3 px-4">
+                            <CFDISATStatus
+                              estatusSAT={result.estatusSAT as any}
+                              estatusCancelacion={result.fechaCancelacion}
+                              rfcEmisorBlacklist={result.rfcEmisorBlacklist}
+                              rfcReceptorBlacklist={result.rfcReceptorBlacklist}
+                              compact={true}
+                            />
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="flex flex-col gap-1">
+                              <div className="flex items-center gap-2">
+                                {getStatusIcon(result.resultado)}
+                                {getStatusBadge(result.resultado)}
+                              </div>
+                              <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">{result.nivelValidacion}</span>
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-slate-600 dark:text-slate-400 text-xs max-w-[200px] leading-relaxed" title={result.comentarioFiscal}>
+                            {result.comentarioFiscal}
+                          </td>
+                          <td className="py-3 px-4">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleRevalidateSAT(absoluteIndex)}
+                              className="text-primary hover:text-primary/80 hover:bg-primary/5"
+                            >
+                              <RefreshCcw className="w-4 h-4" />
+                            </Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -591,7 +670,7 @@ export default function Dashboard() {
 
         {/* Footer */}
         <div className="mt-8 text-center text-slate-600 text-sm">
-          <p>Sentinel Express © 2024 - Validador de CFDI 4.0 con cumplimiento fiscal</p>
+          <p>Sentinel Express © 2026 - Validador de CFDI 4.0 con cumplimiento fiscal</p>
         </div>
       </div>
     </div>

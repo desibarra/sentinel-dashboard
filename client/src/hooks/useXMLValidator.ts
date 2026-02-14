@@ -3,89 +3,28 @@ import { UploadedFile } from "@/components/UploadZone";
 import { checkCFDIStatusSAT } from "@/utils/satStatusValidator";
 import { checkRFCBlacklist, BlacklistValidation } from "@/utils/blacklistValidator"; // Nuevo
 
-export interface ConceptoDesglose {
-  numero: number;
-  importe: number;
-  traslados: Array<{ impuesto: string; tasa: string; importe: number }>;
-  retenciones: Array<{ impuesto: string; tasa: string; importe: number }>;
-  subtotalAcumulado: number;
-  totalParcial: number;
-}
+import {
+  ValidationResult,
+  ConceptoDesglose,
+  detectCFDIVersion,
+  parseXMLDate,
+  extractCPReceptor,
+  extractCfdiRelacionados,
+  determinarTipoRealDocumento,
+  obtenerReglasAplicables,
+  extractTaxesByConcepto,
+  validateTotals,
+  generateDesglose,
+  determineRequiereCartaPorte,
+  extractCartaPorteInfo,
+  extractPagosInfo,
+  detectarEncoding,
+  calcularScoreInformativo,
+  detectarNomina,
+  extractNominaInfo,
+  validateNominaTotals
+} from "@/lib/cfdiEngine";
 
-export interface ValidationResult {
-  fileName: string;
-  uuid: string;
-  versionCFDI: string;
-  tipoCFDI: string;
-  serie: string;
-  folio: string;
-  fechaEmision: string;
-  horaEmision: string;
-  añoFiscal: number;
-  estatusSAT: string;
-  fechaCancelacion: string;
-  // ✅ SKILL - LISTAS NEGRAS
-  rfcEmisorBlacklist?: BlacklistValidation;
-  rfcReceptorBlacklist?: BlacklistValidation;
-  cfdiSustituido: string;
-  uuidSustitucion: string;
-  rfcEmisor: string;
-  nombreEmisor: string;
-  regimenEmisor: string;
-  estadoSATEmisor: string;
-  rfcReceptor: string;
-  nombreReceptor: string;
-  regimenReceptor: string;
-  cpReceptor: string;
-  tieneCfdiRelacionados: string;
-  tipoRelacion: string;
-  uuidRelacionado: string;
-  tipoRealDocumento: string;
-  requiereCartaPorte: string;
-  cartaPorte: string;
-  cartaPorteCompleta: string;
-  versionCartaPorte: string;
-  pagosPresente: string;
-  versionPagos: string;
-  pagosValido: string;
-  encodingDetectado: string;
-  complementosDetectados: string[];
-  scoreInformativo: number;
-  subtotal: number;
-  baseIVA16: number;
-  baseIVA8: number;
-  baseIVA0: number;
-  baseIVAExento: number;
-  ivaTraslado: number;
-  ivaRetenido: number;
-  isrRetenido: number;
-  iepsTraslado: number;
-  iepsRetenido: number;
-  impuestosLocalesTrasladados: number;
-  impuestosLocalesRetenidos: number;
-  total: number;
-  moneda: string;
-  tipoCambio: number;
-  formaPago: string;
-  metodoPago: string;
-  nivelValidacion: string;
-  resultado: string;
-  comentarioFiscal: string;
-  observacionesTecnicas: string;
-  iva: number;
-  isValid: boolean;
-  totalCalculado: number;
-  diferenciaTotales: number;
-  desglosePorConcepto: ConceptoDesglose[];
-  desglose: string;
-  esNomina: string;
-  versionNomina: string;
-  totalPercepciones: number;
-  totalDeducciones: number;
-  totalOtrosPagos: number;
-  isrRetenidoNomina: number;
-  totalCalculadoNomina: number;
-}
 
 export function useXMLValidator() {
   const [isValidating, setIsValidating] = useState(false);
@@ -1275,7 +1214,7 @@ export function useXMLValidator() {
 
       // ✅ SKILL sentinel-express-pro v1.0.0 - CLASIFICACIÓN DOCUMENTAL
       // Detectar CfdiRelacionados para clasificación de tipo real de documento
-      const { tieneCfdiRelacionados, tipoRelacion, uuidRelacionado } = extractCfdiRelacionados(xmlDoc, xmlContent);
+      const { tieneCfdiRelacionados, tipoRelacion, uuidRelacionado, uuids_relacionados } = extractCfdiRelacionados(xmlDoc, xmlContent);
 
       // ✅ SKILL sentinel-express-pro v1.0.0 - CLASIFICACIÓN DOCUMENTAL (EXPLÍCITA)
       // Determinar tipo real de documento: Factura, NC, ND, REP, Nómina, Traslado
@@ -1348,8 +1287,11 @@ export function useXMLValidator() {
             folio,
             fechaEmision,
             horaEmision,
+            añoFiscal,
             estatusSAT,
             fechaCancelacion,
+            rfcEmisorBlacklist: { isEFOS: false, is69B: false, found: false },
+            rfcReceptorBlacklist: { isEFOS: false, is69B: false, found: false },
             cfdiSustituido,
             uuidSustitucion,
             rfcEmisor,
@@ -1360,10 +1302,21 @@ export function useXMLValidator() {
             nombreReceptor,
             regimenReceptor,
             cpReceptor,
+            tieneCfdiRelacionados,
+            tipoRelacion,
+            uuidRelacionado,
+            uuids_relacionados,
+            tipoRealDocumento: "Nómina",
             requiereCartaPorte: "NO",
             cartaPorte: "NO APLICA",
             cartaPorteCompleta: "NO APLICA",
             versionCartaPorte: "NO APLICA",
+            pagosPresente: "NO",
+            versionPagos: "NO APLICA",
+            pagosValido: "NO APLICA",
+            encodingDetectado: "UTF-8",
+            complementosDetectados: ["Nómina"],
+            scoreInformativo: 50,
             subtotal: 0,
             baseIVA16: 0,
             baseIVA8: 0,
@@ -1398,6 +1351,7 @@ export function useXMLValidator() {
             totalOtrosPagos: nominaInfo.totalOtrosPagos,
             isrRetenidoNomina: nominaInfo.isrRetenido,
             totalCalculadoNomina: 0,
+            observacionesContador: ""
           };
         }
       }
@@ -1567,16 +1521,16 @@ export function useXMLValidator() {
           // Diagnóstico inteligente de la causa
           if (Math.abs(validation.diferencia - taxesByConcepto.impuestosLocalesRetenidos) < 0.01) {
             comentarioFiscal += ". CAUSA: Impuesto local retenido (cedular) no declarado en complemento implocal:ImpuestosLocales.";
-            observacionesTecnicas = `Diferencia ($${validation.diferencia.toFixed(2)}) coincide con impuestos locales retenidos ($${taxesByConcepto.impuestosLocalesRetenidos.toFixed(2)}). Revisar nodo implocal:ImpuestosLocales. ${validation.explicacion}`;
+            observacionesTecnicas = `Diferencia ($${validation.diferencia.toFixed(2)}) coincide con impuestos locales retenidos ($${taxesByConcepto.impuestosLocalesRetenidos.toFixed(2)}). Revisar nodo implocal:ImpuestosLocales.`;
           } else if (Math.abs(validation.diferencia - taxesByConcepto.impuestosLocalesTrasladados) < 0.01) {
             comentarioFiscal += ". CAUSA: Impuesto local trasladado no declarado en complemento implocal:ImpuestosLocales.";
-            observacionesTecnicas = `Diferencia ($${validation.diferencia.toFixed(2)}) coincide con impuestos locales trasladados ($${taxesByConcepto.impuestosLocalesTrasladados.toFixed(2)}). Revisar nodo implocal:ImpuestosLocales. ${validation.explicacion}`;
+            observacionesTecnicas = `Diferencia ($${validation.diferencia.toFixed(2)}) coincide con impuestos locales trasladados ($${taxesByConcepto.impuestosLocalesTrasladados.toFixed(2)}). Revisar nodo implocal:ImpuestosLocales.`;
           } else if (validation.diferencia < 1.0) {
             comentarioFiscal += ". CAUSA PROBABLE: Error de redondeo en cálculo de impuestos por concepto.";
-            observacionesTecnicas = `Diferencia menor a $1.00 sugiere error de redondeo. ${validation.explicacion}`;
+            observacionesTecnicas = `Diferencia menor a $1.00 sugiere error de redondeo.`;
           } else {
             comentarioFiscal += ". CAUSA: Revisar cálculo de impuestos por concepto, validar contra XML timbrado.";
-            observacionesTecnicas = `Diferencia significativa. ${validation.explicacion}. Verificar: 1) Impuestos en conceptos, 2) Complementos adicionales, 3) Retenciones.`;
+            observacionesTecnicas = `Diferencia significativa. Verificar: 1) Impuestos en conceptos, 2) Complementos adicionales, 3) Retenciones.`;
           }
         }
       }
@@ -1736,6 +1690,7 @@ export function useXMLValidator() {
         tieneCfdiRelacionados,
         tipoRelacion,
         uuidRelacionado,
+        uuids_relacionados,
         tipoRealDocumento,
         requiereCartaPorte,
         cartaPorte: cartaPortePresente,
@@ -1744,8 +1699,8 @@ export function useXMLValidator() {
         pagosPresente: pagosInfo.presente,
         versionPagos: pagosInfo.versionPagos,
         pagosValido: pagosInfo.valido,
-        encodingDetectado: encodingInfo.encoding,
-        complementosDetectados,
+        encodingDetectado: "UTF-8",
+        complementosDetectados: esNomina ? ["Nómina"] : [],
         scoreInformativo: finalScore,
         subtotal: taxesByConcepto.subtotal,
         baseIVA16: taxesByConcepto.baseIVA16,
@@ -1760,20 +1715,20 @@ export function useXMLValidator() {
         impuestosLocalesTrasladados: taxesByConcepto.impuestosLocalesTrasladados,
         impuestosLocalesRetenidos: taxesByConcepto.impuestosLocalesRetenidos,
         total: totalXML,
-        moneda,
-        tipoCambio: moneda === "MXN" ? 1 : (parseFloat(tipoCambio) || 1),
-        formaPago,
-        metodoPago,
-        nivelValidacion,
-        resultado,
-        comentarioFiscal,
-        observacionesTecnicas,
+        moneda: comprobante?.getAttribute("Moneda") || "MXN",
+        tipoCambio: 1,
+        formaPago: comprobante?.getAttribute("FormaPago") || "NO DISPONIBLE",
+        metodoPago: comprobante?.getAttribute("MetodoPago") || "NO DISPONIBLE",
+        nivelValidacion: finalNivelValidacion,
+        resultado: finalResultado,
+        comentarioFiscal: finalComentarioFiscal,
+        observacionesTecnicas: comentarioFiscal,
         iva: taxesByConcepto.ivaTraslado,
-        isValid: resultado.includes("🟢") || resultado.includes("🟡"),
+        isValid: validation.isValid,
         totalCalculado: validation.calculado,
         diferenciaTotales: validation.diferencia,
         desglosePorConcepto: taxesByConcepto.desglosePorConcepto,
-        desglose: desglose,
+        desglose: JSON.stringify(taxesByConcepto.desglosePorConcepto),
         esNomina: esNomina ? "SÍ" : "NO",
         versionNomina: nominaInfo.versionNomina,
         totalPercepciones: nominaInfo.totalPercepciones,
@@ -1781,6 +1736,7 @@ export function useXMLValidator() {
         totalOtrosPagos: nominaInfo.totalOtrosPagos,
         isrRetenidoNomina: nominaInfo.isrRetenido,
         totalCalculadoNomina: validation.calculado,
+        observacionesContador: ""
       };
     } catch (error) {
       console.error(error);
@@ -1803,6 +1759,8 @@ export function useXMLValidator() {
     añoFiscal: 0,
     estatusSAT: "Error",
     fechaCancelacion: "NO APLICA",
+    rfcEmisorBlacklist: { isEFOS: false, is69B: false, found: false },
+    rfcReceptorBlacklist: { isEFOS: false, is69B: false, found: false },
     cfdiSustituido: "NO",
     uuidSustitucion: "NO APLICA",
     rfcEmisor: "NO DISPONIBLE",
@@ -1816,11 +1774,18 @@ export function useXMLValidator() {
     tieneCfdiRelacionados: "NO",
     tipoRelacion: "NO APLICA",
     uuidRelacionado: "NO APLICA",
+    uuids_relacionados: [],
     tipoRealDocumento: "Desconocido",
     requiereCartaPorte: "NO DISPONIBLE",
     cartaPorte: "NO",
     cartaPorteCompleta: "NO APLICA",
     versionCartaPorte: "NO APLICA",
+    pagosPresente: "NO",
+    versionPagos: "NO APLICA",
+    pagosValido: "NO APLICA",
+    encodingDetectado: "UTF-8",
+    complementosDetectados: [],
+    scoreInformativo: 0,
     subtotal: 0,
     baseIVA16: 0,
     baseIVA8: 0,
@@ -1855,6 +1820,7 @@ export function useXMLValidator() {
     totalOtrosPagos: 0,
     isrRetenidoNomina: 0,
     totalCalculadoNomina: 0,
+    observacionesContador: "",
   });
 
   const clearResults = () => {

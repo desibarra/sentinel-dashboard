@@ -7,6 +7,8 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import Dashboard from "./pages/Dashboard";
 import Settings from "./pages/Settings";
 import PaymentAudit from "./pages/PaymentAudit";
+import HelpCenter from "./pages/HelpCenter";
+import { CompanyProvider } from "./contexts/CompanyContext";
 
 
 function Router() {
@@ -15,6 +17,7 @@ function Router() {
       <Route path={"/"} component={Dashboard} />
       <Route path={"/settings"} component={Settings} />
       <Route path={"/payment-audit"} component={PaymentAudit} />
+      <Route path={"/help"} component={HelpCenter} />
       <Route path={"/404"} component={NotFound} />
       {/* Final fallback route */}
       <Route component={NotFound} />
@@ -35,8 +38,10 @@ function App() {
         switchable
       >
         <TooltipProvider>
-          <Toaster />
-          <Router />
+          <CompanyProvider>
+            <Toaster />
+            <Router />
+          </CompanyProvider>
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>

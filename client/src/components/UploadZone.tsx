@@ -139,9 +139,9 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
           </Badge>
         );
       case "processing":
-        return <Badge className="bg-blue-100 text-blue-800">Procesando</Badge>;
+        return <Badge className="bg-primary/10 text-primary border-primary/20">Procesando</Badge>;
       default:
-        return <Badge className="bg-slate-100 text-slate-800">Pendiente</Badge>;
+        return <Badge className="bg-slate-100 text-slate-800 border-slate-200">Pendiente</Badge>;
     }
   };
 
@@ -175,11 +175,10 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
           onDragLeave={handleDrag}
           onDragOver={handleDrag}
           onDrop={handleDrop}
-          className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
-            dragActive
-              ? "border-blue-500 bg-blue-50"
-              : "border-slate-300 bg-slate-50 hover:border-slate-400"
-          } ${isValidating ? "pointer-events-none opacity-50" : ""}`}
+          className={`border-2 border-dashed rounded-xl p-8 text-center transition-all ${dragActive
+              ? "border-accent bg-accent/10 scale-[1.01]"
+              : "border-slate-300 bg-white hover:border-primary hover:bg-slate-50"
+            } ${isValidating ? "pointer-events-none opacity-50" : "shadow-sm"}`}
         >
           <Upload className="w-12 h-12 mx-auto mb-3 text-slate-400" />
           <p className="text-slate-700 font-medium mb-2">
@@ -275,7 +274,7 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
             <Button
               onClick={handleValidate}
               disabled={shouldDisableValidate}
-              className="flex-1"
+              className="flex-1 bg-primary hover:bg-primary/90 text-white font-bold shadow-lg shadow-primary/20 transition-all active:scale-[0.98]"
               size="lg"
               title={
                 hasValidatedResults && files.length === 0
@@ -283,7 +282,7 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
                   : ""
               }
             >
-              {isValidating ? "Validando XML..." : "Validar XML"}
+              {isValidating ? "Validando XML..." : "Iniciar Validación"}
             </Button>
             {files.length > 0 && (
               <Button
