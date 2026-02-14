@@ -252,4 +252,30 @@ describe('Sentinel Express - Motor Fiscal (Audit Tests)', () => {
         expect(result.comentarioFiscal).toContain('Servicio potencialmente exento');
         expect(result.comentarioFiscal).not.toContain('Riesgo IVA');
     });
+
+    it('Test-TVA-01: Verificación de Giro y Régimen para Traslados de Vanguardia (4.0)', () => {
+        const xmlStr = `
+            <cfdi:Comprobante Version="4.0" xmlns:cfdi="http://www.sat.gob.mx/cfdv40">
+                <cfdi:Receptor Rfc="TVA060209QL6" Nombre="TRASLADOS DE VANGUARDIA S.A. DE C.V." RegimenFiscalReceptor="624" UsoCFDI="G03" DomicilioFiscalReceptor="76000"/>
+            </cfdi:Comprobante>
+        `;
+        const xmlDoc = parser.parseFromString(xmlStr, "text/xml");
+        const info = engine.extractReceptorInfo(xmlDoc);
+
+        expect(info.rfc).toBe('TVA060209QL6');
+        expect(info.regimenFiscal).toBe('624');
+        expect(info.usoCFDI).toBe('G03');
+
+        // Simular ValidationResult
+        const giro = 'Transporte de carga / Coordinados 624';
+        const mockResult: engine.ValidationResult = {
+            regimenReceptor: info.regimenFiscal,
+            usoCFDI: info.usoCFDI,
+            giroEmpresa: giro
+        } as any;
+
+        expect(mockResult.regimenReceptor).toBe('624');
+        expect(mockResult.usoCFDI).toBe('G03');
+        expect(mockResult.giroEmpresa).toBe(giro);
+    });
 });

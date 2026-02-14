@@ -26,6 +26,7 @@ export function exportToExcel(results: ValidationResult[]) {
     RFC_Receptor: r.rfcReceptor,
     Nombre_Receptor: r.nombreReceptor,
     Regimen_Receptor: r.regimenReceptor,
+    Uso_CFDI: r.usoCFDI,
     CP_Receptor: r.cpReceptor,
     Es_Nomina: r.esNomina,
     Version_Nomina: r.versionNomina,
@@ -89,43 +90,44 @@ export function exportToExcel(results: ValidationResult[]) {
     { wch: 14 }, // Q: RFC_Receptor
     { wch: 25 }, // R: Nombre_Receptor
     { wch: 16 }, // S: Regimen_Receptor
-    { wch: 12 }, // T: CP_Receptor
-    { wch: 12 }, // U: Es_Nomina
-    { wch: 16 }, // V: Version_Nomina
-    { wch: 20 }, // W: Requiere_Carta_Porte
-    { wch: 20 }, // X: Carta_Porte_Presente
-    { wch: 20 }, // Y: Carta_Porte_Completa
-    { wch: 18 }, // Z: Version_Carta_Porte
-    { wch: 12 }, // AA: Subtotal
-    { wch: 16 }, // AB: Total_Percepciones
-    { wch: 16 }, // AC: Total_Deducciones
-    { wch: 16 }, // AD: Total_OtrosPagos
-    { wch: 18 }, // AE: ISR_Retenido_Nomina
-    { wch: 12 }, // AF: Base_IVA_16
-    { wch: 12 }, // AG: Base_IVA_8
-    { wch: 12 }, // AH: Base_IVA_0
-    { wch: 14 }, // AI: Base_IVA_Exento
-    { wch: 14 }, // AJ: IVA_Trasladado
-    { wch: 14 }, // AK: IVA_Retenido
-    { wch: 12 }, // AL: ISR_Retenido
-    { wch: 14 }, // AM: IEPS_Trasladado
-    { wch: 14 }, // AN: IEPS_Retenido
-    { wch: 20 }, // AO: Impuestos_Locales_Trasladados
-    { wch: 20 }, // AP: Impuestos_Locales_Retenidos
-    { wch: 14 }, // AQ: Total_Calculado
-    { wch: 14 }, // AR: Total_Declarado
-    { wch: 14 }, // AS: Diferencia_Totales
-    { wch: 10 }, // AT: Moneda
-    { wch: 12 }, // AU: Tipo_Cambio
-    { wch: 14 }, // AV: Forma_Pago
-    { wch: 14 }, // AW: Metodo_Pago
-    { wch: 22 }, // AX: Nivel_Validacion
-    { wch: 20 }, // AY: Resultado
-    { wch: 50 }, // AZ: Comentario_Fiscal
-    { wch: 50 }, // BA: Observaciones_Tecnicas
-    { wch: 40 }, // BB: Observaciones_Contador
-    { wch: 20 }, // BC: Giro_Empresa
-    { wch: 60 }, // BD: UUIDs_Relacionados
+    { wch: 12 }, // T: Uso_CFDI
+    { wch: 12 }, // U: CP_Receptor
+    { wch: 12 }, // V: Es_Nomina
+    { wch: 16 }, // W: Version_Nomina
+    { wch: 20 }, // X: Requiere_Carta_Porte
+    { wch: 20 }, // Y: Carta_Porte_Presente
+    { wch: 20 }, // Z: Carta_Porte_Completa
+    { wch: 18 }, // AA: Version_Carta_Porte
+    { wch: 12 }, // AB: Subtotal
+    { wch: 16 }, // AC: Total_Percepciones
+    { wch: 16 }, // AD: Total_Deducciones
+    { wch: 16 }, // AE: Total_OtrosPagos
+    { wch: 18 }, // AF: ISR_Retenido_Nomina
+    { wch: 12 }, // AG: Base_IVA_16
+    { wch: 12 }, // AH: Base_IVA_8
+    { wch: 12 }, // AI: Base_IVA_0
+    { wch: 14 }, // AJ: Base_IVA_Exento
+    { wch: 14 }, // AK: IVA_Trasladado
+    { wch: 14 }, // AL: IVA_Retenido
+    { wch: 12 }, // AM: ISR_Retenido
+    { wch: 14 }, // AN: IEPS_Trasladado
+    { wch: 14 }, // AO: IEPS_Retenido
+    { wch: 20 }, // AP: Impuestos_Locales_Trasladados
+    { wch: 20 }, // AQ: Impuestos_Locales_Retenidos
+    { wch: 14 }, // AR: Total_Calculado
+    { wch: 14 }, // AS: Total_Declarado
+    { wch: 14 }, // AT: Diferencia_Totales
+    { wch: 10 }, // AU: Moneda
+    { wch: 12 }, // AV: Tipo_Cambio
+    { wch: 14 }, // AW: Forma_Pago
+    { wch: 14 }, // AX: Metodo_Pago
+    { wch: 22 }, // AY: Nivel_Validacion
+    { wch: 20 }, // AZ: Resultado
+    { wch: 50 }, // BA: Comentario_Fiscal
+    { wch: 50 }, // BB: Observaciones_Tecnicas
+    { wch: 40 }, // BC: Observaciones_Contador
+    { wch: 20 }, // BD: Giro_Empresa
+    { wch: 60 }, // BE: UUIDs_Relacionados
   ];
 
   (ws as any)['!cols'] = colWidths;
@@ -152,11 +154,11 @@ export function exportToExcel(results: ValidationResult[]) {
     }
   }
 
-  // Configurar altura de fila de encabezado
+  // Altura de fila de encabezado
   (ws as any)['!rows'] = [{ hpx: 30 }];
 
   // Activar filtros (actualizado para incluir todas las nuevas columnas)
-  (ws as any)['!autofilter'] = { ref: `A1:BD1` };
+  (ws as any)['!autofilter'] = { ref: `A1:BE1` };
 
   // Congelar fila 1
   (ws as any)['!panes'] = { ySplit: 1, topLeftCell: 'A2', activePane: 'bottomLeft', state: 'frozen' };

@@ -4,6 +4,7 @@ export interface Company {
     id: string;
     name: string;
     rfc: string;
+    giro?: string; // ✅ Nuevo: Actividad económica de la empresa
     createdAt: number;
 }
 

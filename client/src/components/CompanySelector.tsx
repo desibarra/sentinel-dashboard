@@ -27,15 +27,17 @@ export const CompanySelector = () => {
     const [isAddOpen, setIsAddOpen] = useState(false);
     const [newName, setNewName] = useState('');
     const [newRfc, setNewRfc] = useState('');
+    const [newGiro, setNewGiro] = useState('');
 
     const handleAddCompany = async () => {
-        if (!newName || !newRfc) {
-            toast.error('Por favor completa todos los campos');
+        if (!newName || !newRfc || !newGiro) {
+            toast.error('Por favor completa todos los campos (Incluyendo Giro)');
             return;
         }
-        await addCompany(newName, newRfc);
+        await addCompany(newName, newRfc, newGiro);
         setNewName('');
         setNewRfc('');
+        setNewGiro('');
         setIsAddOpen(false);
         toast.success('Empresa registrada correctamente');
     };
@@ -93,6 +95,15 @@ export const CompanySelector = () => {
                                         placeholder="GUR123456789"
                                         value={newRfc}
                                         onChange={(e) => setNewRfc(e.target.value)}
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label htmlFor="giro">Giro / Actividad Económica</Label>
+                                    <Input
+                                        id="giro"
+                                        placeholder="Ej. Transporte de carga"
+                                        value={newGiro}
+                                        onChange={(e) => setNewGiro(e.target.value)}
                                     />
                                 </div>
                             </div>

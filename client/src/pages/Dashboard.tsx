@@ -62,7 +62,7 @@ export default function Dashboard() {
       return;
     }
     try {
-      const validationResults = await validateXMLFiles(files);
+      const validationResults = await validateXMLFiles(files, currentCompany.giro);
       const newResults = [...results, ...validationResults];
       setResults(newResults);
       setHasValidatedResults(true);

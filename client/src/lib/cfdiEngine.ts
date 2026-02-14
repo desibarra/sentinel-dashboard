@@ -38,6 +38,7 @@ export interface ValidationResult {
     rfcReceptor: string;
     nombreReceptor: string;
     regimenReceptor: string;
+    usoCFDI: string;
     cpReceptor: string;
     tieneCfdiRelacionados: string;
     tipoRelacion: string;
@@ -158,6 +159,33 @@ export const extractCfdiRelacionados = (xmlDoc: XMLDocument, xmlContent: string)
         uuids_relacionados
     };
 };
+
+export const extractReceptorInfo = (xmlDoc: XMLDocument): { rfc: string; nombre: string; regimenFiscal: string; usoCFDI: string } => {
+    let rfc = "NO DISPONIBLE";
+    let nombre = "NO DISPONIBLE";
+    let regimenFiscal = "NO DISPONIBLE";
+    let usoCFDI = "NO DISPONIBLE";
+
+    // Buscar nodo receptor
+    const todosElementos = xmlDoc.documentElement?.getElementsByTagName("*");
+    if (todosElementos) {
+        for (let i = 0; i < todosElementos.length; i++) {
+            const nodo = todosElementos[i];
+            const tagName = nodo.localName || nodo.nodeName;
+
+            if (tagName === "Receptor" || tagName === "cfdi:Receptor") {
+                rfc = nodo.getAttribute("Rfc") || nodo.getAttribute("rfc") || rfc;
+                nombre = nodo.getAttribute("Nombre") || nodo.getAttribute("nombre") || nombre;
+                usoCFDI = nodo.getAttribute("UsoCFDI") || nodo.getAttribute("usoCFDI") || usoCFDI;
+                regimenFiscal = nodo.getAttribute("RegimenFiscalReceptor") || nodo.getAttribute("regimenFiscalReceptor") || regimenFiscal;
+                break;
+            }
+        }
+    }
+
+    return { rfc, nombre, regimenFiscal, usoCFDI };
+};
+
 
 export const determinarTipoRealDocumento = (tipoCFDI: string, tieneCfdiRelacionados: string, tipoRelacion: string): string => {
     if (tipoCFDI === "I" && tieneCfdiRelacionados === "SÍ" && tipoRelacion === "02") return "Nota de Cargo";

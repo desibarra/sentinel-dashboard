@@ -6,7 +6,7 @@ interface CompanyContextType {
     currentCompany: Company | null;
     companies: Company[];
     setCurrentCompany: (company: Company | null) => void;
-    addCompany: (name: string, rfc: string) => Promise<void>;
+    addCompany: (name: string, rfc: string, giro?: string) => Promise<void>;
     deleteCompany: (id: string) => Promise<void>;
     isLoading: boolean;
 }
@@ -45,11 +45,12 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
         }
     };
 
-    const addCompany = async (name: string, rfc: string) => {
+    const addCompany = async (name: string, rfc: string, giro?: string) => {
         const newCompany: Company = {
             id: nanoid(),
             name,
             rfc,
+            giro,
             createdAt: Date.now()
         };
         await appDB.addCompany(newCompany);

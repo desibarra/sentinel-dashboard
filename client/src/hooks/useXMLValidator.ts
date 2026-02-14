@@ -23,7 +23,8 @@ import {
   detectarNomina,
   extractNominaInfo,
   validateNominaTotals,
-  classifyCFDI
+  classifyCFDI,
+  extractReceptorInfo
 } from "@/lib/cfdiEngine";
 
 
@@ -173,10 +174,7 @@ export function useXMLValidator() {
       // RFC Y NOMBRES - REFORZADO para evitar "NO DISPONIBLE"
       let rfcEmisor = "NO DISPONIBLE";
       let nombreEmisor = "NO DISPONIBLE";
-      let rfcReceptor = "NO DISPONIBLE";
-      let nombreReceptor = "NO DISPONIBLE";
       let regimenEmisor = "NO DISPONIBLE";
-      let regimenReceptor = "NO DISPONIBLE";
 
       // MÉTODO 1: Búsqueda por getElementsByTagName (más robusto para namespaces)
       const todosElementos = comprobante?.getElementsByTagName("*");
@@ -201,21 +199,15 @@ export function useXMLValidator() {
             const regimen = nodo.getAttribute("Regimen") || nodo.getAttribute("regimen");
             if (regimen) regimenEmisor = regimen;
           }
-
-          // Receptor (soporta múltiples variantes)
-          if (tagName === "Receptor" || tagName === "cfdi:Receptor") {
-            const rfc = nodo.getAttribute("Rfc") || nodo.getAttribute("rfc");
-            const nombre = nodo.getAttribute("Nombre") || nodo.getAttribute("nombre");
-            const usoCFDI = nodo.getAttribute("UsoCFDI") || nodo.getAttribute("usoCFDI");
-            const regimenFiscal = nodo.getAttribute("RegimenFiscalReceptor") || nodo.getAttribute("regimenFiscalReceptor");
-
-            if (rfc && rfcReceptor === "NO DISPONIBLE") rfcReceptor = rfc;
-            if (nombre && nombreReceptor === "NO DISPONIBLE") nombreReceptor = nombre;
-            if (usoCFDI && regimenReceptor === "NO DISPONIBLE") regimenReceptor = usoCFDI;
-            if (regimenFiscal && regimenReceptor === "NO DISPONIBLE") regimenReceptor = regimenFiscal;
-          }
         }
       }
+
+      // RECEPTOR INFO (Centralizado en Motor)
+      const receptorInfo = extractReceptorInfo(xmlDoc);
+      let rfcReceptor = receptorInfo.rfc;
+      let nombreReceptor = receptorInfo.nombre;
+      let regimenReceptor = receptorInfo.regimenFiscal;
+      let usoCFDI = receptorInfo.usoCFDI;
 
       // MÉTODO 2: Búsqueda por REGEX en xmlContent (fallback ultra robusto)
       if (rfcEmisor === "NO DISPONIBLE") {
@@ -330,6 +322,7 @@ export function useXMLValidator() {
             rfcReceptor,
             nombreReceptor,
             regimenReceptor,
+            usoCFDI,
             cpReceptor,
             tieneCfdiRelacionados,
             tipoRelacion,
@@ -620,6 +613,7 @@ export function useXMLValidator() {
         rfcReceptor,
         nombreReceptor,
         regimenReceptor,
+        usoCFDI,
         cpReceptor,
         tieneCfdiRelacionados,
         tipoRelacion,
@@ -705,6 +699,7 @@ export function useXMLValidator() {
     rfcReceptor: "NO DISPONIBLE",
     nombreReceptor: "NO DISPONIBLE",
     regimenReceptor: "NO DISPONIBLE",
+    usoCFDI: "NO DISPONIBLE",
     cpReceptor: "NO DISPONIBLE",
     tieneCfdiRelacionados: "NO",
     tipoRelacion: "NO APLICA",
