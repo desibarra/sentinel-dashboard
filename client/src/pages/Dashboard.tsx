@@ -167,9 +167,9 @@ export default function Dashboard() {
   };
 
   const getStatusBadge = (resultado: string) => {
-    if (resultado.includes("🟢")) return <Badge className="bg-emerald-50 text-emerald-900 border-emerald-100 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-200">Usable</Badge>;
-    if (resultado.includes("🟡")) return <Badge className="bg-amber-50 text-amber-900 border-amber-100 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-200">Alertas</Badge>;
-    return <Badge className="bg-red-50 text-red-900 border-red-100 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-200">No Usable</Badge>;
+    if (resultado.includes("🟢")) return <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 hover:bg-emerald-500/20 px-3 py-1 font-black uppercase tracking-tighter animate-in fade-in zoom-in duration-500">Usable</Badge>;
+    if (resultado.includes("🟡")) return <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/20 hover:bg-amber-500/20 px-3 py-1 font-black uppercase tracking-tighter">Alertas</Badge>;
+    return <Badge className="bg-rose-500/10 text-rose-600 border-rose-500/20 hover:bg-rose-500/20 px-3 py-1 font-black uppercase tracking-tighter animate-pulse">No Usable</Badge>;
   };
 
   const formatDate = (dateStr: string) => {
@@ -328,140 +328,234 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 p-4 md:p-8 transition-colors duration-200">
       <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border dark:border-slate-800">
-          <div>
+        {/* Header de Autoridad - Navy Style */}
+        <div className="bg-[#0B2340] dark:bg-slate-900 -mx-4 -mt-8 mb-8 px-6 py-8 rounded-b-3xl shadow-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-6 border-b border-white/10 relative overflow-hidden">
+          {/* Subtle pattern overlay */}
+          <div className="absolute inset-0 opacity-10 pointer-events-none bg-[radial-gradient(#ffffff_1px,transparent_1px)] [background-size:20px_20px]"></div>
+
+          <div className="relative z-10">
             <div className="flex items-center gap-3 mb-1">
-              <img src="/assets/logo.png" alt="Mentores Logo" className="w-10 h-10 object-contain" />
-              <h1 className="text-2xl md:text-3xl font-bold text-primary tracking-tight uppercase">SENTINEL<span className="text-accent font-black">EXPRESS</span></h1>
+              <div className="p-2 bg-accent rounded-xl shadow-lg shadow-accent/20">
+                <TrendingUp className="w-6 h-6 text-[#0B2340]" />
+              </div>
+              <h1 className="text-3xl font-black text-white tracking-tighter uppercase">
+                SENTINEL<span className="text-accent">EXPRESS</span>
+              </h1>
             </div>
-            <p className="text-slate-500 dark:text-slate-400 text-xs font-semibold uppercase tracking-widest">Daily Accounting Compliance Engine</p>
+            <p className="text-slate-400 mt-1 font-medium tracking-widest text-[10px] uppercase opacity-80">
+              Mando y Control de Riesgos Fiscales CFDI 4.0
+            </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-4 relative z-10">
             <CompanySelector />
 
-            <div className="h-8 w-[1px] bg-slate-200 dark:bg-slate-800 hidden md:block mx-2" />
+            <div className="h-8 w-[1px] bg-white/10 hidden md:block" />
 
-            <HistorySidebar onLoadHistory={handleLoadHistory} />
+            <HistorySidebar onLoadHistory={(history: ValidationHistory) => setResults(history.results || [])}>
+              <Button
+                variant="ghost"
+                className="text-white hover:bg-white/10 gap-2 border border-white/20 hover:border-white/40 px-4 rounded-xl"
+              >
+                <History className="w-4 h-4 text-accent" />
+                <span className="text-xs font-bold uppercase tracking-wider">Historial</span>
+              </Button>
+            </HistorySidebar>
 
-            <Link href="/help">
-              <Button variant="ghost" size="sm" className="gap-2 text-slate-600 dark:text-slate-400" id="help-center-btn">
-                <BookOpen className="w-4 h-4" />
-                Ayuda
+            <Link href="/manual">
+              <Button
+                variant="ghost"
+                className="text-white hover:bg-white/10 gap-2 border border-white/20 hover:border-white/40 px-4 rounded-xl"
+              >
+                <BookOpen className="w-4 h-4 text-accent" />
+                <span className="text-xs font-bold uppercase tracking-wider">Ayuda</span>
               </Button>
             </Link>
 
-            <Button
-              onClick={toggleTheme}
-              variant="ghost"
-              size="icon"
-              className="text-slate-600 dark:text-slate-400"
-            >
-              {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-            </Button>
+            <div className="flex items-center gap-2 bg-white/5 p-1.5 rounded-2xl border border-white/10 backdrop-blur-sm">
+              <Button
+                onClick={toggleTheme}
+                variant="ghost"
+                size="icon"
+                className="text-white hover:bg-white/15 rounded-xl w-8 h-8"
+              >
+                {theme === "dark" ? <Sun className="w-4 h-4 text-accent" /> : <Moon className="w-4 h-4 text-accent" />}
+              </Button>
 
-            {stats.total > 0 && (
-              <div className="flex gap-2 ml-2">
-                <Button
-                  onClick={handleClearData}
-                  variant="outline"
-                  size="sm"
-                  className="text-red-600 hover:bg-red-50 dark:hover:bg-red-900/10 border-red-200 dark:border-red-900/30"
-                >
-                  <Trash2 className="w-4 h-4" />
+              <Link href="/settings">
+                <Button variant="ghost" size="icon" className="text-white hover:bg-white/15 rounded-xl w-8 h-8">
+                  <Settings className="w-4 h-4 text-accent" />
                 </Button>
-                <Button
-                  onClick={handleExportToExcel}
-                  className="bg-accent hover:bg-accent/90 text-primary font-bold shadow-accent/20 shadow-lg gap-2 border-none"
-                  size="sm"
-                  id="export-excel"
-                >
-                  <Download className="w-4 h-4" />
-                  Excel
-                </Button>
-              </div>
-            )}
+              </Link>
+            </div>
           </div>
         </div>
 
-        {/* Upload Zone */}
-        <UploadZone
-          onFilesReady={handleFilesReady}
-          isValidating={isValidating}
-          hasValidatedResults={hasValidatedResults}
-        />
+        {/* System Health / Main Panel Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+          {/* Salud del Sistema - Radial Progress / KPI */}
+          <Card className="lg:col-span-1 border-0 shadow-xl bg-white dark:bg-slate-800 overflow-hidden relative group rounded-3xl">
+            <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:scale-110 transition-transform duration-700">
+              <CheckCircle2 className="w-32 h-32 text-[#0B2340]" />
+            </div>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 dark:text-slate-500">
+                Estatus de Protección
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col items-center justify-center pt-2 pb-8">
+              <div className="relative w-40 h-40 flex items-center justify-center mb-6">
+                <svg className="w-full h-full transform -rotate-90">
+                  <circle
+                    cx="80"
+                    cy="80"
+                    r="72"
+                    stroke="currentColor"
+                    strokeWidth="10"
+                    fill="transparent"
+                    className="text-slate-100 dark:text-slate-700"
+                  />
+                  <circle
+                    cx="80"
+                    cy="80"
+                    r="72"
+                    stroke="currentColor"
+                    strokeWidth="10"
+                    fill="transparent"
+                    strokeDasharray={452.4}
+                    strokeDashoffset={452.4 * (1 - (results.length > 0 ? (stats.usable / Math.max(stats.total, 1)) : 1))}
+                    className="text-[#059669] transition-all duration-1000 ease-out"
+                    strokeLinecap="round"
+                    style={{ filter: 'drop-shadow(0 0 8px rgba(5,150,105,0.3))' }}
+                  />
+                </svg>
+                <div className="absolute flex flex-col items-center">
+                  <span className="text-4xl font-black text-[#0B2340] dark:text-white tracking-tighter">
+                    {results.length > 0 ? Math.round((stats.usable / Math.max(stats.total, 1)) * 100) : 100}%
+                  </span>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Salud</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 px-4 py-2 bg-emerald-50 dark:bg-emerald-900/20 rounded-2xl border border-emerald-100 dark:border-emerald-900/30">
+                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+                <span className="text-[10px] font-black text-emerald-700 dark:text-emerald-400 uppercase tracking-widest">SISTEMA PROTEGIDO</span>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Upload Zone / Main Action */}
+          <div className="lg:col-span-2">
+            <UploadZone
+              onFilesReady={handleFilesReady}
+              isValidating={isValidating}
+              hasValidatedResults={hasValidatedResults}
+            />
+          </div>
+        </div>
 
         {/* ✅ PRODUCCIÓN: Indicador de progreso durante procesamiento */}
         {isValidating && progress.total > 0 && (
-          <Card className="border-0 shadow-sm mb-8 dark:bg-slate-800 dark:border-slate-700">
-            <CardContent className="pt-6">
-              <div className="space-y-3">
+          <Card className="border-0 shadow-2xl mb-8 border-l-8 border-accent animate-in fade-in slide-in-from-top-6 duration-700 rounded-3xl bg-white dark:bg-slate-800">
+            <CardContent className="pt-8 pb-8">
+              <div className="space-y-6">
                 <div className="flex justify-between items-center">
-                  <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                    Procesando XMLs...
-                  </p>
-                  <p className="text-sm font-bold text-primary">
+                  <div className="flex items-center gap-4">
+                    <div className="p-3 bg-primary/10 rounded-2xl">
+                      <RefreshCcw className="w-6 h-6 text-primary animate-spin" />
+                    </div>
+                    <div>
+                      <p className="text-xl font-black text-[#0B2340] dark:text-white tracking-tight">
+                        Analizando Lote de XML
+                      </p>
+                      <p className="text-xs text-slate-500 font-medium">Verificando cumplimiento fiscal y listas SAT...</p>
+                    </div>
+                  </div>
+                  <Badge className="bg-[#0B2340] text-white text-xl px-6 py-2 rounded-2xl shadow-lg shadow-black/10">
                     {progress.current} / {progress.total}
-                  </p>
+                  </Badge>
                 </div>
-                <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-3 overflow-hidden">
+                <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-5 overflow-hidden border border-slate-200 dark:border-slate-600 shadow-inner p-1">
                   <div
-                    className="bg-gradient-to-r from-primary to-accent h-3 rounded-full transition-all duration-300 ease-out"
-                    style={{ width: `${(progress.current / progress.total) * 100}% ` }}
+                    className="bg-gradient-to-r from-[#0B2340] via-[#1E3A8A] to-accent h-3 rounded-full transition-all duration-300 ease-out border-r-2 border-white/30 shadow-lg"
+                    style={{ width: `${(progress.current / progress.total) * 100}%` }}
                   />
                 </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400 text-center">
-                  {Math.round((progress.current / progress.total) * 100)}% completado
-                </p>
+                <div className="flex justify-center">
+                  <p className="text-xs font-black text-slate-400 dark:text-slate-500 tracking-[0.3em] uppercase">
+                    {Math.round((progress.current / progress.total) * 100)}% de seguridad verificada
+                  </p>
+                </div>
               </div>
             </CardContent>
           </Card>
         )}
 
-        {/* KPI Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
-          <Card className="border-0 shadow-sm dark:bg-slate-800 dark:border-slate-700">
-            <CardContent className="pt-6">
-              <div className="text-center">
-                <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">Total Procesados</p>
-                <p className="text-3xl font-bold text-slate-900 dark:text-slate-100">{stats.total}</p>
+        {/* KPI Cards Modernos - Grid Glassmorphism */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-10">
+          <Card className="border-0 shadow-xl bg-white dark:bg-slate-800 rounded-3xl border-b-8 border-slate-300 dark:border-slate-700 hover:-translate-y-1 transition-transform duration-300">
+            <CardContent className="pt-8 pb-8">
+              <div className="flex flex-col items-center">
+                <div className="p-4 bg-slate-50 dark:bg-slate-700 rounded-2xl mb-4 shadow-inner">
+                  <FileText className="w-7 h-7 text-slate-600 dark:text-slate-400" />
+                </div>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-2">Total Procesados</p>
+                <p className="text-4xl font-black text-slate-900 dark:text-slate-100 tracking-tighter">{stats.total}</p>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="bg-white border-none shadow-[0_4px_20px_rgba(0,0,0,0.05)] dark:bg-slate-800">
-            <CardContent className="pt-6">
-              <div className="text-center">
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">🟢 Usables</p>
-                <p className="text-3xl font-bold text-emerald-800 dark:text-emerald-400">{stats.usable}</p>
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="bg-white border-none shadow-[0_4px_20px_rgba(0,0,0,0.05)] dark:bg-slate-800">
-            <CardContent className="pt-6">
-              <div className="text-center">
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">🟡 Alertas</p>
-                <p className="text-3xl font-bold text-amber-700 dark:text-amber-400">{stats.alertas}</p>
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="bg-white border-none shadow-[0_4px_20px_rgba(0,0,0,0.05)] dark:bg-slate-800">
-            <CardContent className="pt-6">
-              <div className="text-center">
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">🔴 No Usables</p>
-                <p className="text-3xl font-bold text-red-800 dark:text-red-400">{stats.noUsable}</p>
+          <Card className="border-0 shadow-xl bg-white dark:bg-slate-800 rounded-3xl border-b-8 border-emerald-500 hover:-translate-y-1 transition-transform duration-300">
+            <CardContent className="pt-8 pb-8">
+              <div className="flex flex-col items-center">
+                <div className="p-4 bg-emerald-50 dark:bg-emerald-900/10 rounded-2xl mb-4 shadow-inner">
+                  <CheckCircle2 className="w-7 h-7 text-emerald-600 dark:text-emerald-400" />
+                </div>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600 mb-2">🟢 Usables</p>
+                <p className="text-4xl font-black text-emerald-800 dark:text-emerald-300 tracking-tighter">{stats.usable}</p>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="border-0 shadow-sm dark:bg-slate-800 dark:border-slate-700">
-            <CardContent className="pt-6">
-              <div className="text-center">
-                <p className="text-sm text-slate-600 dark:text-slate-400 mb-2 flex items-center justify-center gap-1">
-                  <DollarSign className="w-4 h-4" /> Total
-                </p>
-                <p className="text-2xl font-bold text-slate-900 dark:text-slate-100">${(stats.totalMonto / 1000).toFixed(1)}K</p>
+          <Card className="border-0 shadow-xl bg-white dark:bg-slate-800 rounded-3xl border-b-8 border-amber-500 hover:-translate-y-1 transition-transform duration-300">
+            <CardContent className="pt-8 pb-8">
+              <div className="flex flex-col items-center">
+                <div className="p-4 bg-amber-50 dark:bg-amber-900/10 rounded-2xl mb-4 shadow-inner">
+                  <AlertCircle className="w-7 h-7 text-amber-600 dark:text-amber-400" />
+                </div>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-600 mb-2">🟡 Alertas</p>
+                <p className="text-4xl font-black text-amber-800 dark:text-amber-300 tracking-tighter">{stats.alertas}</p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-0 shadow-xl bg-white dark:bg-slate-800 rounded-3xl border-b-8 border-red-500 hover:-translate-y-1 transition-transform duration-300">
+            <CardContent className="pt-8 pb-8">
+              <div className="flex flex-col items-center">
+                <div className="p-4 bg-red-50 dark:bg-red-900/10 rounded-2xl mb-4 shadow-inner">
+                  <XCircle className="w-7 h-7 text-red-600 dark:text-red-400" />
+                </div>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-red-600 mb-2">🔴 No Usables</p>
+                <p className="text-4xl font-black text-red-800 dark:text-red-300 tracking-tighter">{stats.noUsable}</p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-0 shadow-xl bg-[#0F172A] rounded-3xl border-b-8 border-accent hover:-translate-y-1 transition-transform duration-300 overflow-hidden relative">
+            <div className="absolute top-0 right-0 p-2 opacity-10">
+              <DollarSign className="w-16 h-16 text-white" />
+            </div>
+            <CardContent className="pt-8 pb-8 relative z-10">
+              <div className="flex flex-col items-center">
+                <div className="p-4 bg-white/10 rounded-2xl mb-4">
+                  <TrendingUp className="w-7 h-7 text-accent" />
+                </div>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-accent mb-2">$ Monto Total</p>
+                <div className="flex items-baseline gap-1">
+                  <span className="text-xs font-bold text-accent">$</span>
+                  <p className="text-4xl font-black text-white tracking-tighter">
+                    {(stats.totalMonto / 1000).toFixed(1)}K
+                  </p>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -528,91 +622,93 @@ export default function Dashboard() {
         {/* Detailed Table */}
         {stats.total > 0 && (
           <Card className="border-0 shadow-sm dark:bg-slate-800 dark:border-slate-700">
-            <CardHeader className="flex flex-row items-center justify-between">
+            <CardHeader className="flex flex-row items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-6">
               <div>
-                <CardTitle className="text-lg dark:text-slate-100">Detalle de Validaciones</CardTitle>
-                <CardDescription className="dark:text-slate-400">Información completa de cada CFDI procesado</CardDescription>
+                <CardTitle className="text-xl font-black text-slate-800 dark:text-slate-100 uppercase tracking-tight">Detalle de Validaciones</CardTitle>
+                <CardDescription className="dark:text-slate-400 font-medium">Análisis exhaustivo de cumplimiento y riesgo fiscal</CardDescription>
               </div>
               <Button
                 onClick={handleExportToExcel}
-                variant="outline"
+                className="bg-primary hover:bg-primary/90 text-white font-black shadow-lg shadow-primary/20 gap-2 rounded-xl"
                 size="sm"
-                className="gap-2"
               >
                 <Download className="w-4 h-4" />
-                Exportar
+                Exportar Reporte
               </Button>
             </CardHeader>
             <CardContent>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-slate-200 dark:border-slate-700">
-                      <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
+                    <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400">
                         <button
                           onClick={() => handleSort('fileName')}
-                          className="group flex items-center gap-2 hover:text-primary transition-colors"
+                          className="group flex items-center gap-2 hover:text-indigo-500 transition-colors"
                         >
                           Archivo
                           {getSortIcon('fileName')}
                         </button>
                       </th>
-                      <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400">
                         <button
                           onClick={() => handleSort('uuid')}
-                          className="group flex items-center gap-2 hover:text-primary transition-colors"
+                          className="group flex items-center gap-2 hover:text-indigo-500 transition-colors"
                         >
                           UUID
                           {getSortIcon('uuid')}
                         </button>
                       </th>
-                      <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400">
                         <button
                           onClick={() => handleSort('fechaEmision')}
-                          className="group flex items-center gap-2 hover:text-primary transition-colors"
+                          className="group flex items-center gap-2 hover:text-indigo-500 transition-colors"
                         >
-                          Fecha Emisión
+                          Fecha
                           {getSortIcon('fechaEmision')}
                         </button>
                       </th>
-                      <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400">
                         <button
                           onClick={() => handleSort('rfcEmisor')}
-                          className="group flex items-center gap-2 hover:text-primary transition-colors"
+                          className="group flex items-center gap-2 hover:text-indigo-500 transition-colors"
                         >
-                          RFC Emisor
+                          Emisor
                           {getSortIcon('rfcEmisor')}
                         </button>
                       </th>
-                      <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400">
                         <button
                           onClick={() => handleSort('total')}
-                          className="group flex items-center gap-2 hover:text-primary transition-colors"
+                          className="group flex items-center gap-2 hover:text-indigo-500 transition-colors"
                         >
                           Total
                           {getSortIcon('total')}
                         </button>
                       </th>
-                      <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400">
                         <button
                           onClick={() => handleSort('estatusSAT')}
-                          className="group flex items-center gap-2 hover:text-primary transition-colors"
+                          className="group flex items-center gap-2 hover:text-indigo-500 transition-colors"
                         >
                           Estatus SAT
                           {getSortIcon('estatusSAT')}
                         </button>
                       </th>
-                      <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400">
                         <button
                           onClick={() => handleSort('resultado')}
-                          className="group flex items-center gap-2 hover:text-primary transition-colors"
+                          className="group flex items-center gap-2 hover:text-indigo-500 transition-colors"
                         >
                           Resultado
                           {getSortIcon('resultado')}
                         </button>
                       </th>
-                      <th className="text-left py-3 px-4 font-semibold text-slate-700 dark:text-slate-300">
-                        Acciones
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400">
+                        Diagnóstico
+                      </th>
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400">
+                        {/* Actions */}
                       </th>
                     </tr>
                   </thead>
@@ -620,20 +716,20 @@ export default function Dashboard() {
                     {paginatedResults.map((result, idx) => {
                       const absoluteIndex = (currentPage - 1) * ITEMS_PER_PAGE + idx;
                       return (
-                        <tr key={idx} className="border-b border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
-                          <td className="py-3 px-4 text-slate-900 dark:text-slate-100 font-medium truncate max-w-[150px]" title={result.fileName}>{result.fileName}</td>
-                          <td className="py-3 px-4">
+                        <tr key={idx} className="border-b border-slate-100 dark:border-slate-800/50 hover:bg-indigo-50/30 dark:hover:bg-indigo-900/10 transition-colors group">
+                          <td className="py-4 px-4 text-slate-900 dark:text-slate-100 font-bold truncate max-w-[150px] group-hover:text-indigo-600 transition-colors" title={result.fileName}>{result.fileName}</td>
+                          <td className="py-4 px-4">
                             <div className="flex flex-col gap-0.5 max-w-[220px]">
-                              <span className="font-mono text-[10px] text-slate-700 dark:text-slate-300 break-all leading-tight select-all">
+                              <span className="font-mono text-[10px] text-slate-500 dark:text-slate-300 break-all leading-tight select-all">
                                 {result.uuid}
                               </span>
-                              <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold">UUID</span>
+                              <span className="text-[9px] uppercase tracking-widest text-slate-400 font-black">Identificador Fiscal</span>
                             </div>
                           </td>
-                          <td className="py-3 px-4 text-slate-900 dark:text-slate-100 whitespace-nowrap">{formatDate(result.fechaEmision)}</td>
-                          <td className="py-3 px-4 text-slate-600 dark:text-slate-400 font-mono text-xs">{result.rfcEmisor}</td>
-                          <td className="py-3 px-4 text-slate-900 dark:text-slate-100 font-bold">${result.total.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</td>
-                          <td className="py-3 px-4">
+                          <td className="py-4 px-4 text-slate-600 dark:text-slate-300 whitespace-nowrap font-medium">{formatDate(result.fechaEmision)}</td>
+                          <td className="py-4 px-4 text-slate-600 dark:text-slate-400 font-mono text-xs font-bold bg-slate-50/50 dark:bg-slate-900/50 rounded-lg">{result.rfcEmisor}</td>
+                          <td className="py-4 px-4 text-slate-900 dark:text-slate-100 font-black tracking-tighter text-base">${result.total.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</td>
+                          <td className="py-4 px-4">
                             <CFDISATStatus
                               estatusSAT={result.estatusSAT as any}
                               estatusCancelacion={result.fechaCancelacion}
@@ -642,31 +738,32 @@ export default function Dashboard() {
                               compact={true}
                             />
                             {result.ultimoRefrescoSAT && (
-                              <div className="mt-1 text-[8px] text-slate-400 dark:text-slate-500 flex items-center gap-1 italic" title={`Última validación: ${new Date(result.ultimoRefrescoSAT).toLocaleString()}`}>
+                              <div className="mt-1.5 text-[8px] text-slate-400 dark:text-slate-500 flex items-center gap-1 font-black uppercase tracking-widest" title={`Última validación: ${new Date(result.ultimoRefrescoSAT).toLocaleString()}`}>
                                 <Clock className="w-2.5 h-2.5" />
-                                {new Date(result.ultimoRefrescoSAT).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                SCAN: {new Date(result.ultimoRefrescoSAT).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                               </div>
                             )}
                           </td>
-                          <td className="py-3 px-4">
+                          <td className="py-4 px-4">
                             <div className="flex flex-col gap-1">
                               <div className="flex items-center gap-2">
-                                {getStatusIcon(result.resultado)}
                                 {getStatusBadge(result.resultado)}
                               </div>
-                              <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">{result.nivelValidacion}</span>
+                              <span className="text-[9px] text-slate-400 font-black uppercase tracking-widest">{result.nivelValidacion}</span>
                             </div>
                           </td>
-                          <td className="py-3 px-4 text-slate-600 dark:text-slate-400 text-xs max-w-[200px] leading-relaxed" title={result.comentarioFiscal}>
-                            {result.comentarioFiscal}
+                          <td className="py-4 px-4 text-slate-500 dark:text-slate-400 text-[11px] max-w-[250px] leading-relaxed italic" title={result.comentarioFiscal}>
+                            <div className="line-clamp-2">
+                              {result.comentarioFiscal}
+                            </div>
                           </td>
-                          <td className="py-3 px-4">
+                          <td className="py-4 px-4">
                             <Button
                               variant="ghost"
                               size="sm"
                               onClick={() => handleRevalidateSAT(absoluteIndex)}
                               disabled={!result.uuid || result.uuid === "NO DISPONIBLE"}
-                              className="text-primary hover:text-primary/80 hover:bg-primary/5 disabled:opacity-30"
+                              className="text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-full h-8 w-8 p-0"
                               title={!result.uuid || result.uuid === "NO DISPONIBLE" ? "No se puede revalidar sin UUID" : "Actualizar estatus SAT"}
                             >
                               <RefreshCcw className="w-4 h-4" />

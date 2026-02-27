@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Company, appDB } from '@/db/appDB';
 import { nanoid } from 'nanoid';
+import { useAuth } from './AuthContext';
 
 interface CompanyContextType {
     currentCompany: Company | null;
@@ -14,26 +15,37 @@ interface CompanyContextType {
 const CompanyContext = createContext<CompanyContextType | undefined>(undefined);
 
 export function CompanyProvider({ children }: { children: React.ReactNode }) {
+    const { user } = useAuth();
     const [currentCompany, setCurrentCompanyState] = useState<Company | null>(null);
     const [companies, setCompanies] = useState<Company[]>([]);
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
-        loadCompanies();
-    }, []);
+        if (user) {
+            loadCompanies();
+        } else {
+            setCompanies([]);
+            setCurrentCompanyState(null);
+            setIsLoading(false);
+        }
+    }, [user]);
 
     const loadCompanies = async () => {
-        const data = await appDB.getCompanies();
-        setCompanies(data);
+        setIsLoading(true);
+        try {
+            const data = await appDB.getCompanies();
+            setCompanies(data);
 
-        // Load last used company from local storage
-        const lastCompanyId = localStorage.getItem('last_company_id');
-        if (lastCompanyId) {
-            const last = data.find(c => c.id === lastCompanyId);
-            if (last) setCurrentCompanyState(last);
+            const lastCompanyId = localStorage.getItem('last_company_id');
+            if (lastCompanyId) {
+                const last = data.find(c => c.id === lastCompanyId);
+                if (last) setCurrentCompanyState(last);
+            }
+        } catch (error) {
+            console.error('Failed to load companies:', error);
+        } finally {
+            setIsLoading(false);
         }
-
-        setIsLoading(false);
     };
 
     const setCurrentCompany = (company: Company | null) => {

@@ -52,26 +52,27 @@ export function CFDISATStatus({
     // 1. SAT Status
     if (estatusSAT === 'Vigente') {
         badges.push(
-            <span key="sat-ok" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-[10px]' : 'px-3 py-1 text-sm'} font-bold bg-emerald-50 text-emerald-800 border border-emerald-100 rounded-full`}>
-                ✅ Vigente
+            <span key="sat-ok" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-[9px]' : 'px-3 py-1 text-sm'} font-black bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 rounded-lg uppercase tracking-widest`}>
+                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
+                Vigente
             </span>
         );
     } else if (estatusSAT === 'Cancelado') {
         badges.push(
-            <span key="sat-cancel" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-[10px]' : 'px-3 py-1 text-sm'} font-bold bg-red-50 text-red-800 border border-red-100 rounded-full`}>
-                🚫 Cancelado
+            <span key="sat-cancel" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-[9px]' : 'px-3 py-1 text-sm'} font-black bg-rose-500/10 text-rose-600 border border-rose-500/20 rounded-lg uppercase tracking-widest animate-pulse`}>
+                Cancelado
             </span>
         );
     } else if (estatusSAT === 'No Encontrado') {
         badges.push(
-            <span key="sat-warn" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-[10px]' : 'px-3 py-1 text-sm'} font-bold bg-amber-50 text-amber-800 border border-amber-100 rounded-full`}>
-                ⚠️ No Encontrado
+            <span key="sat-warn" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-[9px]' : 'px-3 py-1 text-sm'} font-black bg-amber-500/10 text-amber-600 border border-amber-500/20 rounded-lg uppercase tracking-widest`}>
+                No Hallado
             </span>
         );
     } else if (estatusSAT === 'Error Conexión') {
         badges.push(
-            <span key="sat-err" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-xs' : 'px-3 py-1 text-sm'} font-medium bg-gray-100 text-gray-800 border border-gray-200 rounded-full`}>
-                ❌ Error SAT
+            <span key="sat-err" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-[9px]' : 'px-3 py-1 text-sm'} font-black bg-slate-500/10 text-slate-500 border border-slate-500/20 rounded-lg uppercase tracking-widest`}>
+                Error SAT
             </span>
         );
     }
@@ -80,14 +81,14 @@ export function CFDISATStatus({
     if (rfcEmisorBlacklist?.found) {
         if (rfcEmisorBlacklist.is69B) {
             badges.push(
-                <span key="efos-69b" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-xs' : 'px-3 py-1 text-sm'} font-medium bg-red-800 text-white border border-red-900 rounded-full animate-pulse`} title={`Emisor en 69-B: ${rfcEmisorBlacklist.situacion}`}>
-                    ☢️ 69-B
+                <span key="efos-69b" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-[9px]' : 'px-3 py-1 text-sm'} font-black bg-indigo-600 text-white rounded-lg uppercase tracking-widest shadow-lg shadow-indigo-500/20`} title={`Emisor en 69-B: ${rfcEmisorBlacklist.situacion}`}>
+                    ⚠️ 69-B
                 </span>
             );
         } else if (rfcEmisorBlacklist.isEFOS) {
             badges.push(
-                <span key="efos-list" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-xs' : 'px-3 py-1 text-sm'} font-medium bg-orange-100 text-orange-800 border border-orange-200 rounded-full`} title="Emisor en lista EFOS">
-                    ⚠️ EFOS
+                <span key="efos-list" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-[9px]' : 'px-3 py-1 text-sm'} font-black bg-orange-500/10 text-orange-600 border border-orange-500/20 rounded-lg uppercase tracking-widest`} title="Emisor en lista EFOS">
+                    EFOS
                 </span>
             );
         }
@@ -95,8 +96,8 @@ export function CFDISATStatus({
 
     if (rfcReceptorBlacklist?.found && rfcReceptorBlacklist.is69B) {
         badges.push(
-            <span key="rec-69b" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-xs' : 'px-3 py-1 text-sm'} font-medium bg-purple-100 text-purple-800 border border-purple-200 rounded-full`} title="Receptor en 69-B">
-                ⚠️ Rec. 69B
+            <span key="rec-69b" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-[9px]' : 'px-3 py-1 text-sm'} font-black bg-purple-500/10 text-purple-600 border border-purple-500/20 rounded-lg uppercase tracking-widest`} title="Receptor en 69-B">
+                Rec-69B
             </span>
         );
     }

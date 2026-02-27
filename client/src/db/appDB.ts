@@ -1,10 +1,8 @@
-import { openDB, IDBPDatabase, DBSchema } from 'idb';
-
 export interface Company {
     id: string;
     name: string;
     rfc: string;
-    giro?: string; // ✅ Nuevo: Actividad económica de la empresa
+    giro?: string;
     createdAt: number;
 }
 
@@ -18,77 +16,50 @@ export interface ValidationHistory {
     alertCount: number;
     errorCount: number;
     totalAmount: number;
-    results: any[]; // Store subset of results for recalculation if needed
+    results: any[];
     globalNotes?: string;
-}
-
-interface SentinelSchema extends DBSchema {
-    companies: {
-        key: string;
-        value: Company;
-    };
-    history: {
-        key: string;
-        value: ValidationHistory;
-        indexes: { 'by-company': string };
-    };
-}
-
-const DB_NAME = 'SentinelAppDB';
-const DB_VERSION = 1;
-
-let dbPromise: Promise<IDBPDatabase<SentinelSchema>> | null = null;
-
-function getDB() {
-    if (!dbPromise) {
-        dbPromise = openDB<SentinelSchema>(DB_NAME, DB_VERSION, {
-            upgrade(db: IDBPDatabase<SentinelSchema>) {
-                db.createObjectStore('companies', { keyPath: 'id' });
-                const historyStore = db.createObjectStore('history', { keyPath: 'id' });
-                historyStore.createIndex('by-company', 'companyId');
-            },
-        });
-    }
-    return dbPromise;
 }
 
 export const appDB = {
     // Companies
     async getCompanies(): Promise<Company[]> {
-        const db = await getDB();
-        return db.getAll('companies');
+        const res = await fetch('/api/companies');
+        if (!res.ok) throw new Error('Failed to fetch companies');
+        return res.json();
     },
     async addCompany(company: Company) {
-        const db = await getDB();
-        return db.put('companies', company);
+        const res = await fetch('/api/companies', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(company)
+        });
+        if (!res.ok) throw new Error('Failed to add company');
     },
     async deleteCompany(id: string) {
-        const db = await getDB();
-        return db.delete('companies', id);
+        const res = await fetch(`/api/companies/${id}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('Failed to delete company');
     },
 
     // History
     async saveHistory(entry: ValidationHistory) {
-        const db = await getDB();
-        return db.put('history', entry);
+        const res = await fetch('/api/history', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(entry)
+        });
+        if (!res.ok) throw new Error('Failed to save history');
     },
     async getHistoryByCompany(companyId: string): Promise<ValidationHistory[]> {
-        const db = await getDB();
-        return db.getAllFromIndex('history', 'by-company', companyId);
+        const res = await fetch(`/api/history/${companyId}`);
+        if (!res.ok) throw new Error('Failed to fetch history');
+        return res.json();
     },
     async deleteHistory(id: string) {
-        const db = await getDB();
-        return db.delete('history', id);
+        const res = await fetch(`/api/history/${id}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('Failed to delete history');
     },
     async clearHistory(companyId: string) {
-        const db = await getDB();
-        const tx = db.transaction('history', 'readwrite');
-        const index = tx.store.index('by-company');
-        let cursor = await index.openCursor(IDBKeyRange.only(companyId));
-        while (cursor) {
-            cursor.delete();
-            cursor = await cursor.continue();
-        }
-        await tx.done;
+        const res = await fetch(`/api/history/clear/${companyId}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('Failed to clear history');
     }
 };

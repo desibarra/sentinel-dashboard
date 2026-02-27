@@ -9,18 +9,42 @@ import Settings from "./pages/Settings";
 import PaymentAudit from "./pages/PaymentAudit";
 import HelpCenter from "./pages/HelpCenter";
 import { CompanyProvider } from "./contexts/CompanyContext";
+import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import UserManagement from "./pages/UserManagement";
+import Login from "./pages/Login";
 
 
 function Router() {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) {
+    return <div className="h-screen w-full flex items-center justify-center">Cargando...</div>;
+  }
+
   return (
     <Switch>
-      <Route path={"/"} component={Dashboard} />
-      <Route path={"/settings"} component={Settings} />
-      <Route path={"/payment-audit"} component={PaymentAudit} />
-      <Route path={"/help"} component={HelpCenter} />
-      <Route path={"/404"} component={NotFound} />
-      {/* Final fallback route */}
-      <Route component={NotFound} />
+      <Route path="/login" component={Login} />
+
+      {/* Protected Routes */
+        user ? (
+          <Switch>
+            <Route path="/" component={Dashboard} />
+            <Route path="/settings" component={Settings} />
+            <Route path="/payment-audit" component={PaymentAudit} />
+            <Route path="/help" component={HelpCenter} />
+            <Route path="/users" component={UserManagement} />
+            <Route path="/404" component={NotFound} />
+            {/* Final fallback route */}
+            <Route component={NotFound} />
+          </Switch>
+        ) : (
+          <Route>
+            {() => {
+              window.location.replace('/login');
+              return null;
+            }}
+          </Route>
+        )}
     </Switch>
   );
 }
@@ -38,10 +62,12 @@ function App() {
         switchable
       >
         <TooltipProvider>
-          <CompanyProvider>
-            <Toaster />
-            <Router />
-          </CompanyProvider>
+          <AuthProvider>
+            <CompanyProvider>
+              <Toaster />
+              <Router />
+            </CompanyProvider>
+          </AuthProvider>
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>

@@ -10,9 +10,10 @@ import { toast } from 'sonner';
 
 interface HistorySidebarProps {
     onLoadHistory: (history: ValidationHistory) => void;
+    children?: React.ReactNode;
 }
 
-export const HistorySidebar: React.FC<HistorySidebarProps> = ({ onLoadHistory }) => {
+export const HistorySidebar: React.FC<HistorySidebarProps> = ({ onLoadHistory, children }) => {
     const { currentCompany } = useCompany();
     const [historyItems, setHistoryItems] = useState<ValidationHistory[]>([]);
 
@@ -39,10 +40,12 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({ onLoadHistory })
     return (
         <Sheet>
             <SheetTrigger asChild>
-                <Button variant="outline" size="lg" className="gap-2">
-                    <History className="w-4 h-4" />
-                    <span className="hidden sm:inline">Historial Lokal</span>
-                </Button>
+                {children ? children : (
+                    <Button variant="outline" size="lg" className="gap-2">
+                        <History className="w-4 h-4" />
+                        <span className="hidden sm:inline">Historial Lokal</span>
+                    </Button>
+                )}
             </SheetTrigger>
             <SheetContent side="right" className="w-[400px] sm:w-[540px]">
                 <SheetHeader>

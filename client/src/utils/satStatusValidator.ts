@@ -32,50 +32,46 @@ export async function checkCFDIStatusSAT(
   `;
 
     try {
-        // Usamos el proxy configurado en vite.config.ts y netlify.toml
-        const response = await fetch("/api/sat/ConsultaCFDIService.svc", {
+        const response = await fetch("/api/sat/validate", {
             method: "POST",
-            headers: {
-                "Content-Type": "text/xml; charset=utf-8",
-                "SOAPAction": "http://tempuri.org/IConsultaCFDIService/Consulta"
-            },
-            body: soapRequest
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ uuid, rfcEmisor, rfcReceptor, total }),
         });
 
         if (!response.ok) {
-            throw new Error(`Error HTTP: ${response.status}`);
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.message || `Error HTTP: ${response.status}`);
         }
 
         const xmlText = await response.text();
         const parser = new DOMParser();
         const xmlDoc = parser.parseFromString(xmlText, "text/xml");
 
-        const getTagValue = (tagName: string) => {
-            const elements = xmlDoc.getElementsByTagName(tagName);
-            return elements.length > 0 ? elements[0].textContent || "" : "";
-        };
+        const estadoNode =
+            xmlDoc.getElementsByTagName("a:Estado")[0] ||
+            xmlDoc.getElementsByTagName("Estado")[0];
 
-        // Mapeo seguro de campos con namespaces (a veces vienen con 'a:', a veces sin prefijo)
-        const codigoEstatus = getTagValue("CodigoEstatus") || getTagValue("a:CodigoEstatus");
-        const estado = getTagValue("Estado") || getTagValue("a:Estado");
-        const esCancelable = getTagValue("EsCancelable") || getTagValue("a:EsCancelable");
-        const estatusCancelacion = getTagValue("EstatusCancelacion") || getTagValue("a:EstatusCancelacion");
+        const estadoRaw = estadoNode?.textContent || "No Encontrado";
+
+        const estadoNormalizado =
+            estadoRaw === "Vigente" || estadoRaw === "Cancelado"
+                ? estadoRaw
+                : "No Encontrado";
 
         return {
-            estado: (estado === "Vigente" || estado === "Cancelado") ? estado : "No Encontrado",
-            esCancelable,
-            estatusCancelacion,
-            codigoEstatus,
+            estado: estadoNormalizado,
+            esCancelable: "N/A",
+            estatusCancelacion: "N/A",
+            codigoEstatus: "N/A",
             validatedAt: new Date()
         };
-
     } catch (error) {
-        console.error("Error consultando SAT:", error);
+        console.warn("Falla en validación SAT:", error);
         return {
             estado: "Error Conexión",
-            esCancelable: "Error de red",
-            estatusCancelacion: "Tiempo de procesamiento excedido / Timeout",
-            codigoEstatus: "N/A - Error de red",
+            esCancelable: "N/A",
+            estatusCancelacion: "N/A",
+            codigoEstatus: "N/A",
             validatedAt: new Date()
         };
     }
