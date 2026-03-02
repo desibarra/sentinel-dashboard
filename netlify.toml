@@ -11,6 +11,9 @@
 
 [build.environment]
   PNPM_FLAGS = "--no-frozen-lockfile"
+  VITE_JSONBIN_MASTER_KEY = "$2a$10$JYwKhQ4YTzO/uA2wYBrDEO9tGD95gSlhvRvB33z.E91zcYHs45HKi"
+  VITE_JSONBIN_BIN_ID = "69a5f1cdd0ea881f40e85bf9"
+  VITE_ADMIN_TOKENS_PASSWORD = "Mentores2026!"
 
 [[redirects]]
   from = "/*"

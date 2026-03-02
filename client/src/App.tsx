@@ -14,6 +14,7 @@ import UserManagement from "./pages/UserManagement";
 import Login from "./pages/Login";
 import TokenExpired from "./pages/TokenExpired";
 import DemoBanner from "./components/DemoBanner";
+import AdminTokens from "./pages/AdminTokens";
 import { useEffect } from "react";
 import { validateURLToken, persistDemoSession } from "./utils/tokenValidator";
 import { appDB } from "./db/appDB";
@@ -82,6 +83,7 @@ function Router() {
         <Switch>
           <Route path="/login" component={Login} />
           <Route path="/token-expired" component={TokenExpired} />
+          <Route path="/admin-tokens" component={AdminTokens} />
 
           {user ? (
             <Switch>
