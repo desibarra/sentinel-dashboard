@@ -37,9 +37,12 @@ export default defineConfig(({ mode }) => {
       tailwindcss(),
       // 1. Inyección dinámica de Umami (solo si las env existen)
       umamiHtmlPlugin(),
-      // 2. Plugins de desarrollo: solo se cargan si mode === 'development'
-      // Esto evita que se intente abrir una conexión WebSocket a ws://localhost:8081 en producción
-      ...(isDev ? [jsxLocPlugin(), vitePluginManusRuntime()] : []),
+      // 2. Plugins de desarrollo: solo se cargan en modo desarrollo local
+      // NUNCA en producción (Netlify usa NODE_ENV=production / mode=production)
+      // Esto elimina el WebSocket ws://localhost:8081 del bundle final
+      ...(isDev && process.env.NODE_ENV !== 'production'
+        ? [jsxLocPlugin(), vitePluginManusRuntime()]
+        : []),
     ],
     resolve: {
       alias: {

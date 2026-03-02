@@ -32,6 +32,7 @@ function Router() {
             <Route path="/settings" component={Settings} />
             <Route path="/payment-audit" component={PaymentAudit} />
             <Route path="/help" component={HelpCenter} />
+            <Route path="/manual" component={HelpCenter} />
             <Route path="/users" component={UserManagement} />
             <Route path="/404" component={NotFound} />
             {/* Final fallback route */}
