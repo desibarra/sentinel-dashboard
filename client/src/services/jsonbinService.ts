@@ -84,10 +84,13 @@ export const jsonbinService = {
         await updateBin(data);
     },
 
-    /** Valida un token de URL (para login demo) y registra el acceso */
+    /** Valida un token y registra el acceso en 2 peticiones (GET + PUT) */
     async validateToken(tokenCode: string): Promise<ManagedToken | null> {
         try {
-            const tokens = await this.getTokens();
+            // 1 GET: leemos el bin completo
+            const data = await fetchBin();
+            const tokens = data.tokens || [];
+
             const found = tokens.find(
                 t => t.token.toLowerCase() === tokenCode.toLowerCase() && t.active
             );
@@ -97,16 +100,24 @@ export const jsonbinService = {
             const expiry = new Date(found.expiresAt + "T23:59:59");
             if (new Date() > expiry) return null;
 
-            // Registrar acceso en background (sin bloquear el login)
-            this.trackTokenAccess(found.id).catch(() => { });
+            // Actualizar contador en los datos ya leídos (sin otro GET)
+            const updatedToken = {
+                ...found,
+                accessCount: (found.accessCount || 0) + 1,
+                lastAccessed: new Date().toISOString(),
+            };
+            data.tokens = tokens.map(t => t.id === found.id ? updatedToken : t);
 
-            return found;
+            // 1 PUT: guardamos todo en un solo paso
+            updateBin(data).catch(() => { }); // En background, no bloquea el login
+
+            return updatedToken;
         } catch {
             return null;
         }
     },
 
-    /** Registra un acceso: incrementa contador y guarda timestamp */
+    /** Tracking manual (por si se necesita en otro contexto) */
     async trackTokenAccess(id: string): Promise<void> {
         const data = await fetchBin();
         data.tokens = data.tokens.map(t =>
@@ -121,3 +132,4 @@ export const jsonbinService = {
         await updateBin(data);
     },
 };
+
