@@ -309,7 +309,27 @@ export default function AdminTokens() {
                                             {!expired && !urgent && token.active && <span className="text-xs bg-green-900/30 text-green-400 px-2 py-0.5 rounded-full">✓ {days}d restantes</span>}
                                         </div>
                                         <p className="text-sm text-white font-medium truncate">{token.label}</p>
-                                        <p className="text-xs text-zinc-500">Expira: {formatDate(token.expiresAt)} · Creado: {new Date(token.createdAt).toLocaleDateString("es-MX")}</p>
+                                        <p className="text-xs text-zinc-500">
+                                            Expira: {formatDate(token.expiresAt)} · Creado: {new Date(token.createdAt).toLocaleDateString("es-MX")}
+                                        </p>
+                                        <div className="flex items-center gap-3 mt-1">
+                                            {token.accessCount && token.accessCount > 0 ? (
+                                                <>
+                                                    <span className="text-xs bg-blue-900/30 text-blue-300 px-2 py-0.5 rounded-full">
+                                                        👁 {token.accessCount} acceso{token.accessCount !== 1 ? "s" : ""}
+                                                    </span>
+                                                    {token.lastAccessed && (
+                                                        <span className="text-xs text-zinc-500">
+                                                            Último: {new Date(token.lastAccessed).toLocaleString("es-MX", {
+                                                                day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"
+                                                            })}
+                                                        </span>
+                                                    )}
+                                                </>
+                                            ) : (
+                                                <span className="text-xs text-zinc-600 italic">Sin accesos aún</span>
+                                            )}
+                                        </div>
                                     </div>
 
                                     {/* Acciones */}

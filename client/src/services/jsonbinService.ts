@@ -16,6 +16,9 @@ export interface ManagedToken {
     active: boolean;
     demoCompanyName: string;
     demoCompanyRFC: string;
+    // Tracking de uso
+    accessCount?: number;    // Cuántas veces abrieron el link
+    lastAccessed?: string;   // ISO - fecha del último acceso
 }
 
 interface BinData {
@@ -81,7 +84,7 @@ export const jsonbinService = {
         await updateBin(data);
     },
 
-    /** Valida un token de URL (para login demo) */
+    /** Valida un token de URL (para login demo) y registra el acceso */
     async validateToken(tokenCode: string): Promise<ManagedToken | null> {
         try {
             const tokens = await this.getTokens();
@@ -94,9 +97,27 @@ export const jsonbinService = {
             const expiry = new Date(found.expiresAt + "T23:59:59");
             if (new Date() > expiry) return null;
 
+            // Registrar acceso en background (sin bloquear el login)
+            this.trackTokenAccess(found.id).catch(() => { });
+
             return found;
         } catch {
             return null;
         }
+    },
+
+    /** Registra un acceso: incrementa contador y guarda timestamp */
+    async trackTokenAccess(id: string): Promise<void> {
+        const data = await fetchBin();
+        data.tokens = data.tokens.map(t =>
+            t.id === id
+                ? {
+                    ...t,
+                    accessCount: (t.accessCount || 0) + 1,
+                    lastAccessed: new Date().toISOString(),
+                }
+                : t
+        );
+        await updateBin(data);
     },
 };
