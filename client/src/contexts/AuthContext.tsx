@@ -27,10 +27,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const checkAuth = async () => {
         try {
-            const res = await fetch("/api/auth/me");
-            if (res.ok) {
-                const userData = await res.json();
-                setUser(userData);
+            // En modo Netlify/Local, verificamos localStorage
+            const storedUser = localStorage.getItem("sentinel_user");
+            if (storedUser) {
+                setUser(JSON.parse(storedUser));
             } else {
                 setUser(null);
             }
@@ -43,14 +43,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const login = (userData: User) => {
         setUser(userData);
+        localStorage.setItem("sentinel_user", JSON.stringify(userData));
     };
 
     const logout = async () => {
-        try {
-            await fetch("/api/auth/logout", { method: "POST" });
-        } catch (e) {
-            console.error(e);
-        }
+        localStorage.removeItem("sentinel_user");
         setUser(null);
         setLocation("/login");
     };

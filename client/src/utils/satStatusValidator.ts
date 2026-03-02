@@ -11,8 +11,8 @@ interface CFDIStatusSAT {
 /**
  * Consulta el estatus de un CFDI en el Web Service público del SAT
  * Utiliza un proxy para evitar CORS:
- * - Local: Vite proxy (/api/sat)
- * - Prod: Netlify redirect (/api/sat)
+ * - Local: Vite proxy (/api/sat) -> https://consultaqr.facturaelectronica.sat.gob.mx
+ * - Prod: Netlify redirect (/api/sat) -> https://consultaqr.facturaelectronica.sat.gob.mx
  */
 export async function checkCFDIStatusSAT(
     uuid: string,
@@ -20,53 +20,55 @@ export async function checkCFDIStatusSAT(
     rfcReceptor: string,
     total: number
 ): Promise<CFDIStatusSAT> {
+    // Formatear total a 6 decimales como requiere el SAT
+    const totalFormatted = Number(total).toFixed(6);
+
+    // Construir sobre SOAP
     const soapRequest = `
     <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:tem="http://tempuri.org/">
        <soapenv:Header/>
        <soapenv:Body>
           <tem:Consulta>
-             <tem:expresionImpresa><![CDATA[?re=${rfcEmisor}&rr=${rfcReceptor}&tt=${total.toFixed(6)}&id=${uuid}]]></tem:expresionImpresa>
+             <tem:expresionImpresa><![CDATA[?re=${rfcEmisor}&rr=${rfcReceptor}&tt=${totalFormatted}&id=${uuid}]]></tem:expresionImpresa>
           </tem:Consulta>
        </soapenv:Body>
     </soapenv:Envelope>
   `;
 
     try {
-        const response = await fetch("/api/sat/validate", {
+        // Llamada directa al WebService del SAT a través del PROXY de Netlify/Vite
+        const response = await fetch("/api/sat/ConsultaCFDIService.svc", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ uuid, rfcEmisor, rfcReceptor, total }),
+            headers: {
+                "Content-Type": "text/xml; charset=utf-8",
+                "SOAPAction": "http://tempuri.org/IConsultaCFDIService/Consulta"
+            },
+            body: soapRequest,
         });
 
         if (!response.ok) {
-            const errData = await response.json().catch(() => ({}));
-            throw new Error(errData.message || `Error HTTP: ${response.status}`);
+            throw new Error(`Servicio SAT no disponible (HTTP ${response.status})`);
         }
 
         const xmlText = await response.text();
         const parser = new DOMParser();
         const xmlDoc = parser.parseFromString(xmlText, "text/xml");
 
-        const estadoNode =
-            xmlDoc.getElementsByTagName("a:Estado")[0] ||
-            xmlDoc.getElementsByTagName("Estado")[0];
+        // El SAT devuelve un XML con namespaces embebidos. Buscamos el nodo de estado.
+        const estadoTag = xmlDoc.getElementsByTagName("Estado")[0] ||
+            xmlDoc.getElementsByTagName("a:Estado")[0];
 
-        const estadoRaw = estadoNode?.textContent || "No Encontrado";
-
-        const estadoNormalizado =
-            estadoRaw === "Vigente" || estadoRaw === "Cancelado"
-                ? estadoRaw
-                : "No Encontrado";
+        const estadoRaw = estadoTag?.textContent || "No Encontrado";
 
         return {
-            estado: estadoNormalizado,
-            esCancelable: "N/A",
-            estatusCancelacion: "N/A",
-            codigoEstatus: "N/A",
+            estado: estadoRaw === "Vigente" || estadoRaw === "Cancelado" ? estadoRaw : "No Encontrado",
+            esCancelable: xmlDoc.getElementsByTagName("EsCancelable")[0]?.textContent || "N/A",
+            estatusCancelacion: xmlDoc.getElementsByTagName("EstatusCancelacion")[0]?.textContent || "N/A",
+            codigoEstatus: xmlDoc.getElementsByTagName("CodigoEstatus")[0]?.textContent || "N/A",
             validatedAt: new Date()
         };
     } catch (error) {
-        console.warn("Falla en validación SAT:", error);
+        console.warn("[SAT_VALIDATOR] Falla en consulta directa:", error);
         return {
             estado: "Error Conexión",
             esCancelable: "N/A",

@@ -637,11 +637,11 @@ export default function Dashboard() {
               </Button>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
-                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400">
+              <div className="max-h-[600px] overflow-y-auto overflow-x-auto relative scrollbar-thin scrollbar-thumb-slate-200 dark:scrollbar-thumb-slate-700">
+                <table className="w-full text-sm border-separate border-spacing-0">
+                  <thead className="sticky top-0 z-20">
+                    <tr className="bg-slate-50/95 dark:bg-slate-900/95 backdrop-blur-sm shadow-sm transition-shadow">
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400 border-b border-slate-200 dark:border-slate-800 bg-inherit">
                         <button
                           onClick={() => handleSort('fileName')}
                           className="group flex items-center gap-2 hover:text-indigo-500 transition-colors"
@@ -650,7 +650,7 @@ export default function Dashboard() {
                           {getSortIcon('fileName')}
                         </button>
                       </th>
-                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400">
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400 border-b border-slate-200 dark:border-slate-800 bg-inherit">
                         <button
                           onClick={() => handleSort('uuid')}
                           className="group flex items-center gap-2 hover:text-indigo-500 transition-colors"
@@ -659,7 +659,7 @@ export default function Dashboard() {
                           {getSortIcon('uuid')}
                         </button>
                       </th>
-                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400">
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400 border-b border-slate-200 dark:border-slate-800 bg-inherit">
                         <button
                           onClick={() => handleSort('fechaEmision')}
                           className="group flex items-center gap-2 hover:text-indigo-500 transition-colors"
@@ -668,7 +668,7 @@ export default function Dashboard() {
                           {getSortIcon('fechaEmision')}
                         </button>
                       </th>
-                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400">
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400 border-b border-slate-200 dark:border-slate-800 bg-inherit">
                         <button
                           onClick={() => handleSort('rfcEmisor')}
                           className="group flex items-center gap-2 hover:text-indigo-500 transition-colors"
@@ -677,7 +677,7 @@ export default function Dashboard() {
                           {getSortIcon('rfcEmisor')}
                         </button>
                       </th>
-                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400">
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400 border-b border-slate-200 dark:border-slate-800 bg-inherit">
                         <button
                           onClick={() => handleSort('total')}
                           className="group flex items-center gap-2 hover:text-indigo-500 transition-colors"
@@ -686,7 +686,7 @@ export default function Dashboard() {
                           {getSortIcon('total')}
                         </button>
                       </th>
-                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400">
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400 border-b border-slate-200 dark:border-slate-800 bg-inherit">
                         <button
                           onClick={() => handleSort('estatusSAT')}
                           className="group flex items-center gap-2 hover:text-indigo-500 transition-colors"
@@ -695,7 +695,7 @@ export default function Dashboard() {
                           {getSortIcon('estatusSAT')}
                         </button>
                       </th>
-                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400">
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400 border-b border-slate-200 dark:border-slate-800 bg-inherit">
                         <button
                           onClick={() => handleSort('resultado')}
                           className="group flex items-center gap-2 hover:text-indigo-500 transition-colors"
@@ -704,10 +704,10 @@ export default function Dashboard() {
                           {getSortIcon('resultado')}
                         </button>
                       </th>
-                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400">
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400 border-b border-slate-200 dark:border-slate-800 bg-inherit">
                         Diagnóstico
                       </th>
-                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400">
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400 border-b border-slate-200 dark:border-slate-800 bg-inherit">
                         {/* Actions */}
                       </th>
                     </tr>
