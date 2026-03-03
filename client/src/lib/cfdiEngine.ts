@@ -60,6 +60,9 @@ export interface ValidationResult {
     baseIVA8: number;
     baseIVA0: number;
     baseIVAExento: number;
+    baseNoObjeto: number;          // ObjetoImp=01: No objeto de impuesto
+    baseObjetoSinDesglose: number; // ObjetoImp=03: Objeto pero sin desglose obligatorio
+    clasificacionFiscal: string;   // Clasificación explícita: GRAVADO/EXENTO/NO_OBJETO/OBJETO_SIN_DESGLOSE/MIXTO
     ivaTraslado: number;
     ivaRetenido: number;
     isrRetenido: number;
@@ -216,6 +219,9 @@ export const obtenerReglasAplicables = (version: string, añoFiscal: number, tip
 
 export const extractTaxesByConcepto = (xmlDoc: XMLDocument, version: string) => {
     let subtotalCalculado = 0, baseIVA16 = 0, baseIVA8 = 0, baseIVA0 = 0, baseIVAExento = 0;
+    // ✅ CFDI 4.0 - ObjetoImp: acumuladores por clasificación fiscal
+    let baseNoObjeto = 0;          // ObjetoImp="01": No objeto de impuesto
+    let baseObjetoSinDesglose = 0; // ObjetoImp="03": Objeto pero sin desglose obligatorio
     let trasladosTotales = 0, retencionesTotales = 0, ivaTraslado = 0, ivaRetenido = 0, isrRetenido = 0, iepsTraslado = 0, iepsRetenido = 0, impuestosLocalesTrasladados = 0, impuestosLocalesRetenidos = 0;
     const desglosePorConcepto: ConceptoDesglose[] = [];
     const comprobante = xmlDoc.documentElement;
@@ -228,12 +234,43 @@ export const extractTaxesByConcepto = (xmlDoc: XMLDocument, version: string) => 
             conceptoNumero++;
             const importe = parseFloat(nodo.getAttribute("Importe") || "0");
             const descuento = parseFloat(nodo.getAttribute("Descuento") || "0");
-            const objetoImp = nodo.getAttribute("ObjetoImp") || "01";
+            // ✅ REGLA FISCAL CORRECTA CFDI 4.0:
+            // La clasificación depende EXCLUSIVAMENTE de ObjetoImp, NO de la existencia del nodo Impuestos.
+            // Valores SAT oficiales:
+            //   "01" = No objeto de impuesto  → base va a baseNoObjeto (NO_OBJETO)
+            //   "02" = Sí objeto de impuesto   → evaluar nodo Impuestos.Traslados
+            //   "03" = Objeto sin desglose      → base va a baseObjetoSinDesglose
+            // En CFDI 3.3 el atributo no existe; default "02" para compatibilidad.
+            const objetoImp = nodo.getAttribute("ObjetoImp") || (version === "4.0" ? "01" : "02");
             const claveProdServ = nodo.getAttribute("ClaveProdServ") || "";
             const descripcion = nodo.getAttribute("Descripcion") || "";
+            const baseConcepto = importe - descuento;
 
-            subtotalCalculado += (importe - descuento);
+            subtotalCalculado += baseConcepto;
 
+            // ✅ ObjetoImp="01": NO OBJETO — clasificar SIN revisar nodo Impuestos
+            if (objetoImp === "01") {
+                baseNoObjeto += baseConcepto;
+                desglosePorConcepto.push({
+                    numero: conceptoNumero, importe, descuento, objetoImp, claveProdServ, descripcion,
+                    traslados: [], retenciones: [],
+                    subtotalAcumulado: subtotalCalculado, totalParcial: baseConcepto
+                });
+                continue; // NO evaluar impuestos; son no objeto
+            }
+
+            // ✅ ObjetoImp="03": OBJETO SIN DESGLOSE — acumular base pero sin detalle de impuestos
+            if (objetoImp === "03") {
+                baseObjetoSinDesglose += baseConcepto;
+                desglosePorConcepto.push({
+                    numero: conceptoNumero, importe, descuento, objetoImp, claveProdServ, descripcion,
+                    traslados: [], retenciones: [],
+                    subtotalAcumulado: subtotalCalculado, totalParcial: baseConcepto
+                });
+                continue; // No hay desglose de impuestos exigible
+            }
+
+            // ✅ ObjetoImp="02" (o default CFDI 3.3): evaluar nodo Impuestos
             const trasladosConcepto: any[] = [], retencionesConcepto: any[] = [];
             const impuestosConcepto = Array.from(nodo.children).find(h => (h.localName || h.nodeName) === "Impuestos");
 
@@ -249,6 +286,7 @@ export const extractTaxesByConcepto = (xmlDoc: XMLDocument, version: string) => 
                             if (tasa === "0.16" || tasa === "0.160000") baseIVA16 += base;
                             else if (tasa === "0.08" || tasa === "0.080000") baseIVA8 += base;
                             else if (tasa === "0.00" || tasa === "0.000000") baseIVA0 += base;
+                            else baseIVAExento += base; // Exento: ObjetoImp=02 sin tasa válida registrada
                             ivaTraslado += importeTraslado;
                         } else if (impuesto === "003") iepsTraslado += importeTraslado;
                     } else if (tagImpuesto === "Retencion") {
@@ -260,8 +298,13 @@ export const extractTaxesByConcepto = (xmlDoc: XMLDocument, version: string) => 
                         else if (impuesto === "003") iepsRetenido += importeRetencion;
                     }
                 });
+            } else {
+                // ObjetoImp=02 pero SIN nodo Impuestos de concepto:
+                // Según SAT puede ser exento real. Se registra en baseIVAExento.
+                baseIVAExento += baseConcepto;
             }
-            const totalParcial = importe - descuento + trasladosConcepto.reduce((sum, t) => sum + t.importe, 0) - retencionesConcepto.reduce((sum, r) => sum + r.importe, 0);
+
+            const totalParcial = baseConcepto + trasladosConcepto.reduce((sum, t) => sum + t.importe, 0) - retencionesConcepto.reduce((sum, r) => sum + r.importe, 0);
             desglosePorConcepto.push({ numero: conceptoNumero, importe, descuento, objetoImp, claveProdServ, descripcion, traslados: trasladosConcepto, retenciones: retencionesConcepto, subtotalAcumulado: subtotalCalculado, totalParcial });
         }
     }
@@ -288,10 +331,41 @@ export const extractTaxesByConcepto = (xmlDoc: XMLDocument, version: string) => 
             }
         }
     }
+
+    // ✅ Clasificación fiscal consolidada
+    const baseGravadaTotal = Math.round((baseIVA16 + baseIVA8 + baseIVA0) * 100) / 100;
+    const hayGravado = baseGravadaTotal > 0;
+    const hayExento = baseIVAExento > 0;
+    const hayNoObjeto = baseNoObjeto > 0;
+    const haySinDesglose = baseObjetoSinDesglose > 0;
+    const tiposActivos = [hayGravado, hayExento, hayNoObjeto, haySinDesglose].filter(Boolean).length;
+    let clasificacionFiscal: string;
+    if (tiposActivos > 1) clasificacionFiscal = "MIXTO";
+    else if (hayGravado) clasificacionFiscal = "GRAVADO";
+    else if (hayExento) clasificacionFiscal = "EXENTO";
+    else if (hayNoObjeto) clasificacionFiscal = "NO_OBJETO";
+    else if (haySinDesglose) clasificacionFiscal = "OBJETO_SIN_DESGLOSE";
+    else clasificacionFiscal = "SIN_IMPUESTOS";
+
     return {
-        subtotal: Math.round(subtotalCalculado * 100) / 100, baseIVA16: Math.round(baseIVA16 * 100) / 100, baseIVA8: Math.round(baseIVA8 * 100) / 100, baseIVA0: Math.round(baseIVA0 * 100) / 100, baseIVAExento: Math.round(baseIVAExento * 100) / 100,
-        ivaTraslado: Math.round(ivaTraslado * 100) / 100, ivaRetenido: Math.round(ivaRetenido * 100) / 100, isrRetenido: Math.round(isrRetenido * 100) / 100, iepsTraslado: Math.round(iepsTraslado * 100) / 100, iepsRetenido: Math.round(iepsRetenido * 100) / 100,
-        impuestosLocalesTrasladados: Math.round(impuestosLocalesTrasladados * 100) / 100, impuestosLocalesRetenidos: Math.round(impuestosLocalesRetenidos * 100) / 100, trasladosTotales: Math.round(trasladosTotales * 100) / 100, retencionesTotales: Math.round(retencionesTotales * 100) / 100, desglosePorConcepto
+        subtotal: Math.round(subtotalCalculado * 100) / 100,
+        baseIVA16: Math.round(baseIVA16 * 100) / 100,
+        baseIVA8: Math.round(baseIVA8 * 100) / 100,
+        baseIVA0: Math.round(baseIVA0 * 100) / 100,
+        baseIVAExento: Math.round(baseIVAExento * 100) / 100,
+        baseNoObjeto: Math.round(baseNoObjeto * 100) / 100,
+        baseObjetoSinDesglose: Math.round(baseObjetoSinDesglose * 100) / 100,
+        clasificacionFiscal,
+        ivaTraslado: Math.round(ivaTraslado * 100) / 100,
+        ivaRetenido: Math.round(ivaRetenido * 100) / 100,
+        isrRetenido: Math.round(isrRetenido * 100) / 100,
+        iepsTraslado: Math.round(iepsTraslado * 100) / 100,
+        iepsRetenido: Math.round(iepsRetenido * 100) / 100,
+        impuestosLocalesTrasladados: Math.round(impuestosLocalesTrasladados * 100) / 100,
+        impuestosLocalesRetenidos: Math.round(impuestosLocalesRetenidos * 100) / 100,
+        trasladosTotales: Math.round(trasladosTotales * 100) / 100,
+        retencionesTotales: Math.round(retencionesTotales * 100) / 100,
+        desglosePorConcepto
     };
 };
 
@@ -500,10 +574,25 @@ export const classifyCFDI = (
         }
     }
 
-    // D. Conceptos Bonificados (ObjetoImp=01)
-    if (tieneBonificadosTotalmente) {
-        const notaBonificado = "Incluye conceptos bonificados (ObjetoImp=01 con descuento total); revisar solo para efectos de control interno.";
-        comentarioFiscal += (comentarioFiscal ? " " : "") + notaBonificado;
+    // D. Comentario informativo sobre clasificación fiscal por ObjetoImp
+    const baseNoObjetoVal = taxes.baseNoObjeto ?? 0;
+    const baseSinDesglose = taxes.baseObjetoSinDesglose ?? 0;
+    const clasificacion = taxes.clasificacionFiscal ?? "";
+
+    if (resultado !== "🔴 NO USABLE") {
+        if (clasificacion === "NO_OBJETO" || baseNoObjetoVal > 0) {
+            // ✅ REGLA SAT: ObjetoImp=01 → NO OBJETO DE IMPUESTO. No confundir con Exento.
+            comentarioFiscal += (comentarioFiscal ? " " : "")
+                + `[CFDI NO OBJETO] Todos los conceptos tienen ObjetoImp=01 (No objeto de impuesto), Base NO_OBJETO=$${baseNoObjetoVal.toFixed(2)}. IVA=$0. No es exento; simplemente no está sujeto al impuesto.`;
+        }
+        if (baseSinDesglose > 0) {
+            comentarioFiscal += (comentarioFiscal ? " " : "")
+                + `[ObjetoImp=03] Incluye conceptos objeto de impuesto pero sin desglose obligatorio, Base=$${baseSinDesglose.toFixed(2)}.`;
+        }
+        if (tieneBonificadosTotalmente) {
+            const notaBonificado = "Incluye conceptos bonificados (ObjetoImp=01 con descuento total); revisar solo para efectos de control interno.";
+            comentarioFiscal += (comentarioFiscal ? " " : "") + notaBonificado;
+        }
     }
 
     // E. Ajustes por Carta Porte

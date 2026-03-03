@@ -39,6 +39,18 @@ export function exportToExcel(results: ValidationResult[]) {
     Total_Deducciones: r.totalDeducciones,
     Total_OtrosPagos: r.totalOtrosPagos,
     ISR_Retenido_Nomina: r.isrRetenidoNomina,
+    // ✅ Columnas fiscales explícitas CFDI 4.0 (ObjetoImp)
+    OBJETO_IMP_XML: r.desglosePorConcepto?.map(c => c.objetoImp).join(',') || 'N/A',
+    CLASIFICACION_FISCAL: r.clasificacionFiscal ?? 'SIN_IMPUESTOS',
+    BASE_NO_OBJETO: r.baseNoObjeto ?? 0,
+    BASE_SIN_DESGLOSE: r.baseObjetoSinDesglose ?? 0,
+    BASE_GRAVADA_IVA: Math.round(((r.baseIVA16 ?? 0) + (r.baseIVA8 ?? 0)) * 100) / 100,
+    BASE_TASA_0: r.baseIVA0 ?? 0,
+    BASE_EXENTA: r.baseIVAExento ?? 0,
+    BASE_TOTAL_VERIFICACION: Math.round((
+      (r.baseIVA16 ?? 0) + (r.baseIVA8 ?? 0) + (r.baseIVA0 ?? 0) +
+      (r.baseIVAExento ?? 0) + (r.baseNoObjeto ?? 0) + (r.baseObjetoSinDesglose ?? 0)
+    ) * 100) / 100,
     Base_IVA_16: r.baseIVA16,
     Base_IVA_8: r.baseIVA8,
     Base_IVA_0: r.baseIVA0,
@@ -103,31 +115,40 @@ export function exportToExcel(results: ValidationResult[]) {
     { wch: 16 }, // AD: Total_Deducciones
     { wch: 16 }, // AE: Total_OtrosPagos
     { wch: 18 }, // AF: ISR_Retenido_Nomina
-    { wch: 12 }, // AG: Base_IVA_16
-    { wch: 12 }, // AH: Base_IVA_8
-    { wch: 12 }, // AI: Base_IVA_0
-    { wch: 14 }, // AJ: Base_IVA_Exento
-    { wch: 14 }, // AK: IVA_Trasladado
-    { wch: 14 }, // AL: IVA_Retenido
-    { wch: 12 }, // AM: ISR_Retenido
-    { wch: 14 }, // AN: IEPS_Trasladado
-    { wch: 14 }, // AO: IEPS_Retenido
-    { wch: 20 }, // AP: Impuestos_Locales_Trasladados
-    { wch: 20 }, // AQ: Impuestos_Locales_Retenidos
-    { wch: 14 }, // AR: Total_Calculado
-    { wch: 14 }, // AS: Total_Declarado
-    { wch: 14 }, // AT: Diferencia_Totales
-    { wch: 10 }, // AU: Moneda
-    { wch: 12 }, // AV: Tipo_Cambio
-    { wch: 14 }, // AW: Forma_Pago
-    { wch: 14 }, // AX: Metodo_Pago
-    { wch: 22 }, // AY: Nivel_Validacion
-    { wch: 20 }, // AZ: Resultado
-    { wch: 50 }, // BA: Comentario_Fiscal
-    { wch: 50 }, // BB: Observaciones_Tecnicas
-    { wch: 40 }, // BC: Observaciones_Contador
-    { wch: 20 }, // BD: Giro_Empresa
-    { wch: 60 }, // BE: UUIDs_Relacionados
+    // ✅ Nuevas columnas fiscales CFDI 4.0
+    { wch: 24 }, // AG: OBJETO_IMP_XML
+    { wch: 22 }, // AH: CLASIFICACION_FISCAL
+    { wch: 14 }, // AI: BASE_NO_OBJETO
+    { wch: 16 }, // AJ: BASE_SIN_DESGLOSE
+    { wch: 16 }, // AK: BASE_GRAVADA_IVA
+    { wch: 14 }, // AL: BASE_TASA_0
+    { wch: 14 }, // AM: BASE_EXENTA
+    { wch: 22 }, // AN: BASE_TOTAL_VERIFICACION
+    { wch: 12 }, // AO: Base_IVA_16
+    { wch: 12 }, // AP: Base_IVA_8
+    { wch: 12 }, // AQ: Base_IVA_0
+    { wch: 14 }, // AR: Base_IVA_Exento
+    { wch: 14 }, // AS: IVA_Trasladado
+    { wch: 14 }, // AT: IVA_Retenido
+    { wch: 12 }, // AU: ISR_Retenido
+    { wch: 14 }, // AV: IEPS_Trasladado
+    { wch: 14 }, // AW: IEPS_Retenido
+    { wch: 20 }, // AX: Impuestos_Locales_Trasladados
+    { wch: 20 }, // AY: Impuestos_Locales_Retenidos
+    { wch: 14 }, // AZ: Total_Calculado
+    { wch: 14 }, // BA: Total_Declarado
+    { wch: 14 }, // BB: Diferencia_Totales
+    { wch: 10 }, // BC: Moneda
+    { wch: 12 }, // BD: Tipo_Cambio
+    { wch: 14 }, // BE: Forma_Pago
+    { wch: 14 }, // BF: Metodo_Pago
+    { wch: 22 }, // BG: Nivel_Validacion
+    { wch: 20 }, // BH: Resultado
+    { wch: 50 }, // BI: Comentario_Fiscal
+    { wch: 50 }, // BJ: Observaciones_Tecnicas
+    { wch: 40 }, // BK: Observaciones_Contador
+    { wch: 20 }, // BL: Giro_Empresa
+    { wch: 60 }, // BM: UUIDs_Relacionados
   ];
 
   (ws as any)['!cols'] = colWidths;
@@ -158,7 +179,7 @@ export function exportToExcel(results: ValidationResult[]) {
   (ws as any)['!rows'] = [{ hpx: 30 }];
 
   // Activar filtros (actualizado para incluir todas las nuevas columnas)
-  (ws as any)['!autofilter'] = { ref: `A1:BE1` };
+  (ws as any)['!autofilter'] = { ref: `A1:BM1` };
 
   // Congelar fila 1
   (ws as any)['!panes'] = { ySplit: 1, topLeftCell: 'A2', activePane: 'bottomLeft', state: 'frozen' };
