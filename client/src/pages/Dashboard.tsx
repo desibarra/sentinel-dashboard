@@ -803,7 +803,7 @@ export default function Dashboard() {
                         <tr key={idx} className="border-b border-slate-100 dark:border-slate-800/50 hover:bg-indigo-50/30 dark:hover:bg-indigo-900/10 transition-colors group">
                           <td className="py-4 px-4 text-slate-900 dark:text-slate-100 font-bold truncate max-w-[150px] group-hover:text-indigo-600 transition-colors" title={result.fileName}>{result.fileName}</td>
                           <td className="py-4 px-4">
-                            <div className="flex flex-col gap-0.5 max-w-[220px]">
+                            <div className="flex flex-col gap-1 max-w-[220px]">
                               <button
                                 type="button"
                                 title="Click para copiar UUID"
@@ -819,7 +819,22 @@ export default function Dashboard() {
                               >
                                 {result.uuid}
                               </button>
-                              <span className="text-[9px] uppercase tracking-widest text-slate-400 font-black">Click para copiar</span>
+                              {/* Acciones UUID */}
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <span className="text-[8px] uppercase tracking-widest text-slate-400 font-black">📋 copiar</span>
+                                {result.uuid && result.uuid !== "NO DISPONIBLE" && (
+                                  <a
+                                    href={`https://verificacfdi.facturaelectronica.sat.gob.mx/default.aspx?id=${result.uuid}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    title="Verificar este CFDI en el portal del SAT"
+                                    onClick={() => toast.info("Abriendo portal SAT...", { duration: 1500 })}
+                                    className="flex items-center gap-0.5 text-[8px] font-black uppercase tracking-widest text-[#c41e3a] hover:text-[#a01830] dark:text-red-400 dark:hover:text-red-300 hover:underline transition-colors duration-150"
+                                  >
+                                    🔎 Ver en SAT
+                                  </a>
+                                )}
+                              </div>
                             </div>
                           </td>
                           <td className="py-4 px-4 text-slate-600 dark:text-slate-300 whitespace-nowrap font-medium">{formatDate(result.fechaEmision)}</td>
