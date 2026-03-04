@@ -15,11 +15,13 @@ import Login from "./pages/Login";
 import TokenExpired from "./pages/TokenExpired";
 import DemoBanner from "./components/DemoBanner";
 import AdminTokens from "./pages/AdminTokens";
+import LeadCapture from "./components/LeadCapture";
 import { useState, useEffect } from "react";
 import { persistDemoSession } from "./utils/tokenValidator";
 import { appDB } from "./db/appDB";
 import { jsonbinService } from "./services/jsonbinService";
 import { loadDemoDataIfEmpty } from "./data/demoData";
+import { isLeadRegistered, markLeadRegistered } from "./services/leadService";
 
 
 function Router() {
@@ -27,6 +29,19 @@ function Router() {
   const [isCheckingToken, setIsCheckingToken] = useState(false);
   const [tokenInvalid, setTokenInvalid] = useState(false);
   const [tokenExpired, setTokenExpired] = useState(false);
+  // Lead capture: ya registrado en este navegador?
+  // Demo mode no requiere formulario (ya viene de un token controlado)
+  const [leadReady, setLeadReady] = useState(isLeadRegistered());
+
+  // Efecto: si el usuario finaliza demo o cambia modo, re-evaluar
+  useEffect(() => {
+    if (isDemoMode) setLeadReady(true);
+  }, [isDemoMode]);
+
+  const handleLeadComplete = () => {
+    markLeadRegistered();
+    setLeadReady(true);
+  };
 
   // Leer ?token= de la URL al montar el componente y validar contra JSONBin
   useEffect(() => {
@@ -83,6 +98,13 @@ function Router() {
   // Token en URL pero inválido (no existe o desactivado)
   if (tokenInvalid) {
     return <TokenExpired />;
+  }
+
+  // Lead capture: mostrar formulario si el usuario está autenticado
+  // pero aún no se ha registrado como prospecto.
+  // Las rutas públicas (/login, /admin-tokens, /token-expired) no lo requieren.
+  if (user && !leadReady) {
+    return <LeadCapture onComplete={handleLeadComplete} />;
   }
 
   return (

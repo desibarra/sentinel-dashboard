@@ -50,6 +50,12 @@ export async function checkCFDIStatusSAT(
             throw new Error(`Servicio SAT no disponible (HTTP ${response.status})`);
         }
 
+        // Guard: Si el proxy devuelve HTML en lugar de XML (error de Netlify/backend)
+        const contentType = response.headers.get("content-type") ?? "";
+        if (contentType.includes("text/html")) {
+            throw new Error("El proxy SAT devolvió HTML en lugar de XML. Verifica la configuración del redirect en netlify.toml.");
+        }
+
         const xmlText = await response.text();
         const parser = new DOMParser();
         const xmlDoc = parser.parseFromString(xmlText, "text/xml");

@@ -4,7 +4,7 @@ import { CFDISATStatus } from "@/components/CFDISATStatus";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
-import { CheckCircle2, AlertCircle, XCircle, TrendingUp, FileText, DollarSign, Download, Moon, Sun, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Settings, BookOpen, Clock } from "lucide-react";
+import { CheckCircle2, AlertCircle, XCircle, TrendingUp, FileText, DollarSign, Download, Moon, Sun, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Settings, BookOpen, Clock, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import UploadZone, { UploadedFile } from "@/components/UploadZone";
 import { useXMLValidator } from "@/hooks/useXMLValidator";
@@ -21,6 +21,8 @@ import { startMainTour } from "@/utils/tourScript";
 import { Input } from "@/components/ui/input";
 import { History, RefreshCcw, Save } from "lucide-react";
 import { checkCFDIStatusSAT } from "@/utils/satStatusValidator";
+import XMLLimitBanner from "@/components/XMLLimitBanner";
+import { incrementXMLCount, getXMLCount, isXMLLimitReached, XML_LIMIT } from "@/services/leadService";
 
 type DashboardResult = ValidationResult;
 type SortField = 'fileName' | 'uuid' | 'fechaEmision' | 'rfcEmisor' | 'total' | 'estatusSAT' | 'resultado' | 'comentarioFiscal';
@@ -37,6 +39,17 @@ export default function Dashboard() {
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [currentPage, setCurrentPage] = useState(1);
   const ITEMS_PER_PAGE = 50;
+
+  // ── Contador de XMLs procesados (límite gratuito) ──
+  const [xmlCount, setXmlCount] = useState<number>(getXMLCount());
+  const [limitReached, setLimitReached] = useState<boolean>(isXMLLimitReached());
+
+  // WhatsApp CTA constants
+  const WHATSAPP_NUMBER = "524776355734";
+  const WHATSAPP_MESSAGE = encodeURIComponent(
+    "Hola, estoy probando la herramienta Sentinel Express para revisar mis CFDI. Me gustar\u00eda conocer m\u00e1s sobre c\u00f3mo interpretar el diagn\u00f3stico que genera la plataforma."
+  );
+  const WHATSAPP_URL = `https://wa.me/${WHATSAPP_NUMBER}?text=${WHATSAPP_MESSAGE}`;
 
   // Onboarding
   useEffect(() => {
@@ -61,11 +74,25 @@ export default function Dashboard() {
       toast.error("Selecciona una empresa antes de cargar XMLs");
       return;
     }
+
+    // Verificar límite gratuito ANTES de procesar
+    if (isXMLLimitReached()) {
+      setLimitReached(true);
+      return;
+    }
+
     try {
       const validationResults = await validateXMLFiles(files, currentCompany.giro);
       const newResults = [...results, ...validationResults];
       setResults(newResults);
       setHasValidatedResults(true);
+
+      // Incrementar contador de XMLs procesados
+      const newCount = incrementXMLCount(validationResults.length);
+      setXmlCount(newCount);
+      if (newCount >= XML_LIMIT) {
+        setLimitReached(true);
+      }
 
       // Guardar en histórico automáticamente
       await saveToHistory(newResults);
@@ -327,6 +354,8 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 p-4 md:p-8 transition-colors duration-200">
+      {/* Banner de límite / CTA flotante */}
+      <XMLLimitBanner limitReached={limitReached} />
       <div className="max-w-7xl mx-auto">
         {/* Header de Autoridad - Navy Style */}
         <div className="bg-[#0B2340] dark:bg-slate-900 -mx-4 -mt-8 mb-8 px-6 py-8 rounded-b-3xl shadow-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-6 border-b border-white/10 relative overflow-hidden">
@@ -349,6 +378,25 @@ export default function Dashboard() {
 
           <div className="flex flex-wrap items-center gap-4 relative z-10">
             <CompanySelector />
+
+            <div className="h-8 w-[1px] bg-white/10 hidden md:block" />
+
+            {/* ── Contador de uso XML ── */}
+            <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-3 py-1.5">
+              <FileText className="w-3.5 h-3.5 text-[#F9C646]" />
+              <span className="text-[10px] font-black text-white/70 uppercase tracking-widest">
+                {xmlCount} / {XML_LIMIT} XML
+              </span>
+            </div>
+
+            {/* ── Botón comercial WhatsApp ── */}
+            <button
+              onClick={() => window.open(WHATSAPP_URL, "_blank", "noopener,noreferrer")}
+              className="flex items-center gap-2 bg-[#25D366] hover:bg-[#1ebe5e] text-white text-[10px] font-black uppercase tracking-tight px-3 py-2 rounded-xl shadow-lg transition-all duration-200 hover:scale-105 active:scale-95"
+            >
+              <MessageCircle className="w-3.5 h-3.5" />
+              Solicitar diagnóstico fiscal
+            </button>
 
             <div className="h-8 w-[1px] bg-white/10 hidden md:block" />
 
@@ -389,6 +437,17 @@ export default function Dashboard() {
               </Link>
             </div>
           </div>
+        </div>
+
+        {/* ── Banner de privacidad / confianza ── */}
+        <div className="flex items-center gap-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 rounded-2xl px-5 py-3 mb-6 text-emerald-800 dark:text-emerald-300">
+          <svg className="w-4 h-4 flex-shrink-0 text-emerald-600 dark:text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+          </svg>
+          <p className="text-[11px] font-semibold leading-tight">
+            <strong className="font-black uppercase tracking-tight">Tus XML se analizan localmente en tu navegador.</strong>
+            {" "}La plataforma no almacena ni transmite tus CFDI a ningún servidor.
+          </p>
         </div>
 
         {/* System Health / Main Panel Grid */}

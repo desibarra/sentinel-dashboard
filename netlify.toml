@@ -1,21 +1,49 @@
-# Proxy para API del SAT (evita CORS)
+# ==============================================================
+# netlify.toml - Sentinel Express Dashboard
+# ==============================================================
+
+# ---------------------------------------------------------------
+# 1. PROXY SAT - Valida CFDIs en el Web Service del SAT
+#    /api/sat/* → consultaqr.facturaelectronica.sat.gob.mx
+# ---------------------------------------------------------------
 [[redirects]]
   from = "/api/sat/*"
   to = "https://consultaqr.facturaelectronica.sat.gob.mx/:splat"
   status = 200
   force = true
 
+# ---------------------------------------------------------------
+# 2. PROXY BACKEND - Solo activo si VITE_API_URL está configurado
+#    Si tienes un backend en Render/VPS, descomenta y configura:
+#    from = "/api/*"
+#    to = "https://TU-BACKEND.onrender.com/api/:splat"
+# ---------------------------------------------------------------
+# [[redirects]]
+#   from = "/api/*"
+#   to = "https://TU-BACKEND.onrender.com/api/:splat"
+#   status = 200
+#   force = true
+
+# ---------------------------------------------------------------
+# 3. SPA FALLBACK - Todas las rutas sirven index.html
+#    IMPORTANTE: debe ir AL FINAL para no interferir con proxies
+# ---------------------------------------------------------------
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# ---------------------------------------------------------------
+# BUILD
+# ---------------------------------------------------------------
 [build]
   command = "npm run build"
   publish = "dist/public"
 
 [build.environment]
   PNPM_FLAGS = "--no-frozen-lockfile"
+  # URL del backend (dejar vacío si no hay backend externo)
+  VITE_API_URL = ""
   VITE_JSONBIN_MASTER_KEY = "$2a$10$JYwKhQ4YTzO/uA2wYBrDEO9tGD95gSlhvRvB33z.E91zcYHs45HKi"
   VITE_JSONBIN_BIN_ID = "69a5f1cdd0ea881f40e85bf9"
   VITE_ADMIN_TOKENS_PASSWORD = "Mentores2026!"
-
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200

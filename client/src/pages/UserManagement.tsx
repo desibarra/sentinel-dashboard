@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Trash2, Plus, UserCircle, KeyRound, ShieldAlert } from "lucide-react";
+import { ArrowLeft, Trash2, Plus, UserCircle, KeyRound, ShieldAlert, ServerOff } from "lucide-react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,6 +15,29 @@ import {
     DialogTitle,
     DialogTrigger,
 } from "@/components/ui/dialog";
+
+// Base URL del backend. Si VITE_API_URL está definido en .env / Netlify,
+// las llamadas van al backend real. Si está vacío, son rutas relativas
+// (solo funcionan cuando Express está corriendo en el mismo origen).
+const API_BASE = import.meta.env.VITE_API_URL ?? "";
+
+/**
+ * Hace fetch y lanza un error descriptivo si el servidor devuelve HTML
+ * en lugar de JSON (típico cuando no hay backend o el proxy falla).
+ */
+async function apiFetch(path: string, options?: RequestInit) {
+    const url = `${API_BASE}${path}`;
+    const res = await fetch(url, options);
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!contentType.includes("application/json")) {
+        // El servidor devolvió HTML (página de error de Netlify / Express)
+        throw new Error(
+            `El backend no está disponible (se recibió HTML en lugar de JSON). ` +
+            `Verifica que VITE_API_URL apunte al backend correcto o que el servidor esté corriendo.`
+        );
+    }
+    return res;
+}
 
 interface SystemUser {
     id: string;
@@ -48,15 +71,16 @@ export default function UserManagement() {
 
     const fetchUsers = async () => {
         try {
-            const res = await fetch("/api/users");
+            const res = await apiFetch("/api/users");
             if (res.ok) {
                 const data = await res.json();
                 setUsers(data);
             } else {
                 toast.error("Error al obtener usuarios");
             }
-        } catch (e) {
-            toast.error("Error de conexión");
+        } catch (e: any) {
+            console.error("[UserManagement] fetchUsers error:", e);
+            toast.error(e?.message ?? "Error de conexión con el backend");
         } finally {
             setLoading(false);
         }
@@ -66,7 +90,7 @@ export default function UserManagement() {
         if (!confirm("¿Estás seguro de que deseas eliminar a este usuario? Se borrarán también todas sus empresas y datos asociados.")) return;
 
         try {
-            const res = await fetch(`/api/users/${id}`, { method: "DELETE" });
+            const res = await apiFetch(`/api/users/${id}`, { method: "DELETE" });
             if (res.ok) {
                 toast.success("Usuario eliminado correctamente");
                 setUsers(users.filter(u => u.id !== id));
@@ -74,8 +98,9 @@ export default function UserManagement() {
                 const err = await res.json();
                 toast.error(err.error || "No se pudo eliminar al usuario");
             }
-        } catch (e) {
-            toast.error("Error de conexión");
+        } catch (e: any) {
+            console.error("[UserManagement] handleDeleteUser error:", e);
+            toast.error(e?.message ?? "Error de conexión con el backend");
         }
     };
 
@@ -83,7 +108,7 @@ export default function UserManagement() {
         e.preventDefault();
         setIsCreating(true);
         try {
-            const res = await fetch("/api/users", {
+            const res = await apiFetch("/api/users", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ username: newUsername, password: newPassword, role: newRole })
@@ -100,8 +125,9 @@ export default function UserManagement() {
                 const data = await res.json();
                 toast.error(data.error || "No se pudo crear el usuario");
             }
-        } catch (err) {
-            toast.error("Error al conectar con el servidor");
+        } catch (err: any) {
+            console.error("[UserManagement] handleCreateUser error:", err);
+            toast.error(err?.message ?? "Error al conectar con el servidor");
         } finally {
             setIsCreating(false);
         }
