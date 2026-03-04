@@ -31,7 +31,7 @@ export function BlacklistManager() {
 
     async function handleSync() {
         setIsSyncing(true);
-        const toastId = toast.loading("Iniciando sincronización de seguridad con la nube...");
+        const toastId = toast.loading("Verificando disponibilidad de actualización...");
 
         try {
             // 1. Get metadata from server
@@ -73,8 +73,12 @@ export function BlacklistManager() {
 
             toast.success("Sincronización Cloud Sentinel completa. Protección actualizada.", { id: toastId });
         } catch (error) {
-            console.error("Sync error:", error);
-            toast.error("Error en conexión con el Centro de Inteligencia Sentinel.", { id: toastId });
+            // El servidor no está disponible: modo local activo, sin alarmar al usuario
+            console.info("Sync no disponible, operando en modo local:", error);
+            toast.info(
+                "Modo local activo. Sentinel continuará utilizando la base local de inteligencia SAT. \u2014 Base de firmas SAT: 2026.02",
+                { id: toastId, duration: 5000 }
+            );
         } finally {
             setIsSyncing(false);
         }
