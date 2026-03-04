@@ -1,4 +1,4 @@
-
+﻿
 import { useEffect, useRef, useState } from "react";
 import { CFDISATStatus } from "@/components/CFDISATStatus";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -40,10 +40,10 @@ export default function Dashboard() {
   const [currentPage, setCurrentPage] = useState(1);
   const ITEMS_PER_PAGE = 50;
 
-  // ── Contador de XMLs procesados (informativo, sin límite visible) ──
+  // â”€â”€ Contador de XMLs procesados (informativo, sin lÃ­mite visible) â”€â”€
   const [xmlCount, setXmlCount] = useState<number>(getXMLCount());
 
-  // ── UUIDs que están siendo revalidados en este momento (para deshabilitar su botón) ──
+  // â”€â”€ UUIDs que estÃ¡n siendo revalidados en este momento (para deshabilitar su botÃ³n) â”€â”€
   const [revalidatingUUIDs, setRevalidatingUUIDs] = useState<Set<string>>(new Set());
 
   // WhatsApp CTA constants
@@ -53,10 +53,10 @@ export default function Dashboard() {
   );
   const WHATSAPP_URL = `https://wa.me/${WHATSAPP_NUMBER}?text=${WHATSAPP_MESSAGE}`;
 
-  // ── Progreso de procesamiento masivo ──
+  // â”€â”€ Progreso de procesamiento masivo â”€â”€
   const [processingPhase, setProcessingPhase] = useState<string | null>(null);
 
-  // FIX 2: ref para detectar primer mount y no borrar caché en la carga inicial
+  // FIX 2: ref para detectar primer mount y no borrar cachÃ© en la carga inicial
   const isFirstMount = useRef(true);
 
   // Onboarding
@@ -71,7 +71,7 @@ export default function Dashboard() {
     }
   }, []);
 
-  // FIX 2: Restaurar análisis previo de la sesión (TTL 30 min, por empresa)
+  // FIX 2: Restaurar anÃ¡lisis previo de la sesiÃ³n (TTL 30 min, por empresa)
   // Se ejecuta ANTES del cleanup para que los datos restaurados no sean borrados
   useEffect(() => {
     if (!currentCompany) return;
@@ -82,14 +82,14 @@ export default function Dashboard() {
       setXmlCount(cached.results.length);
       const age = getCacheAge();
       toast.info(
-        `Se restauró el análisis previo de esta sesión (${cached.results.length.toLocaleString()} CFDI, hace ${age} min).`,
+        `Se restaurÃ³ el anÃ¡lisis previo de esta sesiÃ³n (${cached.results.length.toLocaleString()} CFDI, hace ${age} min).`,
         { duration: 6000 }
       );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentCompany?.id]);
 
-  // FIX 2: Limpiar dashboard y caché SOLO cuando la empresa cambia (no en el primer mount)
+  // FIX 2: Limpiar dashboard y cachÃ© SOLO cuando la empresa cambia (no en el primer mount)
   // isFirstMount evita que este efecto borre lo que el efecto anterior acaba de restaurar
   useEffect(() => {
     if (isFirstMount.current) {
@@ -110,7 +110,7 @@ export default function Dashboard() {
     // Aviso informativo para volumen alto (> 3000), sin bloquear
     if (files.length > 3000) {
       toast.info(
-        `Sentinel está procesando un volumen alto de CFDI (${files.length.toLocaleString()}). El análisis se realizará en varias fases. Puedes continuar trabajando mientras el sistema procesa la información.`,
+        `Sentinel estÃ¡ procesando un volumen alto de CFDI (${files.length.toLocaleString()}). El anÃ¡lisis se realizarÃ¡ en varias fases. Puedes continuar trabajando mientras el sistema procesa la informaciÃ³n.`,
         { duration: 8000 }
       );
     }
@@ -123,7 +123,7 @@ export default function Dashboard() {
       const onBatchProgress = (current: number, total: number) => {
         if (total > 200) {
           const from = Math.max(1, current - 199);
-          setProcessingPhase(`Analizando CFDI ${from.toLocaleString()}–${current.toLocaleString()} de ${total.toLocaleString()}`);
+          setProcessingPhase(`Analizando CFDI ${from.toLocaleString()}â€“${current.toLocaleString()} de ${total.toLocaleString()}`);
         }
       };
 
@@ -137,18 +137,18 @@ export default function Dashboard() {
       const newCount = incrementXMLCount(validationResults.length);
       setXmlCount(newCount);
 
-      // Persistir en sesión (sin XML crudos)
+      // Persistir en sesiÃ³n (sin XML crudos)
       saveSessionCache(currentCompany.id, newResults);
 
-      // Guardar en histórico automáticamente
+      // Guardar en histÃ³rico automÃ¡ticamente
       await saveToHistory(newResults);
 
-      const usable = validationResults.filter((r) => r.resultado.includes("🟢")).length;
-      const alertas = validationResults.filter((r) => r.resultado.includes("🟡")).length;
-      const noUsable = validationResults.filter((r) => r.resultado.includes("🔴")).length;
+      const usable = validationResults.filter((r) => r.resultado.includes("ðŸŸ¢")).length;
+      const alertas = validationResults.filter((r) => r.resultado.includes("ðŸŸ¡")).length;
+      const noUsable = validationResults.filter((r) => r.resultado.includes("ðŸ”´")).length;
 
       toast.success(
-        `Validación completada: ${usable} usables, ${alertas} con alertas, ${noUsable} no usables`,
+        `ValidaciÃ³n completada: ${usable} usables, ${alertas} con alertas, ${noUsable} no usables`,
         { duration: 5000 }
       );
     } catch (error) {
@@ -166,9 +166,9 @@ export default function Dashboard() {
       timestamp: Date.now(),
       fileName: `Proceso ${new Date().toLocaleDateString()}`,
       xmlCount: validationResults.length,
-      usableCount: validationResults.filter((r) => r.resultado.includes("🟢")).length,
-      alertCount: validationResults.filter((r) => r.resultado.includes("🟡")).length,
-      errorCount: validationResults.filter((r) => r.resultado.includes("🔴")).length,
+      usableCount: validationResults.filter((r) => r.resultado.includes("ðŸŸ¢")).length,
+      alertCount: validationResults.filter((r) => r.resultado.includes("ðŸŸ¡")).length,
+      errorCount: validationResults.filter((r) => r.resultado.includes("ðŸ”´")).length,
       totalAmount: validationResults.reduce((sum, r) => sum + r.total, 0),
       results: validationResults
     };
@@ -176,14 +176,14 @@ export default function Dashboard() {
     await appDB.saveHistory(historyEntry);
   };
 
-  // FIX 1 + FIX 3: Restaura resultados, activa sección de resultados,
-  // sincroniza el contador de XML y muestra confirmación al usuario
+  // FIX 1 + FIX 3: Restaura resultados, activa secciÃ³n de resultados,
+  // sincroniza el contador de XML y muestra confirmaciÃ³n al usuario
   const handleLoadHistory = (history: ValidationHistory) => {
     setResults(history.results || []);
     setHasValidatedResults(true);
     setXmlCount(history.xmlCount);   // FIX 3: sincroniza contador del header
-    setCurrentPage(1);               // regresa a la primera página de la tabla
-    toast.success(`Proceso restaurado: ${(history.xmlCount || 0).toLocaleString()} CFDI · ${history.fileName}`, { duration: 4000 });
+    setCurrentPage(1);               // regresa a la primera pÃ¡gina de la tabla
+    toast.success(`Proceso restaurado: ${(history.xmlCount || 0).toLocaleString()} CFDI Â· ${history.fileName}`, { duration: 4000 });
   };
 
   const handleNoteUpdate = (index: number, note: string) => {
@@ -195,15 +195,15 @@ export default function Dashboard() {
   const handleExportToExcel = () => {
     try {
       exportToExcel(results);
-      toast.success("Diagnóstico exportado exitosamente");
+      toast.success("DiagnÃ³stico exportado exitosamente");
     } catch (error) {
-      toast.error("Error al exportar el diagnóstico");
+      toast.error("Error al exportar el diagnÃ³stico");
       console.error("Export error:", error);
     }
   };
 
   const handleClearData = () => {
-    if (window.confirm("¿Estás seguro de eliminar todos los resultados actuales?")) {
+    if (window.confirm("Â¿EstÃ¡s seguro de eliminar todos los resultados actuales?")) {
       setResults([]);
       setHasValidatedResults(false);
       setSortField(null);
@@ -214,17 +214,17 @@ export default function Dashboard() {
     }
   };
 
-  // Calcular estadísticas
+  // Calcular estadÃ­sticas
   const stats = {
     total: results.length,
-    usable: results.filter((r) => r.resultado.includes("🟢")).length,
-    alertas: results.filter((r) => r.resultado.includes("🟡")).length,
-    noUsable: results.filter((r) => r.resultado.includes("🔴")).length,
+    usable: results.filter((r) => r.resultado.includes("ðŸŸ¢")).length,
+    alertas: results.filter((r) => r.resultado.includes("ðŸŸ¡")).length,
+    noUsable: results.filter((r) => r.resultado.includes("ðŸ”´")).length,
     totalMonto: results.reduce((sum, r) => sum + r.total, 0),
     totalIVA: results.reduce((sum, r) => sum + r.ivaTraslado, 0),
   };
 
-  // Datos para gráficos
+  // Datos para grÃ¡ficos
   const statusData = [
     { name: "Usable", value: stats.usable, color: "#166534" },
     { name: "Alertas", value: stats.alertas, color: "#B45309" },
@@ -239,14 +239,14 @@ export default function Dashboard() {
   }));
 
   const getStatusIcon = (resultado: string) => {
-    if (resultado.includes("🟢")) return <CheckCircle2 className="w-5 h-5 text-emerald-800" />;
-    if (resultado.includes("🟡")) return <AlertCircle className="w-5 h-5 text-amber-700" />;
+    if (resultado.includes("ðŸŸ¢")) return <CheckCircle2 className="w-5 h-5 text-emerald-800" />;
+    if (resultado.includes("ðŸŸ¡")) return <AlertCircle className="w-5 h-5 text-amber-700" />;
     return <XCircle className="w-5 h-5 text-red-800" />;
   };
 
   const getStatusBadge = (resultado: string) => {
-    if (resultado.includes("🟢")) return <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 hover:bg-emerald-500/20 px-3 py-1 font-black uppercase tracking-tighter animate-in fade-in zoom-in duration-500">Usable</Badge>;
-    if (resultado.includes("🟡")) return <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/20 hover:bg-amber-500/20 px-3 py-1 font-black uppercase tracking-tighter">Alertas</Badge>;
+    if (resultado.includes("ðŸŸ¢")) return <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 hover:bg-emerald-500/20 px-3 py-1 font-black uppercase tracking-tighter animate-in fade-in zoom-in duration-500">Usable</Badge>;
+    if (resultado.includes("ðŸŸ¡")) return <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/20 hover:bg-amber-500/20 px-3 py-1 font-black uppercase tracking-tighter">Alertas</Badge>;
     return <Badge className="bg-rose-500/10 text-rose-600 border-rose-500/20 hover:bg-rose-500/20 px-3 py-1 font-black uppercase tracking-tighter animate-pulse">No Usable</Badge>;
   };
 
@@ -257,7 +257,7 @@ export default function Dashboard() {
     return date.toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" });
   };
 
-  // Función de ordenamiento
+  // FunciÃ³n de ordenamiento
   const handleSort = (field: SortField) => {
     let newDirection: SortDirection = 'asc';
 
@@ -322,13 +322,13 @@ export default function Dashboard() {
 
   /**
    * handleRevalidateSAT
-   * Recibe el UUID de la fila — NUNCA índices.
+   * Recibe el UUID de la fila â€” NUNCA Ã­ndices.
    * Usa setResults con .map por UUID para garantizar que solo esa fila se modifique,
-   * sin importar el orden actual del sort ni la página visible.
+   * sin importar el orden actual del sort ni la pÃ¡gina visible.
    */
   const handleRevalidateSAT = async (uuid: string) => {
     if (!uuid || uuid === "NO DISPONIBLE") return;
-    if (revalidatingUUIDs.has(uuid)) return; // evita múltiples solicitudes simultáneas
+    if (revalidatingUUIDs.has(uuid)) return; // evita mÃºltiples solicitudes simultÃ¡neas
 
     // Obtener datos de la fila desde el estado, buscando por UUID
     const result = results.find(r => r.uuid === uuid);
@@ -341,9 +341,9 @@ export default function Dashboard() {
     try {
       const status = await checkCFDIStatusSAT(result.uuid, result.rfcEmisor, result.rfcReceptor, result.total);
 
-      // Actualizar SOLO la fila cuyo UUID coincide — inmune al sort y la páginación
+      // Actualizar SOLO la fila cuyo UUID coincide â€” inmune al sort y la pÃ¡ginaciÃ³n
       setResults(prev => prev.map(row => {
-        if (row.uuid !== uuid) return row; // todas las demás filas: sin tocar
+        if (row.uuid !== uuid) return row; // todas las demÃ¡s filas: sin tocar
 
         const resBase = row.resultadoMotor || row.resultado;
         const comBase = row.comentarioMotor || row.comentarioFiscal;
@@ -352,11 +352,11 @@ export default function Dashboard() {
         let nuevoComentario = comBase;
 
         if (status.estado === "Cancelado") {
-          nuevoResultado = "🔴 NO DISPONIBLE (CANCELADO)";
-          nuevoComentario = `[CRÍTICO] CFDI CANCELADO en SAT. ${status.estatusCancelacion || ""}. No tiene efectos fiscales. ` + comBase;
+          nuevoResultado = "ðŸ”´ NO DISPONIBLE (CANCELADO)";
+          nuevoComentario = `[CRÃTICO] CFDI CANCELADO en SAT. ${status.estatusCancelacion || ""}. No tiene efectos fiscales. ` + comBase;
         } else if (status.estado === "No Encontrado") {
-          nuevoComentario = `[ALERTA] UUID no encontrado en SAT (puede ser muy reciente o apócrifo). ` + comBase;
-        } else if (status.estado === "Error Conexión") {
+          nuevoComentario = `[ALERTA] UUID no encontrado en SAT (puede ser muy reciente o apÃ³crifo). ` + comBase;
+        } else if (status.estado === "Error ConexiÃ³n") {
           nuevoComentario = `[AVISO] No se pudo actualizar el estatus en SAT (Timeout). ` + comBase;
         }
         // Vigente: resultado y comentario del motor se mantienen
@@ -372,7 +372,7 @@ export default function Dashboard() {
         };
       }));
 
-      if (status.estado === "Error Conexión") {
+      if (status.estado === "Error ConexiÃ³n") {
         toast.error("No se pudo conectar con el SAT (Timeout)", { id: `rev-${uuid}` });
       } else {
         toast.success(`Estatus SAT actualizado: ${status.estado}`, { id: `rev-${uuid}` });
@@ -390,14 +390,14 @@ export default function Dashboard() {
     }
   };
 
-  // ✅ PRODUCCIÓN: Paginación para evitar render masivo
+  // âœ… PRODUCCIÃ“N: PaginaciÃ³n para evitar render masivo
   const totalPages = Math.ceil(sortedResults.length / ITEMS_PER_PAGE);
   const paginatedResults = sortedResults.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
     currentPage * ITEMS_PER_PAGE
   );
 
-  // Resetear a página 1 cuando cambia el ordenamiento
+  // Resetear a pÃ¡gina 1 cuando cambia el ordenamiento
   useEffect(() => {
     setCurrentPage(1);
   }, [sortField, sortDirection]);
@@ -415,11 +415,11 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 p-4 md:p-8 transition-colors duration-200">
-      {/* ── Botón flotante WhatsApp (solo cuando hay resultados) ── */}
+      {/* â”€â”€ BotÃ³n flotante WhatsApp (solo cuando hay resultados) â”€â”€ */}
       {(results.length > 0 || isValidating) && (
         <button
           onClick={() => window.open(WHATSAPP_URL, "_blank", "noopener,noreferrer")}
-          title="Solicitar diagnóstico fiscal"
+          title="Solicitar diagnÃ³stico fiscal"
           className="fixed bottom-6 right-6 z-50 w-14 h-14 bg-[#25D366] hover:bg-[#1ebe5e] text-white rounded-full shadow-2xl shadow-[#25D366]/40 flex items-center justify-center transition-all duration-200 hover:scale-110 active:scale-95"
           aria-label="Contactar por WhatsApp"
         >
@@ -453,7 +453,7 @@ export default function Dashboard() {
 
             <div className="h-8 w-[1px] bg-white/10 hidden md:block" />
 
-            {/* ── Contador informativo XML (sin límite visible) ── */}
+            {/* â”€â”€ Contador informativo XML (sin lÃ­mite visible) â”€â”€ */}
             {xmlCount > 0 && (
               <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-3 py-1.5">
                 <FileText className="w-3.5 h-3.5 text-[#F9C646]" />
@@ -463,13 +463,13 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* ── Botón comercial WhatsApp (header) ── */}
+            {/* â”€â”€ BotÃ³n comercial WhatsApp (header) â”€â”€ */}
             <button
               onClick={() => window.open(WHATSAPP_URL, "_blank", "noopener,noreferrer")}
               className="flex items-center gap-2 bg-[#25D366] hover:bg-[#1ebe5e] text-white text-[10px] font-black uppercase tracking-tight px-3 py-2 rounded-xl shadow-lg transition-all duration-200 hover:scale-105 active:scale-95"
             >
               <MessageCircle className="w-3.5 h-3.5" />
-              Solicitar diagnóstico fiscal
+              Solicitar diagnÃ³stico fiscal
             </button>
 
             <div className="h-8 w-[1px] bg-white/10 hidden md:block" />
@@ -513,14 +513,14 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* ── Banner de privacidad / confianza ── */}
+        {/* â”€â”€ Banner de privacidad / confianza â”€â”€ */}
         <div className="flex items-center gap-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 rounded-2xl px-5 py-3 mb-6 text-emerald-800 dark:text-emerald-300">
           <svg className="w-4 h-4 flex-shrink-0 text-emerald-600 dark:text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
           </svg>
           <p className="text-[11px] font-semibold leading-tight">
             <strong className="font-black uppercase tracking-tight">Tus XML se analizan localmente en tu navegador.</strong>
-            {" "}La plataforma no almacena ni transmite tus CFDI a ningún servidor.
+            {" "}La plataforma no almacena ni transmite tus CFDI a ningÃºn servidor.
           </p>
         </div>
 
@@ -533,7 +533,7 @@ export default function Dashboard() {
             </div>
             <CardHeader className="pb-2">
               <CardTitle className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 dark:text-slate-500">
-                Estatus de Protección
+                Estatus de ProtecciÃ³n
               </CardTitle>
             </CardHeader>
             <CardContent className="flex flex-col items-center justify-center pt-2 pb-8">
@@ -586,7 +586,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* ── Indicador de progreso masivo ── */}
+        {/* â”€â”€ Indicador de progreso masivo â”€â”€ */}
         {isValidating && progress.total > 0 && (
           <Card className="border-0 shadow-2xl mb-8 border-l-8 border-accent animate-in fade-in slide-in-from-top-6 duration-700 rounded-3xl bg-white dark:bg-slate-800">
             <CardContent className="pt-8 pb-8">
@@ -600,7 +600,7 @@ export default function Dashboard() {
                       <p className="text-xl font-black text-[#0B2340] dark:text-white tracking-tight">
                         {processingPhase ?? `Procesando ${progress.total.toLocaleString()} CFDI...`}
                       </p>
-                      <p className="text-xs text-slate-500 font-medium">Analizando estructura fiscal en tu navegador · sin enviar datos al servidor.</p>
+                      <p className="text-xs text-slate-500 font-medium">Analizando estructura fiscal en tu navegador Â· sin enviar datos al servidor.</p>
                     </div>
                   </div>
                   <Badge className="bg-[#0B2340] text-white text-xl px-6 py-2 rounded-2xl shadow-lg shadow-black/10">
@@ -643,7 +643,7 @@ export default function Dashboard() {
                 <div className="p-4 bg-emerald-50 dark:bg-emerald-900/10 rounded-2xl mb-4 shadow-inner">
                   <CheckCircle2 className="w-7 h-7 text-emerald-600 dark:text-emerald-400" />
                 </div>
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600 mb-2">🟢 Usables</p>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600 mb-2">ðŸŸ¢ Usables</p>
                 <p className="text-4xl font-black text-emerald-800 dark:text-emerald-300 tracking-tighter">{stats.usable}</p>
               </div>
             </CardContent>
@@ -655,7 +655,7 @@ export default function Dashboard() {
                 <div className="p-4 bg-amber-50 dark:bg-amber-900/10 rounded-2xl mb-4 shadow-inner">
                   <AlertCircle className="w-7 h-7 text-amber-600 dark:text-amber-400" />
                 </div>
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-600 mb-2">🟡 Alertas</p>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-600 mb-2">ðŸŸ¡ Alertas</p>
                 <p className="text-4xl font-black text-amber-800 dark:text-amber-300 tracking-tighter">{stats.alertas}</p>
               </div>
             </CardContent>
@@ -667,7 +667,7 @@ export default function Dashboard() {
                 <div className="p-4 bg-red-50 dark:bg-red-900/10 rounded-2xl mb-4 shadow-inner">
                   <XCircle className="w-7 h-7 text-red-600 dark:text-red-400" />
                 </div>
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-red-600 mb-2">🔴 No Usables</p>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-red-600 mb-2">ðŸ”´ No Usables</p>
                 <p className="text-4xl font-black text-red-800 dark:text-red-300 tracking-tighter">{stats.noUsable}</p>
               </div>
             </CardContent>
@@ -700,7 +700,7 @@ export default function Dashboard() {
             {/* Status Distribution */}
             <Card className="border-0 shadow-sm dark:bg-slate-800 dark:border-slate-700">
               <CardHeader>
-                <CardTitle className="text-lg dark:text-slate-100">Distribución de Estados</CardTitle>
+                <CardTitle className="text-lg dark:text-slate-100">DistribuciÃ³n de Estados</CardTitle>
                 <CardDescription className="dark:text-slate-400">Porcentaje de CFDI por estado fiscal</CardDescription>
               </CardHeader>
               <CardContent>
@@ -730,9 +730,9 @@ export default function Dashboard() {
             <Card className="border-0 shadow-sm dark:bg-slate-800 dark:border-slate-700">
               <CardHeader>
                 <CardTitle className="text-lg dark:text-slate-100 flex items-center gap-2">
-                  <TrendingUp className="w-5 h-5" /> Análisis de Montos
+                  <TrendingUp className="w-5 h-5" /> AnÃ¡lisis de Montos
                 </CardTitle>
-                <CardDescription className="dark:text-slate-400">Evolución de subtotal, IVA y total</CardDescription>
+                <CardDescription className="dark:text-slate-400">EvoluciÃ³n de subtotal, IVA y total</CardDescription>
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={300}>
@@ -758,7 +758,7 @@ export default function Dashboard() {
             <CardHeader className="flex flex-row items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-6">
               <div>
                 <CardTitle className="text-xl font-black text-slate-800 dark:text-slate-100 uppercase tracking-tight">Detalle de Validaciones</CardTitle>
-                <CardDescription className="dark:text-slate-400 font-medium">Análisis exhaustivo de cumplimiento y riesgo fiscal</CardDescription>
+                <CardDescription className="dark:text-slate-400 font-medium">AnÃ¡lisis exhaustivo de cumplimiento y riesgo fiscal</CardDescription>
               </div>
               <Button
                 onClick={handleExportToExcel}
@@ -791,6 +791,9 @@ export default function Dashboard() {
                           UUID
                           {getSortIcon('uuid')}
                         </button>
+                      </th>
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400 border-b border-slate-200 dark:border-slate-800 bg-inherit">
+                        Tipo CFDI
                       </th>
                       <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400 border-b border-slate-200 dark:border-slate-800 bg-inherit">
                         <button
@@ -838,7 +841,7 @@ export default function Dashboard() {
                         </button>
                       </th>
                       <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400 border-b border-slate-200 dark:border-slate-800 bg-inherit">
-                        Diagnóstico
+                        DiagnÃ³stico
                       </th>
                       <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400 border-b border-slate-200 dark:border-slate-800 bg-inherit">
                         {/* Actions */}
@@ -872,7 +875,7 @@ export default function Dashboard() {
                               </button>
                               {/* Acciones UUID */}
                               <div className="flex items-center gap-2 mt-0.5">
-                                <span className="text-[8px] uppercase tracking-widest text-slate-400 font-black">📋 copiar</span>
+                                <span className="text-[8px] uppercase tracking-widest text-slate-400 font-black">ðŸ“‹ copiar</span>
                                 {result.uuid && result.uuid !== "NO DISPONIBLE" && (
                                   <a
                                     href={`https://verificacfdi.facturaelectronica.sat.gob.mx/default.aspx?id=${result.uuid}`}
@@ -882,11 +885,30 @@ export default function Dashboard() {
                                     onClick={() => toast.info("Abriendo portal SAT...", { duration: 1500 })}
                                     className="flex items-center gap-0.5 text-[8px] font-black uppercase tracking-widest text-[#c41e3a] hover:text-[#a01830] dark:text-red-400 dark:hover:text-red-300 hover:underline transition-colors duration-150"
                                   >
-                                    🔎 Ver en SAT
+                                    ðŸ”Ž Ver en SAT
                                   </a>
                                 )}
                               </div>
                             </div>
+                          </td>
+                          {/* â”€â”€ Tipo CFDI badge â”€â”€ */}
+                          <td className="py-4 px-4 whitespace-nowrap">
+                            {(() => {
+                              const tipo = result.tipoCFDI || "";
+                              const map: Record<string, { label: string; cls: string }> = {
+                                I: { label: "Ingreso", cls: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 border-emerald-200 dark:border-emerald-700" },
+                                E: { label: "Egreso", cls: "bg-red-100    text-red-800    dark:bg-red-900/40    dark:text-red-300    border-red-200    dark:border-red-700" },
+                                P: { label: "Pago", cls: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300 border-purple-200 dark:border-purple-700" },
+                                T: { label: "Traslado", cls: "bg-amber-100  text-amber-800  dark:bg-amber-900/40  dark:text-amber-300  border-amber-200  dark:border-amber-700" },
+                                N: { label: "NÃ³mina", cls: "bg-blue-100   text-blue-800   dark:bg-blue-900/40   dark:text-blue-300   border-blue-200   dark:border-blue-700" },
+                              };
+                              const info = map[tipo] ?? { label: tipo || "â€”", cls: "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400 border-slate-200 dark:border-slate-700" };
+                              return (
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border ${info.cls}`}>
+                                  {info.label}
+                                </span>
+                              );
+                            })()}
                           </td>
                           <td className="py-4 px-4 text-slate-600 dark:text-slate-300 whitespace-nowrap font-medium">{formatDate(result.fechaEmision)}</td>
                           <td className="py-4 px-4 text-slate-600 dark:text-slate-400 font-mono text-xs font-bold bg-slate-50/50 dark:bg-slate-900/50 rounded-lg">{result.rfcEmisor}</td>
@@ -900,7 +922,7 @@ export default function Dashboard() {
                               compact={true}
                             />
                             {result.ultimoRefrescoSAT && (
-                              <div className="mt-1.5 text-[8px] text-slate-400 dark:text-slate-500 flex items-center gap-1 font-black uppercase tracking-widest" title={`Última validación: ${new Date(result.ultimoRefrescoSAT).toLocaleString()}`}>
+                              <div className="mt-1.5 text-[8px] text-slate-400 dark:text-slate-500 flex items-center gap-1 font-black uppercase tracking-widest" title={`Ãšltima validaciÃ³n: ${new Date(result.ultimoRefrescoSAT).toLocaleString()}`}>
                                 <Clock className="w-2.5 h-2.5" />
                                 SCAN: {new Date(result.ultimoRefrescoSAT).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                               </div>
@@ -944,7 +966,7 @@ export default function Dashboard() {
                 </table>
               </div>
 
-              {/* ✅ PRODUCCIÓN: Controles de paginación */}
+              {/* âœ… PRODUCCIÃ“N: Controles de paginaciÃ³n */}
               {totalPages > 1 && (
                 <div className="mt-6 flex items-center justify-between border-t border-slate-200 dark:border-slate-700 pt-4">
                   <div className="text-sm text-slate-600 dark:text-slate-400">
@@ -968,7 +990,7 @@ export default function Dashboard() {
                       Anterior
                     </Button>
                     <div className="flex items-center px-3 text-sm font-medium text-slate-700 dark:text-slate-300">
-                      Página {currentPage} de {totalPages}
+                      PÃ¡gina {currentPage} de {totalPages}
                     </div>
                     <Button
                       variant="outline"
@@ -984,7 +1006,7 @@ export default function Dashboard() {
                       onClick={() => setCurrentPage(totalPages)}
                       disabled={currentPage === totalPages}
                     >
-                      Última
+                      Ãšltima
                     </Button>
                   </div>
                 </div>
@@ -998,23 +1020,23 @@ export default function Dashboard() {
           <Card className="border-0 shadow-sm text-center py-12">
             <CardContent>
               <FileText className="w-16 h-16 mx-auto text-slate-300 mb-4" />
-              <p className="text-slate-600 mb-2">No hay CFDI procesados aún</p>
-              <p className="text-slate-500 text-sm">Carga archivos XML en la sección superior para comenzar</p>
+              <p className="text-slate-600 mb-2">No hay CFDI procesados aÃºn</p>
+              <p className="text-slate-500 text-sm">Carga archivos XML en la secciÃ³n superior para comenzar</p>
             </CardContent>
           </Card>
         )}
 
 
-        {/* ── Footer de Autoridad + Redes Sociales ── */}
+        {/* â”€â”€ Footer de Autoridad + Redes Sociales â”€â”€ */}
         <div className="mt-12 border-t border-slate-200 dark:border-slate-700 pt-8 pb-4">
 
-          {/* CTA post-análisis (solo si hay resultados) */}
+          {/* CTA post-anÃ¡lisis (solo si hay resultados) */}
           {stats.total > 0 && (
             <div className="mb-8 bg-gradient-to-r from-[#0B2340] to-[#1E3A8A] rounded-3xl px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-2xl">
               <div>
-                <p className="text-white font-black text-base tracking-tight">Análisis básico completado.</p>
+                <p className="text-white font-black text-base tracking-tight">AnÃ¡lisis bÃ¡sico completado.</p>
                 <p className="text-slate-300 text-xs mt-1 max-w-md leading-relaxed">
-                  Sentinel ha detectado posibles áreas de revisión fiscal. Si deseas un diagnóstico profesional más profundo, puedes solicitar una revisión especializada.
+                  Sentinel ha detectado posibles Ã¡reas de revisiÃ³n fiscal. Si deseas un diagnÃ³stico profesional mÃ¡s profundo, puedes solicitar una revisiÃ³n especializada.
                 </p>
               </div>
               <button
@@ -1024,7 +1046,7 @@ export default function Dashboard() {
                 <svg viewBox="0 0 24 24" className="w-4 h-4 fill-white">
                   <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z" />
                 </svg>
-                Solicitar diagnóstico fiscal
+                Solicitar diagnÃ³stico fiscal
               </button>
             </div>
           )}
@@ -1062,12 +1084,12 @@ export default function Dashboard() {
               Creado por{" "}
               <a href="https://www.linkedin.com/in/crecesonline/" target="_blank" rel="noopener noreferrer"
                 className="text-[#0A66C2] dark:text-[#5b9bd5] hover:underline font-bold">
-                Mentores Estratégicos
+                Mentores EstratÃ©gicos
               </a>{" "}
-              — Inteligencia fiscal aplicada a CFDI.
+              â€” Inteligencia fiscal aplicada a CFDI.
             </p>
             <p className="text-[10px] text-slate-300 dark:text-slate-600 font-medium tracking-widest uppercase">
-              Motor Fiscal Sentinel Express v1.2.1 © 2026 | CFDI 4.0
+              Motor Fiscal Sentinel Express v1.2.1 Â© 2026 | CFDI 4.0
             </p>
           </div>
         </div>
