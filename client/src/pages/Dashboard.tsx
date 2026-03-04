@@ -1,5 +1,5 @@
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CFDISATStatus } from "@/components/CFDISATStatus";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { History, RefreshCcw, Save } from "lucide-react";
 import { checkCFDIStatusSAT } from "@/utils/satStatusValidator";
 import { incrementXMLCount, getXMLCount } from "@/services/leadService";
+import { saveSessionCache, loadSessionCache, clearSessionCache, getCacheAge } from "@/hooks/useSessionCache";
 
 type DashboardResult = ValidationResult;
 type SortField = 'fileName' | 'uuid' | 'fechaEmision' | 'rfcEmisor' | 'total' | 'estatusSAT' | 'resultado' | 'comentarioFiscal';
@@ -52,6 +53,9 @@ export default function Dashboard() {
   // ── Progreso de procesamiento masivo ──
   const [processingPhase, setProcessingPhase] = useState<string | null>(null);
 
+  // FIX 2: ref para detectar primer mount y no borrar caché en la carga inicial
+  const isFirstMount = useRef(true);
+
   // Onboarding
   useEffect(() => {
     setLoading(false);
@@ -64,10 +68,34 @@ export default function Dashboard() {
     }
   }, []);
 
-  // Limpiar dashboard si cambia la empresa
+  // FIX 2: Restaurar análisis previo de la sesión (TTL 30 min, por empresa)
+  // Se ejecuta ANTES del cleanup para que los datos restaurados no sean borrados
   useEffect(() => {
+    if (!currentCompany) return;
+    const cached = loadSessionCache(currentCompany.id);
+    if (cached && cached.results.length > 0) {
+      setResults(cached.results);
+      setHasValidatedResults(true);
+      setXmlCount(cached.results.length);
+      const age = getCacheAge();
+      toast.info(
+        `Se restauró el análisis previo de esta sesión (${cached.results.length.toLocaleString()} CFDI, hace ${age} min).`,
+        { duration: 6000 }
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentCompany?.id]);
+
+  // FIX 2: Limpiar dashboard y caché SOLO cuando la empresa cambia (no en el primer mount)
+  // isFirstMount evita que este efecto borre lo que el efecto anterior acaba de restaurar
+  useEffect(() => {
+    if (isFirstMount.current) {
+      isFirstMount.current = false;
+      return;
+    }
     setResults([]);
     setHasValidatedResults(false);
+    clearSessionCache();
   }, [currentCompany?.id]);
 
   const handleFilesReady = async (files: UploadedFile[]) => {
@@ -106,6 +134,9 @@ export default function Dashboard() {
       const newCount = incrementXMLCount(validationResults.length);
       setXmlCount(newCount);
 
+      // Persistir en sesión (sin XML crudos)
+      saveSessionCache(currentCompany.id, newResults);
+
       // Guardar en histórico automáticamente
       await saveToHistory(newResults);
 
@@ -142,10 +173,14 @@ export default function Dashboard() {
     await appDB.saveHistory(historyEntry);
   };
 
+  // FIX 1 + FIX 3: Restaura resultados, activa sección de resultados,
+  // sincroniza el contador de XML y muestra confirmación al usuario
   const handleLoadHistory = (history: ValidationHistory) => {
-    setResults(history.results);
+    setResults(history.results || []);
     setHasValidatedResults(true);
-    toast.success("Proceso cargado desde el historial");
+    setXmlCount(history.xmlCount);   // FIX 3: sincroniza contador del header
+    setCurrentPage(1);               // regresa a la primera página de la tabla
+    toast.success(`Proceso restaurado: ${(history.xmlCount || 0).toLocaleString()} CFDI · ${history.fileName}`, { duration: 4000 });
   };
 
   const handleNoteUpdate = (index: number, note: string) => {
@@ -171,6 +206,7 @@ export default function Dashboard() {
       setSortField(null);
       setSortDirection(null);
       setCurrentPage(1);
+      clearSessionCache();
       toast.info("Tablero limpiado correctamente");
     }
   };
@@ -425,7 +461,7 @@ export default function Dashboard() {
 
             <div className="h-8 w-[1px] bg-white/10 hidden md:block" />
 
-            <HistorySidebar onLoadHistory={(history: ValidationHistory) => setResults(history.results || [])}>
+            <HistorySidebar onLoadHistory={handleLoadHistory}> {/* FIX 1: usa handleLoadHistory completo */}
               <Button
                 variant="ghost"
                 className="text-white hover:bg-white/10 gap-2 border border-white/20 hover:border-white/40 px-4 rounded-xl"
