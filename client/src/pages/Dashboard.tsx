@@ -474,7 +474,7 @@ export default function Dashboard() {
 
             <div className="h-8 w-[1px] bg-white/10 hidden md:block" />
 
-            <HistorySidebar onLoadHistory={handleLoadHistory}> {/* FIX 1: usa handleLoadHistory completo */}
+            <HistorySidebar onLoadHistory={handleLoadHistory}>
               <Button
                 variant="ghost"
                 className="text-white hover:bg-white/10 gap-2 border border-white/20 hover:border-white/40 px-4 rounded-xl"
