@@ -804,10 +804,22 @@ export default function Dashboard() {
                           <td className="py-4 px-4 text-slate-900 dark:text-slate-100 font-bold truncate max-w-[150px] group-hover:text-indigo-600 transition-colors" title={result.fileName}>{result.fileName}</td>
                           <td className="py-4 px-4">
                             <div className="flex flex-col gap-0.5 max-w-[220px]">
-                              <span className="font-mono text-[10px] text-slate-500 dark:text-slate-300 break-all leading-tight select-all">
+                              <button
+                                type="button"
+                                title="Click para copiar UUID"
+                                className="font-mono text-[10px] text-slate-500 dark:text-slate-300 break-all leading-tight text-left cursor-pointer hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline transition-colors duration-150 focus:outline-none focus:ring-1 focus:ring-indigo-400 rounded"
+                                onClick={() => {
+                                  if (!result.uuid || result.uuid === "NO DISPONIBLE") return;
+                                  navigator.clipboard.writeText(result.uuid).then(() => {
+                                    toast.success("UUID copiado al portapapeles", { duration: 2000 });
+                                  }).catch(() => {
+                                    toast.error("No se pudo copiar el UUID");
+                                  });
+                                }}
+                              >
                                 {result.uuid}
-                              </span>
-                              <span className="text-[9px] uppercase tracking-widest text-slate-400 font-black">Identificador Fiscal</span>
+                              </button>
+                              <span className="text-[9px] uppercase tracking-widest text-slate-400 font-black">Click para copiar</span>
                             </div>
                           </td>
                           <td className="py-4 px-4 text-slate-600 dark:text-slate-300 whitespace-nowrap font-medium">{formatDate(result.fechaEmision)}</td>
