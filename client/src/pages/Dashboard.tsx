@@ -21,8 +21,7 @@ import { startMainTour } from "@/utils/tourScript";
 import { Input } from "@/components/ui/input";
 import { History, RefreshCcw, Save } from "lucide-react";
 import { checkCFDIStatusSAT } from "@/utils/satStatusValidator";
-import XMLLimitBanner from "@/components/XMLLimitBanner";
-import { incrementXMLCount, getXMLCount, isXMLLimitReached, XML_LIMIT } from "@/services/leadService";
+import { incrementXMLCount, getXMLCount } from "@/services/leadService";
 
 type DashboardResult = ValidationResult;
 type SortField = 'fileName' | 'uuid' | 'fechaEmision' | 'rfcEmisor' | 'total' | 'estatusSAT' | 'resultado' | 'comentarioFiscal';
@@ -40,9 +39,8 @@ export default function Dashboard() {
   const [currentPage, setCurrentPage] = useState(1);
   const ITEMS_PER_PAGE = 50;
 
-  // ── Contador de XMLs procesados (límite gratuito) ──
+  // ── Contador de XMLs procesados (informativo, sin límite visible) ──
   const [xmlCount, setXmlCount] = useState<number>(getXMLCount());
-  const [limitReached, setLimitReached] = useState<boolean>(isXMLLimitReached());
 
   // WhatsApp CTA constants
   const WHATSAPP_NUMBER = "524776355734";
@@ -50,6 +48,9 @@ export default function Dashboard() {
     "Hola, estoy probando la herramienta Sentinel Express para revisar mis CFDI. Me gustar\u00eda conocer m\u00e1s sobre c\u00f3mo interpretar el diagn\u00f3stico que genera la plataforma."
   );
   const WHATSAPP_URL = `https://wa.me/${WHATSAPP_NUMBER}?text=${WHATSAPP_MESSAGE}`;
+
+  // ── Progreso de procesamiento masivo ──
+  const [processingPhase, setProcessingPhase] = useState<string | null>(null);
 
   // Onboarding
   useEffect(() => {
@@ -75,24 +76,35 @@ export default function Dashboard() {
       return;
     }
 
-    // Verificar límite gratuito ANTES de procesar
-    if (isXMLLimitReached()) {
-      setLimitReached(true);
-      return;
+    // Aviso informativo para volumen alto (> 3000), sin bloquear
+    if (files.length > 3000) {
+      toast.info(
+        `Sentinel está procesando un volumen alto de CFDI (${files.length.toLocaleString()}). El análisis se realizará en varias fases. Puedes continuar trabajando mientras el sistema procesa la información.`,
+        { duration: 8000 }
+      );
     }
 
+    // Actualizar fase de progreso visible
+    setProcessingPhase(`Procesando ${files.length.toLocaleString()} CFDI...`);
+
     try {
-      const validationResults = await validateXMLFiles(files, currentCompany.giro);
+      // Callback para actualizar la fase de progreso por lotes de 200
+      const onBatchProgress = (current: number, total: number) => {
+        if (total > 200) {
+          const from = Math.max(1, current - 199);
+          setProcessingPhase(`Analizando CFDI ${from.toLocaleString()}–${current.toLocaleString()} de ${total.toLocaleString()}`);
+        }
+      };
+
+      const validationResults = await validateXMLFiles(files, currentCompany.giro, onBatchProgress);
+      setProcessingPhase(null);
       const newResults = [...results, ...validationResults];
       setResults(newResults);
       setHasValidatedResults(true);
 
-      // Incrementar contador de XMLs procesados
+      // Actualizar contador informativo
       const newCount = incrementXMLCount(validationResults.length);
       setXmlCount(newCount);
-      if (newCount >= XML_LIMIT) {
-        setLimitReached(true);
-      }
 
       // Guardar en histórico automáticamente
       await saveToHistory(newResults);
@@ -354,8 +366,19 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 p-4 md:p-8 transition-colors duration-200">
-      {/* Banner de límite / CTA flotante */}
-      <XMLLimitBanner limitReached={limitReached} />
+      {/* ── Botón flotante WhatsApp (solo cuando hay resultados) ── */}
+      {(results.length > 0 || isValidating) && (
+        <button
+          onClick={() => window.open(WHATSAPP_URL, "_blank", "noopener,noreferrer")}
+          title="Solicitar diagnóstico fiscal"
+          className="fixed bottom-6 right-6 z-50 w-14 h-14 bg-[#25D366] hover:bg-[#1ebe5e] text-white rounded-full shadow-2xl shadow-[#25D366]/40 flex items-center justify-center transition-all duration-200 hover:scale-110 active:scale-95"
+          aria-label="Contactar por WhatsApp"
+        >
+          <svg viewBox="0 0 24 24" className="w-7 h-7 fill-white">
+            <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z" />
+          </svg>
+        </button>
+      )}
       <div className="max-w-7xl mx-auto">
         {/* Header de Autoridad - Navy Style */}
         <div className="bg-[#0B2340] dark:bg-slate-900 -mx-4 -mt-8 mb-8 px-6 py-8 rounded-b-3xl shadow-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-6 border-b border-white/10 relative overflow-hidden">
@@ -381,15 +404,17 @@ export default function Dashboard() {
 
             <div className="h-8 w-[1px] bg-white/10 hidden md:block" />
 
-            {/* ── Contador de uso XML ── */}
-            <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-3 py-1.5">
-              <FileText className="w-3.5 h-3.5 text-[#F9C646]" />
-              <span className="text-[10px] font-black text-white/70 uppercase tracking-widest">
-                {xmlCount} / {XML_LIMIT} XML
-              </span>
-            </div>
+            {/* ── Contador informativo XML (sin límite visible) ── */}
+            {xmlCount > 0 && (
+              <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-3 py-1.5">
+                <FileText className="w-3.5 h-3.5 text-[#F9C646]" />
+                <span className="text-[10px] font-black text-white/70 uppercase tracking-widest">
+                  XML detectados: {xmlCount.toLocaleString()}
+                </span>
+              </div>
+            )}
 
-            {/* ── Botón comercial WhatsApp ── */}
+            {/* ── Botón comercial WhatsApp (header) ── */}
             <button
               onClick={() => window.open(WHATSAPP_URL, "_blank", "noopener,noreferrer")}
               className="flex items-center gap-2 bg-[#25D366] hover:bg-[#1ebe5e] text-white text-[10px] font-black uppercase tracking-tight px-3 py-2 rounded-xl shadow-lg transition-all duration-200 hover:scale-105 active:scale-95"
@@ -512,7 +537,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* ✅ PRODUCCIÓN: Indicador de progreso durante procesamiento */}
+        {/* ── Indicador de progreso masivo ── */}
         {isValidating && progress.total > 0 && (
           <Card className="border-0 shadow-2xl mb-8 border-l-8 border-accent animate-in fade-in slide-in-from-top-6 duration-700 rounded-3xl bg-white dark:bg-slate-800">
             <CardContent className="pt-8 pb-8">
@@ -524,13 +549,13 @@ export default function Dashboard() {
                     </div>
                     <div>
                       <p className="text-xl font-black text-[#0B2340] dark:text-white tracking-tight">
-                        Analizando Lote de XML
+                        {processingPhase ?? `Procesando ${progress.total.toLocaleString()} CFDI...`}
                       </p>
-                      <p className="text-xs text-slate-500 font-medium">Verificando cumplimiento fiscal y listas SAT...</p>
+                      <p className="text-xs text-slate-500 font-medium">Analizando estructura fiscal en tu navegador · sin enviar datos al servidor.</p>
                     </div>
                   </div>
                   <Badge className="bg-[#0B2340] text-white text-xl px-6 py-2 rounded-2xl shadow-lg shadow-black/10">
-                    {progress.current} / {progress.total}
+                    {progress.current.toLocaleString()} / {progress.total.toLocaleString()}
                   </Badge>
                 </div>
                 <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-5 overflow-hidden border border-slate-200 dark:border-slate-600 shadow-inner p-1">
@@ -541,7 +566,7 @@ export default function Dashboard() {
                 </div>
                 <div className="flex justify-center">
                   <p className="text-xs font-black text-slate-400 dark:text-slate-500 tracking-[0.3em] uppercase">
-                    {Math.round((progress.current / progress.total) * 100)}% de seguridad verificada
+                    {Math.round((progress.current / progress.total) * 100)}% completado
                   </p>
                 </div>
               </div>
