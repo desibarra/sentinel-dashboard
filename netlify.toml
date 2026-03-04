@@ -1,41 +1,21 @@
-﻿# ==============================================================
-# netlify.toml - Sentinel Express Dashboard
-# ==============================================================
-
-# ---------------------------------------------------------------
-# 1. PROXY SAT - Valida CFDIs en el Web Service del SAT
-#    /api/sat/* -> consultaqr.facturaelectronica.sat.gob.mx
-# ---------------------------------------------------------------
 [[redirects]]
   from = "/api/sat/*"
   to = "https://consultaqr.facturaelectronica.sat.gob.mx/:splat"
   status = 200
   force = true
 
-# ---------------------------------------------------------------
-# 2. SPA FALLBACK - Todas las rutas sirven index.html
-#    IMPORTANTE: debe ir AL FINAL para no interferir con proxies
-# ---------------------------------------------------------------
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
 
-# ---------------------------------------------------------------
-# BUILD
-# ---------------------------------------------------------------
 [build]
   command = "npm run build"
   publish = "dist/public"
 
 [build.environment]
   PNPM_FLAGS = "--no-frozen-lockfile"
-  # Forzar Node.js 20 con soporte UTF-8 explicito
   NODE_VERSION = "20"
-  # UTF-8 explicito para el proceso de build (resuelve corrupcion de caracteres)
-  LANG = "en_US.UTF-8"
-  LC_ALL = "en_US.UTF-8"
-  # URL del backend (dejar vacio si no hay backend externo)
   VITE_API_URL = ""
   VITE_JSONBIN_MASTER_KEY = "$2a$10$JYwKhQ4YTzO/uA2wYBrDEO9tGD95gSlhvRvB33z.E91zcYHs45HKi"
   VITE_JSONBIN_BIN_ID = "69a5f1cdd0ea881f40e85bf9"
