@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sentinel Express — Diagnóstico Fiscal Inteligente para CFDI</title>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy:    #0d1b2e;
+    --navy2:   #112039;
+    --navy3:   #162845;
+    --navy4:   #1d3560;
+    --white:   #ffffff;
+    --green:   #22c55e;
+    --amber:   #f59e0b;
+    --red:     #ef4444;
+    --gold:    #eab308;
+    --blue-a:  #3b82f6;
+    --text:    #e2e8f0;
+    --muted:   #94a3b8;
+    --border:  rgba(255,255,255,0.08);
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--navy); color: var(--text); font-family: 'Plus Jakarta Sans', sans-serif; overflow-x: hidden; }
+
+  /* NAV */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 200;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 48px; height: 64px;
+    background: rgba(13,27,46,0.94); backdrop-filter: blur(16px);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-logo { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--white); font-weight: 700; font-size: 1.05rem; letter-spacing: -0.02em; }
+  .logo-icon { width: 34px; height: 34px; background: linear-gradient(135deg, #1d4ed8, #3b82f6); border-radius: 8px; display: grid; place-items: center; font-size: 1rem; box-shadow: 0 0 16px rgba(59,130,246,0.4); }
+  .nav-badge { font-size: 0.62rem; background: rgba(34,197,94,0.15); color: var(--green); border: 1px solid rgba(34,197,94,0.3); padding: 2px 8px; border-radius: 20px; letter-spacing: 0.06em; font-weight: 600; text-transform: uppercase; }
+  .nav-links { display: flex; gap: 32px; align-items: center; list-style: none; }
+  .nav-links a { font-size: 0.84rem; font-weight: 500; color: var(--muted); text-decoration: none; transition: color 0.2s; }
+  .nav-links a:hover { color: var(--white); }
+  .btn-nav { background: linear-gradient(135deg, #1d4ed8, #3b82f6) !important; color: white !important; padding: 8px 20px; border-radius: 8px; font-weight: 600 !important; box-shadow: 0 4px 14px rgba(59,130,246,0.35); transition: opacity 0.2s, transform 0.2s !important; }
+  .btn-nav:hover { opacity: 0.9; transform: translateY(-1px); }
+
+  /* DEMO BAR */
+  .demo-bar {
+    position: fixed; top: 64px; left: 0; right: 0; z-index: 199;
+    background: var(--navy2); border-bottom: 1px solid var(--border);
+    padding: 8px 48px; display: flex; align-items: center; gap: 12px;
+    font-size: 0.75rem; color: var(--muted);
+  }
+  .demo-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); animation: blink 2s ease infinite; }
+  .demo-bar strong { color: var(--white); }
+  .lic { margin-left: auto; font-size: 0.72rem; background: rgba(59,130,246,0.12); color: var(--blue-a); border: 1px solid rgba(59,130,246,0.25); padding: 2px 10px; border-radius: 4px; font-weight: 600; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  /* HERO */
+  .hero { min-height: 100vh; padding: 160px 48px 80px; display: grid; grid-template-columns: 1fr 1fr; gap: 72px; align-items: center; position: relative; overflow: hidden; }
+  .hero::before { content:''; position:absolute; width:700px; height:700px; border-radius:50%; background:radial-gradient(circle, rgba(59,130,246,0.12) 0%, transparent 70%); top:-200px; right:-200px; pointer-events:none; }
+  .hero::after { content:''; position:absolute; width:400px; height:400px; border-radius:50%; background:radial-gradient(circle, rgba(34,197,94,0.07) 0%, transparent 70%); bottom:0; left:0; pointer-events:none; }
+
+  .hero-eyebrow { display:inline-flex; align-items:center; gap:8px; background:rgba(34,197,94,0.1); border:1px solid rgba(34,197,94,0.25); color:var(--green); font-size:0.72rem; font-weight:700; letter-spacing:0.1em; text-transform:uppercase; padding:6px 14px; border-radius:20px; margin-bottom:28px; opacity:0; animation:fadeUp 0.7s 0.2s ease forwards; }
+  .hero-title { font-family:'Space Grotesk',sans-serif; font-size:clamp(2.6rem,4.5vw,4.2rem); font-weight:700; line-height:1.08; letter-spacing:-0.04em; color:var(--white); margin-bottom:24px; opacity:0; animation:fadeUp 0.7s 0.35s ease forwards; }
+  .hero-title .acc { background:linear-gradient(90deg,#3b82f6,#22c55e); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
+  .hero-desc { font-size:1rem; line-height:1.75; color:var(--muted); max-width:460px; margin-bottom:40px; opacity:0; animation:fadeUp 0.7s 0.5s ease forwards; }
+  .hero-actions { display:flex; gap:14px; flex-wrap:wrap; opacity:0; animation:fadeUp 0.7s 0.65s ease forwards; }
+  .btn-primary { display:inline-flex; align-items:center; gap:8px; background:linear-gradient(135deg,#1d4ed8,#3b82f6); color:white; padding:14px 28px; border-radius:10px; border:none; font-family:'Plus Jakarta Sans',sans-serif; font-size:0.88rem; font-weight:700; cursor:pointer; text-decoration:none; box-shadow:0 8px 24px rgba(59,130,246,0.35); transition:transform 0.2s,box-shadow 0.2s; }
+  .btn-primary:hover { transform:translateY(-2px); box-shadow:0 12px 32px rgba(59,130,246,0.45); }
+  .btn-ghost { display:inline-flex; align-items:center; gap:8px; background:rgba(255,255,255,0.06); color:var(--text); padding:14px 24px; border-radius:10px; border:1px solid var(--border); font-family:'Plus Jakarta Sans',sans-serif; font-size:0.88rem; font-weight:600; cursor:pointer; text-decoration:none; transition:background 0.2s,border-color 0.2s; }
+  .btn-ghost:hover { background:rgba(255,255,255,0.1); border-color:rgba(255,255,255,0.2); }
+
+  /* MOCK */
+  .hero-mock { position:relative; opacity:0; animation:fadeIn 1s 0.9s ease forwards; }
+  .mock-wrap { background:var(--navy2); border:1px solid var(--border); border-radius:16px; overflow:hidden; box-shadow:0 32px 80px rgba(0,0,0,0.5),0 0 0 1px var(--border); }
+  .mock-topbar { background:var(--navy3); padding:10px 20px; display:flex; align-items:center; gap:8px; border-bottom:1px solid var(--border); }
+  .mtd { width:10px; height:10px; border-radius:50%; }
+  .d1{background:#ff5f57} .d2{background:#febc2e} .d3{background:#28c840}
+  .mock-topbar-url { flex:1; text-align:center; font-size:0.65rem; color:var(--muted); letter-spacing:0.03em; }
+  .mock-demo-bar { background:var(--navy4); padding:7px 20px; display:flex; align-items:center; gap:8px; font-size:0.65rem; color:var(--muted); border-bottom:1px solid var(--border); }
+  .mdot { width:6px; height:6px; border-radius:50%; background:var(--green); box-shadow:0 0 6px var(--green); animation:blink 2s ease infinite; }
+  .mock-body { padding:20px; }
+  .mock-cards { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; margin-bottom:16px; }
+  .mc { background:white; border-radius:12px; padding:14px 10px; text-align:center; position:relative; overflow:hidden; }
+  .mc::after { content:''; position:absolute; bottom:0; left:0; right:0; height:3px; }
+  .mc-total::after{background:#e2e8f0} .mc-usable::after{background:var(--green)} .mc-alert::after{background:var(--amber)} .mc-nouse::after{background:var(--red)} .mc-money{background:var(--navy)} .mc-money::after{background:var(--gold)}
+  .mc-icon { font-size:1.1rem; margin-bottom:4px; }
+  .mc-lbl { font-size:0.48rem; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; margin-bottom:4px; }
+  .mc-total .mc-lbl{color:#64748b} .mc-usable .mc-lbl{color:var(--green)} .mc-alert .mc-lbl{color:var(--amber)} .mc-nouse .mc-lbl{color:var(--red)} .mc-money .mc-lbl{color:var(--gold)}
+  .mc-val { font-family:'Space Grotesk',sans-serif; font-size:1.3rem; font-weight:700; }
+  .mc-total .mc-val{color:#1e293b} .mc-usable .mc-val{color:var(--green)} .mc-alert .mc-val{color:var(--amber)} .mc-nouse .mc-val{color:var(--red)} .mc-money .mc-val{color:var(--gold)}
+  .mock-list { background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:10px; padding:14px; }
+  .ml-title { font-size:0.6rem; font-weight:700; color:var(--muted); letter-spacing:0.1em; text-transform:uppercase; margin-bottom:10px; }
+  .ml-row { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:7px; margin-bottom:5px; font-size:0.62rem; background:rgba(255,255,255,0.03); border:1px solid var(--border); }
+  .mr-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+  .g-dot{background:var(--green);box-shadow:0 0 6px var(--green)}
+  .a-dot{background:var(--amber);box-shadow:0 0 6px var(--amber);animation:blink 1.5s ease infinite}
+  .r-dot{background:var(--red);box-shadow:0 0 6px var(--red);animation:blink 1.5s ease infinite}
+  .mr-rfc { flex:1; color:rgba(255,255,255,0.7); }
+  .mr-amt { color:var(--muted); }
+  .mr-tag { font-size:0.5rem; font-weight:700; padding:2px 7px; border-radius:20px; text-transform:uppercase; letter-spacing:0.07em; }
+  .t-ok{background:rgba(34,197,94,0.15);color:var(--green);border:1px solid rgba(34,197,94,0.3)}
+  .t-wn{background:rgba(245,158,11,0.15);color:var(--amber);border:1px solid rgba(245,158,11,0.3)}
+  .t-er{background:rgba(239,68,68,0.15);color:var(--red);border:1px solid rgba(239,68,68,0.3)}
+  .mock-float { position:absolute; bottom:-14px; right:-14px; background:var(--navy2); border:1px solid rgba(34,197,94,0.4); border-radius:12px; padding:12px 18px; box-shadow:0 8px 24px rgba(0,0,0,0.4); min-width:140px; }
+  .mf-lbl { font-size:0.6rem; color:var(--muted); letter-spacing:0.08em; text-transform:uppercase; margin-bottom:4px; }
+  .mf-val { font-family:'Space Grotesk',sans-serif; font-size:1.5rem; font-weight:700; color:var(--green); display:flex; align-items:baseline; gap:4px; }
+  .mf-val span { font-size:0.75rem; color:var(--muted); }
+
+  /* MARQUEE */
+  .marquee-wrap { overflow:hidden; border-top:1px solid var(--border); border-bottom:1px solid var(--border); padding:14px 0; background:var(--navy2); }
+  .marquee-track { display:flex; animation:marquee 28s linear infinite; white-space:nowrap; }
+  .marquee-item { display:flex; align-items:center; gap:20px; padding:0 28px; flex-shrink:0; font-size:0.72rem; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted); }
+
+  /* STATS */
+  .stats-strip { display:grid; grid-template-columns:repeat(4,1fr); border-bottom:1px solid var(--border); }
+  .stat-cell { padding:40px; border-right:1px solid var(--border); transition:background 0.3s; }
+  .stat-cell:last-child{border-right:none}
+  .stat-cell:hover{background:rgba(255,255,255,0.03)}
+  .stat-ico { width:40px; height:40px; border-radius:10px; display:grid; place-items:center; font-size:1.1rem; margin-bottom:16px; }
+  .ico-blue{background:rgba(59,130,246,0.12)} .ico-green{background:rgba(34,197,94,0.12)} .ico-amber{background:rgba(245,158,11,0.12)} .ico-red{background:rgba(239,68,68,0.12)}
+  .stat-num { font-family:'Space Grotesk',sans-serif; font-size:2.4rem; font-weight:700; color:var(--white); letter-spacing:-0.04em; margin-bottom:6px; }
+  .stat-label { font-size:0.78rem; color:var(--muted); line-height:1.5; }
+
+  /* SECTION COMMONS */
+  .sec-eyebrow { display:inline-flex; align-items:center; gap:8px; font-size:0.7rem; font-weight:700; letter-spacing:0.12em; text-transform:uppercase; color:var(--blue-a); margin-bottom:20px; }
+  .sec-eyebrow::before { content:''; width:20px; height:2px; background:var(--blue-a); border-radius:2px; }
+  .sec-title { font-family:'Space Grotesk',sans-serif; font-size:clamp(1.8rem,3vw,2.8rem); font-weight:700; letter-spacing:-0.04em; color:var(--white); line-height:1.1; margin-bottom:16px; }
+  .sec-desc { font-size:0.9rem; line-height:1.7; color:var(--muted); max-width:500px; margin-top:12px; }
+  .sec-header { margin-bottom:56px; }
+
+  /* STATUS CARDS */
+  .status-section { padding:100px 48px; }
+  .status-showcase { display:grid; grid-template-columns:repeat(5,1fr); gap:16px; margin-top:56px; }
+  .sc { background:white; border-radius:16px; padding:24px 20px; text-align:center; position:relative; overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,0.15); transition:transform 0.3s,box-shadow 0.3s; }
+  .sc:hover{transform:translateY(-6px);box-shadow:0 16px 40px rgba(0,0,0,0.25)}
+  .sc::after { content:''; position:absolute; bottom:0; left:0; right:0; height:4px; border-radius:0 0 16px 16px; }
+  .sc-total::after{background:#e2e8f0} .sc-usable::after{background:var(--green)} .sc-alert::after{background:var(--amber)} .sc-nouse::after{background:var(--red)}
+  .sc-money{background:var(--navy)} .sc-money::after{background:var(--gold)}
+  .sc-icon{font-size:2rem;margin-bottom:10px}
+  .sc-label{font-size:0.6rem;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:8px}
+  .sc-total .sc-label{color:#94a3b8} .sc-usable .sc-label{color:var(--green)} .sc-alert .sc-label{color:var(--amber)} .sc-nouse .sc-label{color:var(--red)} .sc-money .sc-label{color:var(--gold)}
+  .sc-val{font-family:'Space Grotesk',sans-serif;font-size:2rem;font-weight:700}
+  .sc-total .sc-val{color:#1e293b} .sc-usable .sc-val{color:var(--green)} .sc-alert .sc-val{color:var(--amber)} .sc-nouse .sc-val{color:var(--red)} .sc-money .sc-val{color:var(--gold)}
+  .sc-sub{font-size:0.68rem;color:#94a3b8;margin-top:4px}
+  .sc-money .sc-sub{color:rgba(255,255,255,0.4)}
+
+  /* FEATURES */
+  .features { padding:100px 48px; border-top:1px solid var(--border); }
+  .feat-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+  .feat-card { background:var(--navy2); border:1px solid var(--border); border-radius:16px; padding:32px; position:relative; overflow:hidden; transition:border-color 0.3s,transform 0.3s,box-shadow 0.3s; }
+  .feat-card:hover{border-color:rgba(59,130,246,0.4);transform:translateY(-4px);box-shadow:0 16px 48px rgba(0,0,0,0.3)}
+  .feat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#3b82f6,#22c55e);opacity:0;transition:opacity 0.3s}
+  .feat-card:hover::before{opacity:1}
+  .feat-icon{width:48px;height:48px;border-radius:12px;display:grid;place-items:center;font-size:1.3rem;margin-bottom:20px;border:1px solid var(--border)}
+  .fi-blue{background:rgba(59,130,246,0.1);border-color:rgba(59,130,246,0.2)} .fi-green{background:rgba(34,197,94,0.1);border-color:rgba(34,197,94,0.2)} .fi-amber{background:rgba(245,158,11,0.1);border-color:rgba(245,158,11,0.2)} .fi-red{background:rgba(239,68,68,0.1);border-color:rgba(239,68,68,0.2)} .fi-gold{background:rgba(234,179,8,0.1);border-color:rgba(234,179,8,0.2)} .fi-purple{background:rgba(168,85,247,0.1);border-color:rgba(168,85,247,0.2)}
+  .feat-title{font-family:'Space Grotesk',sans-serif;font-size:1.05rem;font-weight:700;color:var(--white);margin-bottom:10px;letter-spacing:-0.02em}
+  .feat-desc{font-size:0.82rem;line-height:1.7;color:var(--muted)}
+
+  /* HOW */
+  .how{padding:100px 48px;background:var(--navy2);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+  .steps-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-top:56px;position:relative}
+  .steps-grid::before{content:'';position:absolute;top:24px;left:12%;right:12%;height:1px;background:linear-gradient(90deg,transparent,rgba(59,130,246,0.4) 30%,rgba(34,197,94,0.4) 70%,transparent)}
+  .step{padding:0 28px;display:flex;flex-direction:column;gap:16px}
+  .step-bubble{width:48px;height:48px;border-radius:50%;background:var(--navy3);border:2px solid rgba(59,130,246,0.4);display:grid;place-items:center;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:1rem;color:var(--blue-a);position:relative;z-index:1;transition:background 0.3s,border-color 0.3s,color 0.3s}
+  .step:hover .step-bubble{background:linear-gradient(135deg,#1d4ed8,#3b82f6);border-color:#3b82f6;color:white;box-shadow:0 0 20px rgba(59,130,246,0.4)}
+  .step-title{font-family:'Space Grotesk',sans-serif;font-size:0.95rem;font-weight:700;color:var(--white);letter-spacing:-0.02em}
+  .step-desc{font-size:0.8rem;line-height:1.7;color:var(--muted)}
+
+  /* TESTIMONIALS */
+  .testimonials{padding:100px 48px;border-top:1px solid var(--border)}
+  .testi-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:56px}
+  .testi-card{background:var(--navy2);border:1px solid var(--border);border-radius:16px;padding:32px;display:flex;flex-direction:column;transition:border-color 0.3s,transform 0.3s}
+  .testi-card:hover{border-color:rgba(59,130,246,0.3);transform:translateY(-4px)}
+  .testi-stars{color:var(--gold);font-size:0.85rem;margin-bottom:16px;letter-spacing:2px}
+  .testi-text{font-size:0.87rem;line-height:1.8;color:var(--muted);flex:1;margin-bottom:24px;font-style:italic}
+  .testi-footer{display:flex;align-items:center;gap:12px}
+  .testi-avatar{width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,#1d4ed8,#3b82f6);display:grid;place-items:center;font-weight:700;font-size:0.8rem;color:white;flex-shrink:0}
+  .testi-name{font-weight:700;font-size:0.85rem;color:var(--white)}
+  .testi-role{font-size:0.72rem;color:var(--muted)}
+
+  /* CTA */
+  .cta{padding:120px 48px;text-align:center;position:relative;overflow:hidden}
+  .cta::before{content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:800px;height:400px;border-radius:50%;background:radial-gradient(ellipse,rgba(59,130,246,0.12) 0%,transparent 70%);pointer-events:none}
+  .cta-box{background:var(--navy2);border:1px solid var(--border);border-radius:24px;padding:72px 48px;max-width:680px;margin:0 auto;position:relative;z-index:1;box-shadow:0 32px 80px rgba(0,0,0,0.3)}
+  .cta-box::before{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:60%;height:1px;background:linear-gradient(90deg,transparent,rgba(59,130,246,0.6),transparent)}
+  .cta-title{font-family:'Space Grotesk',sans-serif;font-size:clamp(1.8rem,3vw,2.8rem);font-weight:700;letter-spacing:-0.04em;color:var(--white);margin-bottom:16px;line-height:1.1}
+  .cta-title .acc{background:linear-gradient(90deg,#3b82f6,#22c55e);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+  .cta-desc{font-size:0.9rem;line-height:1.7;color:var(--muted);margin-bottom:36px}
+  .cta-form{display:flex;gap:10px;max-width:420px;margin:0 auto 20px}
+  .cta-input{flex:1;padding:12px 18px;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:10px;color:var(--white);font-family:'Plus Jakarta Sans',sans-serif;font-size:0.85rem;outline:none;transition:border-color 0.2s}
+  .cta-input:focus{border-color:rgba(59,130,246,0.5)}
+  .cta-input::placeholder{color:var(--muted)}
+  .cta-submit{background:linear-gradient(135deg,#1d4ed8,#3b82f6);color:white;padding:12px 24px;border:none;border-radius:10px;font-family:'Plus Jakarta Sans',sans-serif;font-size:0.85rem;font-weight:700;cursor:pointer;white-space:nowrap;box-shadow:0 4px 14px rgba(59,130,246,0.3);transition:transform 0.2s,box-shadow 0.2s}
+  .cta-submit:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(59,130,246,0.4)}
+  .cta-note{font-size:0.72rem;color:var(--muted)}
+  .cta-trust{display:flex;align-items:center;justify-content:center;gap:24px;margin-top:32px;flex-wrap:wrap}
+  .trust-item{display:flex;align-items:center;gap:6px;font-size:0.75rem;color:var(--muted)}
+  .trust-item .ti{color:var(--green)}
+
+  /* FOOTER */
+  footer{background:var(--navy2);border-top:1px solid var(--border);padding:48px}
+  .footer-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:40px;flex-wrap:wrap;gap:32px}
+  .footer-brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--white);font-weight:700;font-size:1rem;margin-bottom:12px}
+  .footer-tagline{font-size:0.78rem;color:var(--muted);max-width:240px;line-height:1.6}
+  .footer-links{display:flex;gap:48px;flex-wrap:wrap}
+  .footer-col h4{font-size:0.72rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--white);margin-bottom:16px}
+  .footer-col ul{list-style:none;display:flex;flex-direction:column;gap:10px}
+  .footer-col a{font-size:0.82rem;color:var(--muted);text-decoration:none;transition:color 0.2s}
+  .footer-col a:hover{color:var(--white)}
+  .footer-bottom{border-top:1px solid var(--border);padding-top:24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px}
+  .footer-copy{font-size:0.75rem;color:var(--muted)}
+  .footer-socials{display:flex;gap:16px}
+  .footer-socials a{font-size:0.72rem;color:var(--muted);text-decoration:none;font-weight:600;letter-spacing:0.04em;transition:color 0.2s}
+  .footer-socials a:hover{color:var(--white)}
+
+  /* ANIMATIONS */
+  @keyframes fadeUp{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+  @keyframes marquee{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+  .reveal{opacity:0;transform:translateY(28px);transition:opacity 0.65s ease,transform 0.65s ease}
+  .reveal.visible{opacity:1;transform:translateY(0)}
+  .d1s{transition-delay:0.1s} .d2s{transition-delay:0.2s} .d3s{transition-delay:0.3s} .d4s{transition-delay:0.4s}
+
+  @media(max-width:1024px){
+    .hero{grid-template-columns:1fr;padding:140px 24px 60px}
+    .mock-cards{grid-template-columns:repeat(3,1fr)}
+    .feat-grid{grid-template-columns:1fr 1fr}
+    .stats-strip{grid-template-columns:1fr 1fr}
+    .stat-cell:nth-child(2){border-right:none}
+    .stat-cell:nth-child(3){border-right:1px solid var(--border);border-top:1px solid var(--border)}
+    .stat-cell:nth-child(4){border-right:none;border-top:1px solid var(--border)}
+    .steps-grid{grid-template-columns:1fr 1fr}
+    .steps-grid::before{display:none}
+    .testi-grid{grid-template-columns:1fr}
+    .status-showcase{grid-template-columns:repeat(3,1fr)}
+  }
+  @media(max-width:640px){
+    nav{padding:0 20px} .demo-bar{padding:8px 20px}
+    .hero{padding:140px 20px 60px}
+    .feat-grid{grid-template-columns:1fr}
+    .features,.how,.status-section,.testimonials,.cta{padding:72px 20px}
+    .status-showcase{grid-template-columns:1fr 1fr}
+    .mock-cards{grid-template-columns:1fr 1fr}
+    .cta-form{flex-direction:column}
+    .footer-top{flex-direction:column}
+    footer{padding:40px 20px}
+    .stats-strip{grid-template-columns:1fr 1fr}
+    .nav-links{display:none}
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="#" class="nav-logo">
+    <div class="logo-icon">🛡️</div>
+    Sentinel Express
+    <span class="nav-badge">● Live</span>
+  </a>
+  <ul class="nav-links">
+    <li><a href="#panel">Panel fiscal</a></li>
+    <li><a href="#features">Funciones</a></li>
+    <li><a href="#como">Cómo funciona</a></li>
+    <li><a href="#testimonios">Testimonios</a></li>
+    <li><a href="#contacto" class="btn-nav">Probar gratis</a></li>
+  </ul>
+</nav>
+
+<div class="demo-bar">
+  <div class="demo-dot"></div>
+  <strong>MODO DEMO</strong>
+  <span style="color:var(--border)">|</span>
+  Válido hasta: sábado, 4 de abril de 2026 · 31 días restantes
+  <span class="lic">Licencia: TRANSPORTES</span>
+</div>
+
+<!-- HERO -->
+<section class="hero">
+  <div>
+    <div class="hero-eyebrow">🛡️ Diagnóstico Fiscal Inteligente · CFDI 4.0</div>
+    <h1 class="hero-title">Detecta riesgos fiscales<br>antes de que el<br><span class="acc">SAT los encuentre.</span></h1>
+    <p class="hero-desc">Sentinel Express analiza tus CFDI en segundos, cruza RFC con listas EFOS y EDOS del SAT, y entrega un diagnóstico con semáforo: ✅ Usable, ⚠️ Alerta o ❌ No Usable.</p>
+    <div class="hero-actions">
+      <a href="#contacto" class="btn-primary">🚀 Diagnóstico gratuito</a>
+      <a href="#como" class="btn-ghost">Ver cómo funciona →</a>
+    </div>
+  </div>
+
+  <div class="hero-mock">
+    <div class="mock-wrap">
+      <div class="mock-topbar">
+        <div class="mtd d1"></div><div class="mtd d2"></div><div class="mtd d3"></div>
+        <div class="mock-topbar-url">https://sentinel-express.netlify.app</div>
+      </div>
+      <div class="mock-demo-bar">
+        <div class="mdot"></div>
+        MODO DEMO &nbsp;|&nbsp; Válido hasta: sábado, 4 de abril de 2026
+        <span style="margin-left:auto;background:rgba(59,130,246,0.15);color:#3b82f6;border:1px solid rgba(59,130,246,0.3);padding:2px 8px;border-radius:4px;font-size:0.58rem;font-weight:700">Licencia: TRANSPORTES</span>
+      </div>
+      <div class="mock-body">
+        <div class="mock-cards">
+          <div class="mc mc-total"><div class="mc-icon">📄</div><div class="mc-lbl">Total Procesados</div><div class="mc-val">1,842</div></div>
+          <div class="mc mc-usable"><div class="mc-icon">✅</div><div class="mc-lbl">✅ Usables</div><div class="mc-val">1,780</div></div>
+          <div class="mc mc-alert"><div class="mc-icon">⚠️</div><div class="mc-lbl">⚠️ Alertas</div><div class="mc-val">28</div></div>
+          <div class="mc mc-nouse"><div class="mc-icon">❌</div><div class="mc-lbl">❌ No Usables</div><div class="mc-val">34</div></div>
+          <div class="mc mc-money"><div class="mc-icon" style="color:var(--gold)">📈</div><div class="mc-lbl">$ Monto Total</div><div class="mc-val">$8.4M</div></div>
+        </div>
+        <div class="mock-list">
+          <div class="ml-title">Últimos CFDI analizados</div>
+          <div class="ml-row"><div class="mr-dot g-dot"></div><div class="mr-rfc">XAXX010101000</div><div class="mr-amt">$48,320</div><div class="mr-tag t-ok">Usable</div></div>
+          <div class="ml-row"><div class="mr-dot a-dot"></div><div class="mr-rfc">GARC850302MX3</div><div class="mr-amt">$12,900</div><div class="mr-tag t-wn">Alerta</div></div>
+          <div class="ml-row"><div class="mr-dot r-dot"></div><div class="mr-rfc">RODO780114HG8</div><div class="mr-amt">$89,500</div><div class="mr-tag t-er">No Usable</div></div>
+          <div class="ml-row"><div class="mr-dot g-dot"></div><div class="mr-rfc">MARP920615QJ2</div><div class="mr-amt">$6,200</div><div class="mr-tag t-ok">Usable</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="mock-float">
+      <div class="mf-lbl">Sistema protegido</div>
+      <div class="mf-val">98.1% <span>cumplimiento</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- MARQUEE -->
+<div class="marquee-wrap">
+  <div class="marquee-track">
+    <div class="marquee-item">✅ CFDI Usables</div><div class="marquee-item">⚠️ Alertas de Riesgo</div><div class="marquee-item">❌ CFDI No Usables</div><div class="marquee-item">🛡️ Detección EFOS</div><div class="marquee-item">📄 CFDI 4.0 nativo</div><div class="marquee-item">💰 Monto total analizado</div><div class="marquee-item">🔔 Alertas SAT tiempo real</div><div class="marquee-item">🔗 API REST integrable</div><div class="marquee-item">📊 Reportes ejecutivos</div><div class="marquee-item">🚀 Análisis masivo XML</div>
+    <div class="marquee-item">✅ CFDI Usables</div><div class="marquee-item">⚠️ Alertas de Riesgo</div><div class="marquee-item">❌ CFDI No Usables</div><div class="marquee-item">🛡️ Detección EFOS</div><div class="marquee-item">📄 CFDI 4.0 nativo</div><div class="marquee-item">💰 Monto total analizado</div><div class="marquee-item">🔔 Alertas SAT tiempo real</div><div class="marquee-item">🔗 API REST integrable</div><div class="marquee-item">📊 Reportes ejecutivos</div><div class="marquee-item">🚀 Análisis masivo XML</div>
+  </div>
+</div>
+
+<!-- STATS -->
+<div class="stats-strip">
+  <div class="stat-cell reveal"><div class="stat-ico ico-blue">📄</div><div class="stat-num">+12M</div><div class="stat-label">CFDIs procesados<br>en todo México</div></div>
+  <div class="stat-cell reveal d1s"><div class="stat-ico ico-green">✅</div><div class="stat-num">99.3%</div><div class="stat-label">Precisión en detección<br>de riesgos fiscales</div></div>
+  <div class="stat-cell reveal d2s"><div class="stat-ico ico-amber">⚡</div><div class="stat-num">&lt;10s</div><div class="stat-label">Tiempo promedio<br>de análisis por CFDI</div></div>
+  <div class="stat-cell reveal d3s"><div class="stat-ico ico-red">🏢</div><div class="stat-num">3,400+</div><div class="stat-label">Empresas que confían<br>en Sentinel Express</div></div>
+</div>
+
+<!-- STATUS PANEL -->
+<section class="status-section" id="panel">
+  <div class="sec-header reveal">
+    <div class="sec-eyebrow">Panel fiscal</div>
+    <h2 class="sec-title">Tu diagnóstico en un vistazo.<br>Semáforo de riesgo instantáneo.</h2>
+    <p class="sec-desc">Así luce el panel de Sentinel Express: 5 tarjetas con código de color que te dicen exactamente el estado de tus CFDI en segundos, igual a como aparece en la app.</p>
+  </div>
+  <div class="status-showcase">
+    <div class="sc sc-total reveal"><div class="sc-icon">📄</div><div class="sc-label">Total Procesados</div><div class="sc-val" style="color:#1e293b">1,842</div><div class="sc-sub">CFDI analizados</div></div>
+    <div class="sc sc-usable reveal d1s"><div class="sc-icon">✅</div><div class="sc-label">✅ Usables</div><div class="sc-val">1,780</div><div class="sc-sub">Deducibles sin riesgo</div></div>
+    <div class="sc sc-alert reveal d2s"><div class="sc-icon">⚠️</div><div class="sc-label">⚠️ Alertas</div><div class="sc-val">28</div><div class="sc-sub">Requieren revisión</div></div>
+    <div class="sc sc-nouse reveal d3s"><div class="sc-icon">❌</div><div class="sc-label">❌ No Usables</div><div class="sc-val">34</div><div class="sc-sub">No deducibles · EFOS</div></div>
+    <div class="sc sc-money reveal d4s"><div class="sc-icon" style="color:var(--gold)">📈</div><div class="sc-label">$ Monto Total</div><div class="sc-val">$8.4M</div><div class="sc-sub">Analizado este período</div></div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section class="features" id="features">
+  <div class="sec-header reveal">
+    <div class="sec-eyebrow">Funciones clave</div>
+    <h2 class="sec-title">Todo lo que necesitas para<br>estar en regla con el SAT.</h2>
+    <p class="sec-desc">Sentinel Express va más allá de la validación básica. Detecta patrones de riesgo, cruza con listas negras del SAT y te da visibilidad total sobre tu posición fiscal.</p>
+  </div>
+  <div class="feat-grid">
+    <div class="feat-card reveal"><div class="feat-icon fi-blue">⚡</div><h3 class="feat-title">Análisis ultrarrápido</h3><p class="feat-desc">Procesa miles de CFDI en segundos. Sube tus XML de forma individual o masiva y obtén un diagnóstico completo al instante.</p></div>
+    <div class="feat-card reveal d1s"><div class="feat-icon fi-red">🛡️</div><h3 class="feat-title">Detección de EFOS y EDOS</h3><p class="feat-desc">Cruza automáticamente tus proveedores con las listas definitivas e históricas del SAT. Evita deducciones ilegales antes de que ocurran.</p></div>
+    <div class="feat-card reveal d2s"><div class="feat-icon fi-amber">🔔</div><h3 class="feat-title">Alertas en tiempo real</h3><p class="feat-desc">Recibe notificaciones cuando un proveedor sea señalado por las autoridades fiscales. Actúa antes de que el SAT llegue a ti.</p></div>
+    <div class="feat-card reveal"><div class="feat-icon fi-green">📊</div><h3 class="feat-title">Reportes ejecutivos</h3><p class="feat-desc">Genera reportes PDF y Excel listos para presentar ante tu contador, director financiero o en una auditoría del SAT.</p></div>
+    <div class="feat-card reveal d1s"><div class="feat-icon fi-purple">🔗</div><h3 class="feat-title">API e integraciones</h3><p class="feat-desc">Conecta Sentinel con tu ERP, sistema contable o CRM. Disponible vía API REST con documentación completa en español.</p></div>
+    <div class="feat-card reveal d2s"><div class="feat-icon fi-gold">🧾</div><h3 class="feat-title">CFDI 4.0 nativo</h3><p class="feat-desc">Totalmente compatible con CFDI 4.0, incluyendo complementos de carta porte, nómina, pagos y retenciones.</p></div>
+  </div>
+</section>
+
+<!-- HOW -->
+<section class="how" id="como">
+  <div class="sec-header reveal">
+    <div class="sec-eyebrow">Proceso</div>
+    <h2 class="sec-title">Diagnóstico fiscal en 4 pasos.</h2>
+    <p class="sec-desc">Sin instalaciones. Sin curva de aprendizaje. Resultados fiscales concretos en minutos desde el primer uso.</p>
+  </div>
+  <div class="steps-grid">
+    <div class="step reveal"><div class="step-bubble">01</div><h3 class="step-title">📤 Sube tus CFDI</h3><p class="step-desc">Carga tus archivos XML de forma individual o masiva. Soportamos cualquier volumen, desde 1 hasta millones de comprobantes.</p></div>
+    <div class="step reveal d1s"><div class="step-bubble">02</div><h3 class="step-title">🔍 Análisis inteligente</h3><p class="step-desc">Nuestro motor verifica estructura, sellos digitales, RFC, listas SAT, fechas, importes y decenas de validaciones fiscales adicionales.</p></div>
+    <div class="step reveal d2s"><div class="step-bubble">03</div><h3 class="step-title">🚦 Semáforo de riesgo</h3><p class="step-desc">Recibes un diagnóstico claro: ✅ Usable, ⚠️ Alerta o ❌ No Usable, con explicación detallada de cada hallazgo encontrado.</p></div>
+    <div class="step reveal d3s"><div class="step-bubble">04</div><h3 class="step-title">✅ Actúa con certeza</h3><p class="step-desc">Descarga reportes, comparte con tu equipo contable y toma decisiones fiscales basadas en datos reales, no en suposiciones.</p></div>
+  </div>
+</section>
+
+<!-- TESTIMONIALS -->
+<section class="testimonials" id="testimonios">
+  <div class="sec-header reveal">
+    <div class="sec-eyebrow">Testimonios</div>
+    <h2 class="sec-title">Empresas que ya duermen tranquilas.</h2>
+    <p class="sec-desc">De despachos contables a empresas manufactureras. Sentinel Express protege organizaciones de todos los tamaños en México.</p>
+  </div>
+  <div class="testi-grid">
+    <div class="testi-card reveal"><div class="testi-stars">★★★★★</div><p class="testi-text">"Detectamos a tiempo que uno de nuestros principales proveedores estaba en la lista de EFOS definitivos. Evitamos deducciones rechazadas por más de 2 millones de pesos. La herramienta se pagó sola en el primer mes."</p><div class="testi-footer"><div class="testi-avatar">LG</div><div><div class="testi-name">Laura González</div><div class="testi-role">CFO · Grupo Industrial del Bajío</div></div></div></div>
+    <div class="testi-card reveal d1s"><div class="testi-stars">★★★★★</div><p class="testi-text">"En nuestro despacho procesamos CFDI de más de 80 clientes mensuales. Sentinel nos permite hacer revisiones masivas que antes tomaban días, ahora en horas. El semáforo de colores es muy intuitivo."</p><div class="testi-footer"><div class="testi-avatar">RV</div><div><div class="testi-name">Roberto Vargas</div><div class="testi-role">Director · Vargas & Asociados</div></div></div></div>
+    <div class="testi-card reveal d2s"><div class="testi-stars">★★★★★</div><p class="testi-text">"La API nos permitió integrarlo directamente en nuestro ERP. Ahora cada factura se valida automáticamente antes de ser registrada. Cero fricciones, cero riesgos fiscales inesperados."</p><div class="testi-footer"><div class="testi-avatar">AM</div><div><div class="testi-name">Ana Mendoza</div><div class="testi-role">CTO · Retail Express MX</div></div></div></div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta" id="contacto">
+  <div class="cta-box reveal">
+    <div class="sec-eyebrow" style="justify-content:center;margin-bottom:20px">🚀 Empieza hoy · Sin tarjeta de crédito</div>
+    <h2 class="cta-title">Protege tu empresa del<br><span class="acc">riesgo fiscal ahora.</span></h2>
+    <p class="cta-desc">Más de 3,400 empresas en México usan Sentinel Express para mantenerse en regla con el SAT. Obtén tu diagnóstico gratuito hoy mismo.</p>
+    <div class="cta-form">
+      <input class="cta-input" type="email" placeholder="correo@tuempresa.com">
+      <button class="cta-submit">Comenzar gratis →</button>
+    </div>
+    <p class="cta-note">Sin compromisos · Cancela cuando quieras · Soporte en español</p>
+    <div class="cta-trust">
+      <div class="trust-item"><span class="ti">✅</span> CFDI 4.0</div>
+      <div class="trust-item"><span class="ti">✅</span> Listas EFOS/EDOS</div>
+      <div class="trust-item"><span class="ti">✅</span> Seguro y privado</div>
+      <div class="trust-item"><span class="ti">✅</span> 100% en español</div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-top">
+    <div>
+      <a href="#" class="footer-brand"><div class="logo-icon">🛡️</div>Sentinel Express</a>
+      <p class="footer-tagline">Diagnóstico fiscal inteligente para CFDI. Creado por Mentores Estratégicos · Inteligencia fiscal aplicada a CFDI.</p>
+    </div>
+    <div class="footer-links">
+      <div class="footer-col"><h4>Producto</h4><ul><li><a href="#">Funciones</a></li><li><a href="#">Precios</a></li><li><a href="#">API Docs</a></li><li><a href="#">Integraciones</a></li></ul></div>
+      <div class="footer-col"><h4>Empresa</h4><ul><li><a href="#">Acerca de</a></li><li><a href="#">Blog fiscal</a></li><li><a href="#">Contacto</a></li><li><a href="#">Mentores Estratégicos</a></li></ul></div>
+      <div class="footer-col"><h4>Legal</h4><ul><li><a href="#">Privacidad</a></li><li><a href="#">Términos</a></li><li><a href="#">Aviso legal</a></li></ul></div>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <div class="footer-copy">© 2026 Sentinel Express · Mentores Estratégicos · León, Guanajuato, México</div>
+    <div class="footer-socials"><a href="#">LinkedIn</a><a href="#">Facebook</a><a href="#">Instagram</a><a href="#">TikTok</a></div>
+  </div>
+</footer>
+
+<script>
+  const reveals = document.querySelectorAll('.reveal');
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(e => { if(e.isIntersecting) e.target.classList.add('visible'); });
+  }, { threshold: 0.08, rootMargin: '0px 0px -32px 0px' });
+  reveals.forEach(r => io.observe(r));
+
+  document.querySelectorAll('a[href^="#"]').forEach(a => {
+    a.addEventListener('click', e => {
+      const t = document.querySelector(a.getAttribute('href'));
+      if(t){ e.preventDefault(); t.scrollIntoView({behavior:'smooth'}); }
+    });
+  });
+</script>
+</body>
+</html>
