@@ -43,6 +43,9 @@ export default function Dashboard() {
   // ── Contador de XMLs procesados (informativo, sin límite visible) ──
   const [xmlCount, setXmlCount] = useState<number>(getXMLCount());
 
+  // ── UUIDs que están siendo revalidados en este momento (para deshabilitar su botón) ──
+  const [revalidatingUUIDs, setRevalidatingUUIDs] = useState<Set<string>>(new Set());
+
   // WhatsApp CTA constants
   const WHATSAPP_NUMBER = "524776355734";
   const WHATSAPP_MESSAGE = encodeURIComponent(
@@ -317,63 +320,73 @@ export default function Dashboard() {
     return sortDirection === 'asc' ? comparison : -comparison;
   });
 
-  const handleRevalidateSAT = async (index: number) => {
-    const result = sortedResults[index];
-    if (!result || result.uuid === "NO DISPONIBLE") return;
+  /**
+   * handleRevalidateSAT
+   * Recibe el UUID de la fila — NUNCA índices.
+   * Usa setResults con .map por UUID para garantizar que solo esa fila se modifique,
+   * sin importar el orden actual del sort ni la página visible.
+   */
+  const handleRevalidateSAT = async (uuid: string) => {
+    if (!uuid || uuid === "NO DISPONIBLE") return;
+    if (revalidatingUUIDs.has(uuid)) return; // evita múltiples solicitudes simultáneas
 
-    // Encontrar el índice original en la lista de 'results' si estamos usando sortedResults filtrados
-    // Pero aquí index parece ser del State results o paginated. 
-    // En el render: {paginatedResults.map((result, idx) => { const absoluteIndex = (currentPage - 1) * ITEMS_PER_PAGE + idx; ... handleRevalidateSAT(absoluteIndex)
-    // Así que 'index' es el índice absoluto en 'results'.
+    // Obtener datos de la fila desde el estado, buscando por UUID
+    const result = results.find(r => r.uuid === uuid);
+    if (!result) return;
 
-    toast.loading("Revalidando estatus SAT...", { id: `rev-${index}` });
+    // Marcar como en progreso
+    setRevalidatingUUIDs(prev => new Set(prev).add(uuid));
+    toast.loading("Consultando SAT...", { id: `rev-${uuid}` });
+
     try {
       const status = await checkCFDIStatusSAT(result.uuid, result.rfcEmisor, result.rfcReceptor, result.total);
 
-      // Si ya no podemos confiar en el índice por filtros concurrentes, buscar por UUID
-      const targetIdx = results.findIndex(r => r.uuid === result.uuid);
-      if (targetIdx === -1) {
-        toast.error("No se pudo localizar el registro para actualizar", { id: `rev-${index}` });
-        return;
-      }
+      // Actualizar SOLO la fila cuyo UUID coincide — inmune al sort y la páginación
+      setResults(prev => prev.map(row => {
+        if (row.uuid !== uuid) return row; // todas las demás filas: sin tocar
 
-      const newResults = [...results];
-      const item = { ...newResults[targetIdx] };
+        const resBase = row.resultadoMotor || row.resultado;
+        const comBase = row.comentarioMotor || row.comentarioFiscal;
 
-      // Actualizar campos base de SAT
-      item.estatusSAT = status.estado;
-      item.fechaCancelacion = status.estatusCancelacion || "";
-      item.ultimoRefrescoSAT = status.validatedAt.toISOString();
-      item.giroEmpresa = currentCompany?.giro || item.giroEmpresa;
+        let nuevoResultado = resBase;
+        let nuevoComentario = comBase;
 
-      // Re-aplicar reglas de negocio usando los fallbacks del motor
-      const resBase = item.resultadoMotor || item.resultado;
-      const comBase = item.comentarioMotor || item.comentarioFiscal;
+        if (status.estado === "Cancelado") {
+          nuevoResultado = "🔴 NO DISPONIBLE (CANCELADO)";
+          nuevoComentario = `[CRÍTICO] CFDI CANCELADO en SAT. ${status.estatusCancelacion || ""}. No tiene efectos fiscales. ` + comBase;
+        } else if (status.estado === "No Encontrado") {
+          nuevoComentario = `[ALERTA] UUID no encontrado en SAT (puede ser muy reciente o apócrifo). ` + comBase;
+        } else if (status.estado === "Error Conexión") {
+          nuevoComentario = `[AVISO] No se pudo actualizar el estatus en SAT (Timeout). ` + comBase;
+        }
+        // Vigente: resultado y comentario del motor se mantienen
 
-      if (status.estado === "Cancelado") {
-        item.resultado = "🔴 NO DISPONIBLE (CANCELADO)";
-        item.comentarioFiscal = `[CRÍTICO] CFDI CANCELADO en SAT. ${item.fechaCancelacion}. No tiene efectos fiscales. ` + comBase;
-      } else if (status.estado === "No Encontrado") {
-        item.resultado = resBase;
-        item.comentarioFiscal = `[ALERTA] UUID no encontrado en SAT (puede ser muy reciente o apócrifo). ` + comBase;
-      } else if (status.estado === "Error Conexión") {
-        // Si falló la conexión, mantenemos el resultado previo pero avisamos en el comentario
-        item.resultado = resBase;
-        item.comentarioFiscal = `[AVISO] No se pudo actualizar el estatus en SAT (Timeout). ` + comBase;
+        return {
+          ...row,
+          estatusSAT: status.estado,
+          fechaCancelacion: status.estatusCancelacion || row.fechaCancelacion || "",
+          ultimoRefrescoSAT: status.validatedAt.toISOString(),
+          giroEmpresa: currentCompany?.giro || row.giroEmpresa,
+          resultado: nuevoResultado,
+          comentarioFiscal: nuevoComentario,
+        };
+      }));
 
-        toast.error("No se pudo conectar con el SAT (Timeout)", { id: `rev-${index}` });
+      if (status.estado === "Error Conexión") {
+        toast.error("No se pudo conectar con el SAT (Timeout)", { id: `rev-${uuid}` });
       } else {
-        // Vigente
-        item.resultado = resBase;
-        item.comentarioFiscal = comBase;
-        toast.success("Estatus actualizado exitosamente", { id: `rev-${index}` });
+        toast.success(`Estatus SAT actualizado: ${status.estado}`, { id: `rev-${uuid}` });
       }
-
-      newResults[targetIdx] = item;
-      setResults(newResults);
     } catch (error) {
       console.error("Revalidation error:", error);
-      toast.error("Error inesperado al revalidar", { id: `rev-${index}` });
+      toast.error("Error inesperado al revalidar", { id: `rev-${uuid}` });
+    } finally {
+      // Siempre liberar el bloqueo, incluso si falla
+      setRevalidatingUUIDs(prev => {
+        const next = new Set(prev);
+        next.delete(uuid);
+        return next;
+      });
     }
   };
 
@@ -835,8 +848,10 @@ export default function Dashboard() {
                   <tbody>
                     {paginatedResults.map((result, idx) => {
                       const absoluteIndex = (currentPage - 1) * ITEMS_PER_PAGE + idx;
+                      void absoluteIndex; // ya no se usa para refresh; se mantiene por si acaso
+                      const isRevalidating = revalidatingUUIDs.has(result.uuid);
                       return (
-                        <tr key={idx} className="border-b border-slate-100 dark:border-slate-800/50 hover:bg-indigo-50/30 dark:hover:bg-indigo-900/10 transition-colors group">
+                        <tr key={result.uuid || idx} className="border-b border-slate-100 dark:border-slate-800/50 hover:bg-indigo-50/30 dark:hover:bg-indigo-900/10 transition-colors group">
                           <td className="py-4 px-4 text-slate-900 dark:text-slate-100 font-bold truncate max-w-[150px] group-hover:text-indigo-600 transition-colors" title={result.fileName}>{result.fileName}</td>
                           <td className="py-4 px-4">
                             <div className="flex flex-col gap-1 max-w-[220px]">
@@ -908,12 +923,18 @@ export default function Dashboard() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => handleRevalidateSAT(absoluteIndex)}
-                              disabled={!result.uuid || result.uuid === "NO DISPONIBLE"}
+                              onClick={() => handleRevalidateSAT(result.uuid)}
+                              disabled={!result.uuid || result.uuid === "NO DISPONIBLE" || isRevalidating}
                               className="text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-full h-8 w-8 p-0"
-                              title={!result.uuid || result.uuid === "NO DISPONIBLE" ? "No se puede revalidar sin UUID" : "Actualizar estatus SAT"}
+                              title={
+                                isRevalidating
+                                  ? "Consultando SAT..."
+                                  : !result.uuid || result.uuid === "NO DISPONIBLE"
+                                    ? "No se puede revalidar sin UUID"
+                                    : "Actualizar estatus SAT"
+                              }
                             >
-                              <RefreshCcw className="w-4 h-4" />
+                              <RefreshCcw className={`w-4 h-4 ${isRevalidating ? "animate-spin text-indigo-400" : ""}`} />
                             </Button>
                           </td>
                         </tr>
