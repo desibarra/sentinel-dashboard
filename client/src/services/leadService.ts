@@ -20,7 +20,7 @@ export interface Lead {
 // Claves de localStorage
 export const LEAD_REGISTERED_KEY = "sentinel_lead_registered";
 export const XML_COUNT_KEY = "sentinel_xml_count";
-export const XML_LIMIT = 50;
+export const XML_LIMIT = 200;
 
 /**
  * Guarda un lead enviando un POST a JSONBin.

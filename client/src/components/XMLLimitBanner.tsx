@@ -79,7 +79,7 @@ export default function XMLLimitBanner({ limitReached = false }: XMLLimitBannerP
                     <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold mb-1">
                         XMLs procesados
                     </p>
-                    <p className="text-3xl font-black text-[#0B2340] dark:text-white">50 / 50</p>
+                    <p className="text-3xl font-black text-[#0B2340] dark:text-white">200 / 200</p>
                     <p className="text-[10px] text-slate-400 mt-1">Plan gratuito agotado</p>
                 </div>
 
