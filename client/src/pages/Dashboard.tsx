@@ -2259,9 +2259,7 @@ export default function Dashboard() {
             </p>
 
             <p className="text-[10px] text-slate-300 dark:text-slate-600 font-medium tracking-widest uppercase">
-
-              Motor Fiscal Sentinel Express v1.2.1 © 2026 | CFDI 4.0
-
+              Motor Fiscal Sentinel Express v1.2.1 | © 2026 Derechos Reservados | CFDI 4.0
             </p>
 
           </div>

@@ -99,8 +99,8 @@ export default function Pricing() {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-6xl mx-auto">
                     {plans.map((plan, idx) => (
                         <Card key={idx} className={`relative border-0 shadow-2xl rounded-[2.5rem] overflow-hidden transition-all duration-300 hover:-translate-y-2 group ${plan.popular
-                                ? 'bg-[#0B2340] text-white ring-4 ring-accent/20'
-                                : 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white border border-slate-200 dark:border-slate-800'
+                            ? 'bg-[#0B2340] text-white ring-4 ring-accent/20'
+                            : 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white border border-slate-200 dark:border-slate-800'
                             }`}>
                             {plan.popular && (
                                 <div className="absolute top-0 right-0 left-0 h-1.5 bg-gradient-to-r from-accent via-indigo-400 to-accent animate-gradient-x" />
@@ -143,8 +143,8 @@ export default function Pricing() {
 
                             <CardFooter className="px-8 pb-10">
                                 <Button className={`w-full h-14 rounded-2xl font-black uppercase tracking-widest text-xs transition-all duration-300 shadow-xl ${plan.popular
-                                        ? 'bg-accent hover:bg-white text-[#0B2340] shadow-accent/20 hover:shadow-white/20'
-                                        : 'bg-[#0B2340] dark:bg-white text-white dark:text-[#0B2340] hover:scale-[1.02]'
+                                    ? 'bg-accent hover:bg-white text-[#0B2340] shadow-accent/20 hover:shadow-white/20'
+                                    : 'bg-[#0B2340] dark:bg-white text-white dark:text-[#0B2340] hover:scale-[1.02]'
                                     }`}>
                                     {plan.cta}
                                 </Button>
@@ -184,6 +184,13 @@ export default function Pricing() {
                     >
                         Chatear con un Experto
                     </Button>
+                </div>
+
+                {/* Footer Copyright */}
+                <div className="mt-20 text-center">
+                    <p className="text-[10px] text-slate-400 dark:text-slate-600 font-medium tracking-widest uppercase">
+                        Sentinel Express v1.2.1 | © 2026 Derechos Reservados | Koppara Software
+                    </p>
                 </div>
             </div>
         </div>
