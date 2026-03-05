@@ -292,7 +292,7 @@ export default function Dashboard() {
 
       const alertas = validationResults.filter((r) => r.resultado.includes("🟡")).length;
 
-      const noUsable = validationResults.filter((r) => r.resultado.includes("ðŸ”´")).length;
+      const noUsable = validationResults.filter((r) => r.resultado.includes("🔴")).length;
 
 
 
@@ -338,7 +338,7 @@ export default function Dashboard() {
 
       alertCount: validationResults.filter((r) => r.resultado.includes("🟡")).length,
 
-      errorCount: validationResults.filter((r) => r.resultado.includes("ðŸ”´")).length,
+      errorCount: validationResults.filter((r) => r.resultado.includes("🔴")).length,
 
       totalAmount: validationResults.reduce((sum, r) => sum + r.total, 0),
 
@@ -440,7 +440,7 @@ export default function Dashboard() {
 
     alertas: results.filter((r) => r.resultado.includes("🟡")).length,
 
-    noUsable: results.filter((r) => r.resultado.includes("ðŸ”´")).length,
+    noUsable: results.filter((r) => r.resultado.includes("🔴")).length,
 
     totalMonto: results.reduce((sum, r) => sum + r.total, 0),
 
@@ -712,7 +712,7 @@ export default function Dashboard() {
 
         if (status.estado === "Cancelado") {
 
-          nuevoResultado = "ðŸ”´ NO DISPONIBLE (CANCELADO)";
+          nuevoResultado = "🔴 NO DISPONIBLE (CANCELADO)";
 
           nuevoComentario = `[CRÍTICO] CFDI CANCELADO en SAT. ${status.estatusCancelacion || ""}. No tiene efectos fiscales. ` + comBase;
 
@@ -1342,7 +1342,7 @@ export default function Dashboard() {
 
                 </div>
 
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-red-600 mb-2">ðŸ”´ No Usables</p>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-red-600 mb-2">🔴 No Usables</p>
 
                 <p className="text-4xl font-black text-red-800 dark:text-red-300 tracking-tighter">{stats.noUsable}</p>
 
@@ -1764,7 +1764,7 @@ export default function Dashboard() {
 
                               <div className="flex items-center gap-2 mt-0.5">
 
-                                <span className="text-[8px] uppercase tracking-widest text-slate-400 font-black">ðŸ“‹ copiar</span>
+                                <span className="text-[8px] uppercase tracking-widest text-slate-400 font-black">📋 copiar</span>
 
                                 {result.uuid && result.uuid !== "NO DISPONIBLE" && (
 
@@ -1784,7 +1784,7 @@ export default function Dashboard() {
 
                                   >
 
-                                    ðŸ”Ž Ver en SAT
+                                    🔎 Ver en SAT
 
                                   </a>
 
