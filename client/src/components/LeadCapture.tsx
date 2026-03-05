@@ -300,11 +300,26 @@ export default function LeadCapture({ onComplete }: LeadCaptureProps) {
                                     Procesando...
                                 </span>
                             ) : (
-                                "Comenzar diagnóstico →"
+                                "Probar Sentinel Express"
                             )}
                         </Button>
 
-                        <p className="text-center text-[10px] text-slate-400 dark:text-slate-500 mt-3">
+                        <div className="flex flex-col items-center gap-1.5 py-2 mt-2">
+                            <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 font-medium tracking-tight">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-[#F9C646]" />
+                                <span>Sin instalación</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 font-medium tracking-tight">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-[#F9C646]" />
+                                <span>Resultados en menos de 2 minutos</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 font-medium tracking-tight">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-[#F9C646]" />
+                                <span>Hasta 500 CFDI en la prueba gratuita</span>
+                            </div>
+                        </div>
+
+                        <p className="text-center text-[10px] text-slate-400 dark:text-slate-500 mt-1">
                             Al continuar, aceptas que tus datos sean utilizados para darte seguimiento comercial.
                             <br />
                             Tu información fiscal permanece privada en tu dispositivo.
