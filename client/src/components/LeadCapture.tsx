@@ -96,11 +96,23 @@ export default function LeadCapture({ onComplete }: LeadCaptureProps) {
                 console.warn("[LeadCapture] No se pudo guardar en JSONBin:", result.error);
                 toast.warning("No se pudo registrar tu información en este momento, pero puedes continuar.");
             } else {
-                toast.success("¡Registro exitoso! Comenzando diagnóstico...");
+                toast.success("¡Registro exitoso! Redirigiendo a WhatsApp para solicitar tu acceso...");
             }
 
             markLeadRegistered();
-            onComplete();
+
+            // Redirigir a WhatsApp para solicitar el token
+            const whatsappNumber = "524776355734";
+            const text = `Hola, quiero probar gratis la herramienta de diagnóstico fiscal. Acabo de registrarme.\n\nMi nombre es ${form.nombre} de la empresa ${form.empresa}. me podrías proporcionar mi token de acceso?`;
+            const encodedText = encodeURIComponent(text);
+            const whatsappUrl = `https://wa.me/${whatsappNumber}?text=${encodedText}`;
+
+            // Pequeño delay para que lean el toast y luego redirigir
+            setTimeout(() => {
+                window.location.href = whatsappUrl;
+                onComplete();
+            }, 1500);
+
         } catch (err) {
             console.error("[LeadCapture] Error inesperado:", err);
             // Aun con error, no bloqueamos al usuario
