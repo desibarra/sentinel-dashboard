@@ -12,10 +12,12 @@ import { CompanyProvider } from "./contexts/CompanyContext";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import UserManagement from "./pages/UserManagement";
 import Login from "./pages/Login";
+import Pricing from "./pages/Pricing";
 import TokenExpired from "./pages/TokenExpired";
 import DemoBanner from "./components/DemoBanner";
 import AdminTokens from "./pages/AdminTokens";
 import LeadCapture from "./components/LeadCapture";
+import { WhatsAppBubble } from "./components/WhatsAppBubble";
 import { useState, useEffect } from "react";
 import { persistDemoSession } from "./utils/tokenValidator";
 import { appDB } from "./db/appDB";
@@ -138,6 +140,7 @@ function Router() {
               <Route path="/help" component={HelpCenter} />
               <Route path="/manual" component={HelpCenter} />
               <Route path="/users" component={UserManagement} />
+              <Route path="/pricing" component={Pricing} />
               <Route path="/404" component={NotFound} />
               <Route component={NotFound} />
             </Switch>
@@ -167,6 +170,7 @@ function App() {
             <CompanyProvider>
               <Toaster />
               <Router />
+              <WhatsAppBubble />
             </CompanyProvider>
           </AuthProvider>
         </TooltipProvider>

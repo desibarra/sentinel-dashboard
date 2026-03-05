@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 
-import { CheckCircle2, AlertCircle, XCircle, TrendingUp, FileText, DollarSign, Download, Moon, Sun, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Settings, BookOpen, Clock, MessageCircle } from "lucide-react";
+import { CheckCircle2, AlertCircle, XCircle, TrendingUp, FileText, DollarSign, Download, Moon, Sun, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Settings, BookOpen, Clock, MessageCircle, Zap } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
@@ -407,25 +407,33 @@ export default function Dashboard() {
 
 
   const handleClearData = () => {
-
-    if (window.confirm("¿Estás seguro de eliminar todos los resultados actuales?")) {
-
+    if (window.confirm("¿Deseas eliminar el análisis actual? Esta acción no se puede deshacer.")) {
+      // 1. Borrar estado React
       setResults([]);
-
       setHasValidatedResults(false);
-
       setSortField(null);
-
       setSortDirection(null);
-
       setCurrentPage(1);
+      setXmlCount(0);
 
+      // 2. Limpiar almacenamiento local
       clearSessionCache();
+      localStorage.removeItem("sentinel_xml_count");
+      localStorage.removeItem("xmlAnalysis");
+      localStorage.removeItem("xmlResults");
 
-      toast.info("Tablero limpiado correctamente");
+      // 3. Limpiar IndexedDB si existe
+      if (window.indexedDB) {
+        indexedDB.deleteDatabase("SentinelAnalysis");
+      }
 
+      toast.info("Análisis limpiado correctamente");
+
+      // 4. Refrescar dashboard
+      setTimeout(() => {
+        window.location.reload();
+      }, 500);
     }
-
   };
 
 
@@ -531,10 +539,10 @@ export default function Dashboard() {
       }
 
       // 2) Actualizar el estado local (Soft delete en frontend)
-      const newResults = results.map(r => 
+      const newResults = results.map(r =>
         r.uuid === uuid ? { ...r, deleted: true, deletedAt: new Date().toISOString() } : r
       );
-      
+
       setResults(newResults);
 
       // 3) Persistir en sesión para que no reaparezca 
@@ -992,22 +1000,34 @@ export default function Dashboard() {
 
 
             <HistorySidebar onLoadHistory={handleLoadHistory}>
-
               <Button
-
                 variant="ghost"
-
                 className="text-white hover:bg-white/10 gap-2 border border-white/20 hover:border-white/40 px-4 rounded-xl"
-
               >
-
                 <History className="w-4 h-4 text-accent" />
-
                 <span className="text-xs font-bold uppercase tracking-wider">Historial</span>
-
               </Button>
-
             </HistorySidebar>
+
+            <Link href="/pricing">
+              <Button
+                variant="ghost"
+                className="text-white hover:bg-white/10 gap-2 border border-white/20 hover:border-white/40 px-4 rounded-xl h-10"
+              >
+                <Zap className="w-4 h-4 text-accent" />
+                <span className="text-xs font-bold uppercase tracking-wider">Planes</span>
+              </Button>
+            </Link>
+
+            <Button
+              variant="outline"
+              onClick={handleClearData}
+              className="text-white hover:bg-rose-500/20 border-white/20 hover:border-rose-500/50 px-4 rounded-xl gap-2 h-10"
+              title="Limpiar análisis actual y resetear contadores"
+            >
+              <Trash2 className="w-4 h-4 text-rose-400" />
+              <span className="text-xs font-bold uppercase tracking-wider">Limpiar análisis</span>
+            </Button>
 
 
 
@@ -1564,19 +1584,22 @@ export default function Dashboard() {
               </div>
 
               <Button
-
                 onClick={handleExportToExcel}
-
                 className="bg-primary hover:bg-primary/90 text-white font-black shadow-lg shadow-primary/20 gap-2 rounded-xl"
-
                 size="sm"
-
               >
-
                 <Download className="w-4 h-4" />
-
                 Exportar Reporte
+              </Button>
 
+              <Button
+                variant="destructive"
+                onClick={handleClearData}
+                className="ml-3 bg-rose-600 hover:bg-rose-700 text-white font-black shadow-lg shadow-rose-900/20 gap-2 rounded-xl"
+                size="sm"
+              >
+                <Trash2 className="w-4 h-4" />
+                Limpiar análisis
               </Button>
 
             </CardHeader>
@@ -1933,43 +1956,43 @@ export default function Dashboard() {
                           <td className="py-4 px-4">
 
                             <div className="flex flex-col gap-1">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleDeleteXML(result.uuid)}
-                              className="text-rose-500 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-full h-8 w-8 p-0"
-                              title="Eliminar XML del tablero (Soft Delete)"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleRevalidateSAT(result.uuid)}
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDeleteXML(result.uuid)}
+                                className="text-rose-500 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-full h-8 w-8 p-0"
+                                title="Eliminar XML del tablero (Soft Delete)"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleRevalidateSAT(result.uuid)}
 
-                              disabled={!result.uuid || result.uuid === "NO DISPONIBLE" || isRevalidating}
+                                disabled={!result.uuid || result.uuid === "NO DISPONIBLE" || isRevalidating}
 
-                              className="text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-full h-8 w-8 p-0"
+                                className="text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-full h-8 w-8 p-0"
 
-                              title={
+                                title={
 
-                                isRevalidating
+                                  isRevalidating
 
-                                  ? "Consultando SAT..."
+                                    ? "Consultando SAT..."
 
-                                  : !result.uuid || result.uuid === "NO DISPONIBLE"
+                                    : !result.uuid || result.uuid === "NO DISPONIBLE"
 
-                                    ? "No se puede revalidar sin UUID"
+                                      ? "No se puede revalidar sin UUID"
 
-                                    : "Actualizar estatus SAT"
+                                      : "Actualizar estatus SAT"
 
-                              }
+                                }
 
-                            >
+                              >
 
-                              <RefreshCcw className={`w-4 h-4 ${isRevalidating ? "animate-spin text-indigo-400" : ""}`} />
+                                <RefreshCcw className={`w-4 h-4 ${isRevalidating ? "animate-spin text-indigo-400" : ""}`} />
 
-                            </Button>
+                              </Button>
                             </div>
 
                           </td>
@@ -2082,29 +2105,32 @@ export default function Dashboard() {
 
           </Card>
 
-        )}
+        )
+        }
 
 
 
         {/* Empty State */}
 
-        {stats.total === 0 && !loading && (
+        {
+          stats.total === 0 && !loading && (
 
-          <Card className="border-0 shadow-sm text-center py-12">
+            <Card className="border-0 shadow-sm text-center py-12">
 
-            <CardContent>
+              <CardContent>
 
-              <FileText className="w-16 h-16 mx-auto text-slate-300 mb-4" />
+                <FileText className="w-16 h-16 mx-auto text-slate-300 mb-4" />
 
-              <p className="text-slate-600 mb-2">No hay CFDI procesados aún</p>
+                <p className="text-slate-600 mb-2">No hay CFDI procesados aún</p>
 
-              <p className="text-slate-500 text-sm">Carga archivos XML en la sección superior para comenzar</p>
+                <p className="text-slate-500 text-sm">Carga archivos XML en la sección superior para comenzar</p>
 
-            </CardContent>
+              </CardContent>
 
-          </Card>
+            </Card>
 
-        )}
+          )
+        }
 
 
 
@@ -2243,10 +2269,7 @@ export default function Dashboard() {
         </div>
 
       </div>
-
     </div>
-
   );
-
 }
 
