@@ -82,13 +82,13 @@ export default function Dashboard() {
 
 
 
-  // â”€â”€ Contador de XMLs procesados (informativo, sin límite visible) â”€â”€
+  // ── Contador de XMLs procesados (informativo, sin límite visible) ──
 
   const [xmlCount, setXmlCount] = useState<number>(getXMLCount());
 
 
 
-  // â”€â”€ UUIDs que están siendo revalidados en este momento (para deshabilitar su botón) â”€â”€
+  // ── UUIDs que están siendo revalidados en este momento (para deshabilitar su botón) ──
 
   const [revalidatingUUIDs, setRevalidatingUUIDs] = useState<Set<string>>(new Set());
 
@@ -108,7 +108,7 @@ export default function Dashboard() {
 
 
 
-  // â”€â”€ Progreso de procesamiento masivo â”€â”€
+  // ── Progreso de procesamiento masivo ──
 
   const [processingPhase, setProcessingPhase] = useState<string | null>(null);
 
@@ -248,7 +248,7 @@ export default function Dashboard() {
 
           const from = Math.max(1, current - 199);
 
-          setProcessingPhase(`Analizando CFDI ${from.toLocaleString()}â€“${current.toLocaleString()} de ${total.toLocaleString()}`);
+          setProcessingPhase(`Analizando CFDI ${from.toLocaleString()}–${current.toLocaleString()} de ${total.toLocaleString()}`);
 
         }
 
@@ -368,7 +368,7 @@ export default function Dashboard() {
 
     setCurrentPage(1);               // regresa a la primera página de la tabla
 
-    toast.success(`Proceso restaurado: ${(history.xmlCount || 0).toLocaleString()} CFDI Â· ${history.fileName}`, { duration: 4000 });
+    toast.success(`Proceso restaurado: ${(history.xmlCount || 0).toLocaleString()} CFDI · ${history.fileName}`, { duration: 4000 });
 
   };
 
@@ -408,7 +408,7 @@ export default function Dashboard() {
 
   const handleClearData = () => {
 
-    if (window.confirm("Â¿Estás seguro de eliminar todos los resultados actuales?")) {
+    if (window.confirm("¿Estás seguro de eliminar todos los resultados actuales?")) {
 
       setResults([]);
 
@@ -652,7 +652,7 @@ export default function Dashboard() {
 
    * handleRevalidateSAT
 
-   * Recibe el UUID de la fila â€” NUNCA índices.
+   * Recibe el UUID de la fila — NUNCA índices.
 
    * Usa setResults con .map por UUID para garantizar que solo esa fila se modifique,
 
@@ -690,7 +690,7 @@ export default function Dashboard() {
 
 
 
-      // Actualizar SOLO la fila cuyo UUID coincide â€” inmune al sort y la páginación
+      // Actualizar SOLO la fila cuyo UUID coincide — inmune al sort y la páginación
 
       setResults(prev => prev.map(row => {
 
@@ -788,7 +788,7 @@ export default function Dashboard() {
 
 
 
-  // âœ… PRODUCCIÓN: Paginación para evitar render masivo
+  // ✅ PRODUCCIÓN: Paginación para evitar render masivo
 
   const totalPages = Math.ceil(sortedResults.length / ITEMS_PER_PAGE);
 
@@ -838,7 +838,7 @@ export default function Dashboard() {
 
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 p-4 md:p-8 transition-colors duration-200">
 
-      {/* â”€â”€ Botón flotante WhatsApp (solo cuando hay resultados) â”€â”€ */}
+      {/* ── Botón flotante WhatsApp (solo cuando hay resultados) ── */}
 
       {(results.length > 0 || isValidating) && (
 
@@ -914,7 +914,7 @@ export default function Dashboard() {
 
 
 
-            {/* â”€â”€ Contador informativo XML (sin límite visible) â”€â”€ */}
+            {/* ── Contador informativo XML (sin límite visible) ── */}
 
             {xmlCount > 0 && (
 
@@ -934,7 +934,7 @@ export default function Dashboard() {
 
 
 
-            {/* â”€â”€ Botón comercial WhatsApp (header) â”€â”€ */}
+            {/* ── Botón comercial WhatsApp (header) ── */}
 
             <button
 
@@ -1034,7 +1034,7 @@ export default function Dashboard() {
 
 
 
-        {/* â”€â”€ Banner de privacidad / confianza â”€â”€ */}
+        {/* ── Banner de privacidad / confianza ── */}
 
         <div className="flex items-center gap-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 rounded-2xl px-5 py-3 mb-6 text-emerald-800 dark:text-emerald-300">
 
@@ -1180,7 +1180,7 @@ export default function Dashboard() {
 
 
 
-        {/* â”€â”€ Indicador de progreso masivo â”€â”€ */}
+        {/* ── Indicador de progreso masivo ── */}
 
         {isValidating && progress.total > 0 && (
 
@@ -1208,7 +1208,7 @@ export default function Dashboard() {
 
                       </p>
 
-                      <p className="text-xs text-slate-500 font-medium">Analizando estructura fiscal en tu navegador Â· sin enviar datos al servidor.</p>
+                      <p className="text-xs text-slate-500 font-medium">Analizando estructura fiscal en tu navegador · sin enviar datos al servidor.</p>
 
                     </div>
 
@@ -1796,7 +1796,7 @@ export default function Dashboard() {
 
                           </td>
 
-                          {/* â”€â”€ Tipo CFDI badge â”€â”€ */}
+                          {/* ── Tipo CFDI badge ── */}
 
                           <td className="py-4 px-4 whitespace-nowrap">
 
@@ -1818,7 +1818,7 @@ export default function Dashboard() {
 
                               };
 
-                              const info = map[tipo] ?? { label: tipo || "â€”", cls: "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400 border-slate-200 dark:border-slate-700" };
+                              const info = map[tipo] ?? { label: tipo || "—", cls: "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400 border-slate-200 dark:border-slate-700" };
 
                               return (
 
@@ -1946,7 +1946,7 @@ export default function Dashboard() {
 
 
 
-              {/* âœ… PRODUCCIÓN: Controles de paginación */}
+              {/* ✅ PRODUCCIÓN: Controles de paginación */}
 
               {totalPages > 1 && (
 
@@ -2068,7 +2068,7 @@ export default function Dashboard() {
 
 
 
-        {/* â”€â”€ Footer de Autoridad + Redes Sociales â”€â”€ */}
+        {/* ── Footer de Autoridad + Redes Sociales ── */}
 
         <div className="mt-12 border-t border-slate-200 dark:border-slate-700 pt-8 pb-4">
 
@@ -2186,13 +2186,13 @@ export default function Dashboard() {
 
               </a>{" "}
 
-              â€” Inteligencia fiscal aplicada a CFDI.
+              — Inteligencia fiscal aplicada a CFDI.
 
             </p>
 
             <p className="text-[10px] text-slate-300 dark:text-slate-600 font-medium tracking-widest uppercase">
 
-              Motor Fiscal Sentinel Express v1.2.1 Â© 2026 | CFDI 4.0
+              Motor Fiscal Sentinel Express v1.2.1 © 2026 | CFDI 4.0
 
             </p>
 
