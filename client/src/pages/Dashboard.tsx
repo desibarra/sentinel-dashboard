@@ -52,7 +52,7 @@ import { saveSessionCache, loadSessionCache, clearSessionCache, getCacheAge } fr
 
 type DashboardResult = ValidationResult;
 
-type SortField = 'fileName' | 'uuid' | 'fechaEmision' | 'rfcEmisor' | 'total' | 'estatusSAT' | 'resultado' | 'comentarioFiscal';
+type SortField = 'fileName' | 'uuid' | 'tipoCFDI' | 'fechaEmision' | 'rfcEmisor' | 'total' | 'estatusSAT' | 'resultado' | 'comentarioFiscal';
 
 type SortDirection = 'asc' | 'desc' | null;
 
@@ -288,9 +288,9 @@ export default function Dashboard() {
 
 
 
-      const usable = validationResults.filter((r) => r.resultado.includes("ðŸŸ¢")).length;
+      const usable = validationResults.filter((r) => r.resultado.includes("🟢")).length;
 
-      const alertas = validationResults.filter((r) => r.resultado.includes("ðŸŸ¡")).length;
+      const alertas = validationResults.filter((r) => r.resultado.includes("🟡")).length;
 
       const noUsable = validationResults.filter((r) => r.resultado.includes("ðŸ”´")).length;
 
@@ -334,9 +334,9 @@ export default function Dashboard() {
 
       xmlCount: validationResults.length,
 
-      usableCount: validationResults.filter((r) => r.resultado.includes("ðŸŸ¢")).length,
+      usableCount: validationResults.filter((r) => r.resultado.includes("🟢")).length,
 
-      alertCount: validationResults.filter((r) => r.resultado.includes("ðŸŸ¡")).length,
+      alertCount: validationResults.filter((r) => r.resultado.includes("🟡")).length,
 
       errorCount: validationResults.filter((r) => r.resultado.includes("ðŸ”´")).length,
 
@@ -436,9 +436,9 @@ export default function Dashboard() {
 
     total: results.length,
 
-    usable: results.filter((r) => r.resultado.includes("ðŸŸ¢")).length,
+    usable: results.filter((r) => r.resultado.includes("🟢")).length,
 
-    alertas: results.filter((r) => r.resultado.includes("ðŸŸ¡")).length,
+    alertas: results.filter((r) => r.resultado.includes("🟡")).length,
 
     noUsable: results.filter((r) => r.resultado.includes("ðŸ”´")).length,
 
@@ -480,9 +480,9 @@ export default function Dashboard() {
 
   const getStatusIcon = (resultado: string) => {
 
-    if (resultado.includes("ðŸŸ¢")) return <CheckCircle2 className="w-5 h-5 text-emerald-800" />;
+    if (resultado.includes("🟢")) return <CheckCircle2 className="w-5 h-5 text-emerald-800" />;
 
-    if (resultado.includes("ðŸŸ¡")) return <AlertCircle className="w-5 h-5 text-amber-700" />;
+    if (resultado.includes("🟡")) return <AlertCircle className="w-5 h-5 text-amber-700" />;
 
     return <XCircle className="w-5 h-5 text-red-800" />;
 
@@ -492,9 +492,9 @@ export default function Dashboard() {
 
   const getStatusBadge = (resultado: string) => {
 
-    if (resultado.includes("ðŸŸ¢")) return <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 hover:bg-emerald-500/20 px-3 py-1 font-black uppercase tracking-tighter animate-in fade-in zoom-in duration-500">Usable</Badge>;
+    if (resultado.includes("🟢")) return <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 hover:bg-emerald-500/20 px-3 py-1 font-black uppercase tracking-tighter animate-in fade-in zoom-in duration-500">Usable</Badge>;
 
-    if (resultado.includes("ðŸŸ¡")) return <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/20 hover:bg-amber-500/20 px-3 py-1 font-black uppercase tracking-tighter">Alertas</Badge>;
+    if (resultado.includes("🟡")) return <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/20 hover:bg-amber-500/20 px-3 py-1 font-black uppercase tracking-tighter">Alertas</Badge>;
 
     return <Badge className="bg-rose-500/10 text-rose-600 border-rose-500/20 hover:bg-rose-500/20 px-3 py-1 font-black uppercase tracking-tighter animate-pulse">No Usable</Badge>;
 
@@ -611,6 +611,12 @@ export default function Dashboard() {
       case 'estatusSAT':
 
         comparison = a.estatusSAT.localeCompare(b.estatusSAT);
+
+        break;
+
+      case 'tipoCFDI':
+
+        comparison = (a.tipoCFDI || '').localeCompare(b.tipoCFDI || '');
 
         break;
 
@@ -1288,7 +1294,7 @@ export default function Dashboard() {
 
                 </div>
 
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600 mb-2">ðŸŸ¢ Usables</p>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600 mb-2">🟢 Usables</p>
 
                 <p className="text-4xl font-black text-emerald-800 dark:text-emerald-300 tracking-tighter">{stats.usable}</p>
 
@@ -1312,7 +1318,7 @@ export default function Dashboard() {
 
                 </div>
 
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-600 mb-2">ðŸŸ¡ Alertas</p>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-600 mb-2">🟡 Alertas</p>
 
                 <p className="text-4xl font-black text-amber-800 dark:text-amber-300 tracking-tighter">{stats.alertas}</p>
 
@@ -1588,7 +1594,13 @@ export default function Dashboard() {
 
                       <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400 border-b border-slate-200 dark:border-slate-800 bg-inherit">
 
-                        Tipo CFDI
+                        <button
+                          onClick={() => handleSort('tipoCFDI')}
+                          className="group flex items-center gap-2 hover:text-indigo-500 transition-colors"
+                        >
+                          Tipo CFDI
+                          {getSortIcon('tipoCFDI')}
+                        </button>
 
                       </th>
 
