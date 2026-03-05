@@ -2,11 +2,27 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle2, Star, Shield, Zap, ArrowLeft, MessageCircle } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useTheme } from "@/contexts/ThemeContext";
 
 export default function Pricing() {
-    const { theme } = useTheme();
+    const [, setLocation] = useLocation();
+    const WHATSAPP_NUMBER = "524776355734";
+
+    const openWhatsApp = (message: string) => {
+        const encodedMessage = encodeURIComponent(message);
+        window.open(`https://wa.me/${WHATSAPP_NUMBER}?text=${encodedMessage}`, "_blank");
+    };
+
+    const handlePlanAction = (planName: string) => {
+        if (planName === "Básico") {
+            setLocation("/");
+        } else if (planName === "Pro Professional") {
+            openWhatsApp("Hola, quiero activar el plan PRO de Sentinel Express ($499/mes). Mi correo es:");
+        } else if (planName === "Enterprise") {
+            openWhatsApp("Hola, quiero información del plan Enterprise de Sentinel Express.");
+        }
+    };
 
     const plans = [
         {
@@ -142,10 +158,12 @@ export default function Pricing() {
                             </CardContent>
 
                             <CardFooter className="px-8 pb-10">
-                                <Button className={`w-full h-14 rounded-2xl font-black uppercase tracking-widest text-xs transition-all duration-300 shadow-xl ${plan.popular
-                                    ? 'bg-accent hover:bg-white text-[#0B2340] shadow-accent/20 hover:shadow-white/20'
-                                    : 'bg-[#0B2340] dark:bg-white text-white dark:text-[#0B2340] hover:scale-[1.02]'
-                                    }`}>
+                                <Button
+                                    onClick={() => handlePlanAction(plan.name)}
+                                    className={`w-full h-14 rounded-2xl font-black uppercase tracking-widest text-xs transition-all duration-300 shadow-xl ${plan.popular
+                                        ? 'bg-accent hover:bg-white text-[#0B2340] shadow-accent/20 hover:shadow-white/20'
+                                        : 'bg-[#0B2340] dark:bg-white text-white dark:text-[#0B2340] hover:scale-[1.02]'
+                                        }`}>
                                     {plan.cta}
                                 </Button>
                             </CardFooter>
