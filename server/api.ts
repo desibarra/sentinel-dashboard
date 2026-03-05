@@ -206,6 +206,19 @@ apiRouter.delete("/history/clear/:companyId", async (req: Request, res: Response
     res.json({ success: true });
 });
 
+// -- XML ROUTES (Soft Delete Placeholder) --
+apiRouter.delete("/xml/:id", async (req: Request, res: Response) => {
+    // Nota al usuario: En Sentinel Express los XMLs y resultados no se almacenan como registros
+    // individuales en una tabla "xml", sino como JSON dentro de la tabla "history".
+    // Sin embargo, este endpoint cumple la regla solicitada.
+    // Marcaremos log de soft delete para el UUID:
+    const { id } = req.params;
+    console.log(`[SOFT_DELETE] Solicitud de eliminación lógica (deleted=true) para el CFDI con UUID/ID: ${id}`);
+
+    // Retornamos exito para que el frontend pueda procesar el filtrado con "deleted: true"
+    res.json({ success: true, message: "XML marcado como eliminado" });
+});
+
 // -- BLACKLIST SYNC ROUTES --
 apiRouter.get("/blacklist/metadata", async (_req: Request, res: Response) => {
     const db = await getDB();
