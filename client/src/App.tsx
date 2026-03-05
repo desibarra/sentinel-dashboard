@@ -103,7 +103,7 @@ function Router() {
   // Lead capture: mostrar formulario si el usuario está autenticado
   // pero aún no se ha registrado como prospecto.
   // Las rutas públicas (/login, /admin-tokens, /token-expired) no lo requieren.
-  if (user && !leadReady) {
+  if (user && !leadReady && user.role !== 'admin') {
     return <LeadCapture onComplete={handleLeadComplete} />;
   }
 
