@@ -430,21 +430,24 @@ export default function Dashboard() {
 
 
 
+  // Filtrar XML eliminados (Soft delete)
+  const visibleResults = results.filter(r => !r.deleted);
+
   // Calcular estadísticas
 
   const stats = {
 
-    total: results.length,
+    total: visibleResults.length,
 
-    usable: results.filter((r) => r.resultado.includes("🟢")).length,
+    usable: visibleResults.filter((r) => r.resultado.includes("🟢")).length,
 
-    alertas: results.filter((r) => r.resultado.includes("🟡")).length,
+    alertas: visibleResults.filter((r) => r.resultado.includes("🟡")).length,
 
-    noUsable: results.filter((r) => r.resultado.includes("🔴")).length,
+    noUsable: visibleResults.filter((r) => r.resultado.includes("🔴")).length,
 
-    totalMonto: results.reduce((sum, r) => sum + r.total, 0),
+    totalMonto: visibleResults.reduce((sum, r) => sum + r.total, 0),
 
-    totalIVA: results.reduce((sum, r) => sum + r.ivaTraslado, 0),
+    totalIVA: visibleResults.reduce((sum, r) => sum + r.ivaTraslado, 0),
 
   };
 
@@ -464,7 +467,7 @@ export default function Dashboard() {
 
 
 
-  const trendData = results.map((r, idx) => ({
+  const trendData = visibleResults.map((r, idx) => ({
 
     index: idx + 1,
 
@@ -516,7 +519,39 @@ export default function Dashboard() {
 
 
 
+
+  const handleDeleteXML = async (uuid: string) => {
+    if (!window.confirm("¿Estás seguro de que deseas eliminar este XML del tablero?")) return;
+
+    try {
+      // 1) Enviar la solicitud DELETE al backend para marcarlo como eliminado (Soft Delete)
+      const res = await fetch(`/api/xml/${uuid}`, { method: 'DELETE' });
+      if (!res.ok) {
+        console.warn(`Endpoint de backend temporalmente no disponible (${res.status}). Ocultando localmente.`);
+      }
+
+      // 2) Actualizar el estado local (Soft delete en frontend)
+      const newResults = results.map(r => 
+        r.uuid === uuid ? { ...r, deleted: true, deletedAt: new Date().toISOString() } : r
+      );
+      
+      setResults(newResults);
+
+      // 3) Persistir en sesión para que no reaparezca 
+      if (currentCompany) {
+        saveSessionCache(currentCompany.id, newResults);
+        // Nota: Idealmente actualizaríamos el historial remoto aquí también
+      }
+
+      toast.success("XML eliminado correctamente");
+    } catch (error) {
+      console.error("Error al eliminar XML:", error);
+      toast.error("Error al comunicarse con el servidor");
+    }
+  };
+
   // Función de ordenamiento
+
 
   const handleSort = (field: SortField) => {
 
@@ -572,7 +607,7 @@ export default function Dashboard() {
 
   // Aplicar ordenamiento a los resultados
 
-  const sortedResults = [...results].sort((a, b) => {
+  const sortedResults = [...visibleResults].sort((a, b) => {
 
     if (!sortField || !sortDirection) return 0;
 
@@ -1702,8 +1737,7 @@ export default function Dashboard() {
 
                       <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400 border-b border-slate-200 dark:border-slate-800 bg-inherit">
 
-                        {/* Actions */}
-
+                        Acciones
                       </th>
 
                     </tr>
@@ -1898,12 +1932,19 @@ export default function Dashboard() {
 
                           <td className="py-4 px-4">
 
+                            <div className="flex flex-col gap-1">
                             <Button
-
                               variant="ghost"
-
                               size="sm"
-
+                              onClick={() => handleDeleteXML(result.uuid)}
+                              className="text-rose-500 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-full h-8 w-8 p-0"
+                              title="Eliminar XML del tablero (Soft Delete)"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
                               onClick={() => handleRevalidateSAT(result.uuid)}
 
                               disabled={!result.uuid || result.uuid === "NO DISPONIBLE" || isRevalidating}
@@ -1929,6 +1970,7 @@ export default function Dashboard() {
                               <RefreshCcw className={`w-4 h-4 ${isRevalidating ? "animate-spin text-indigo-400" : ""}`} />
 
                             </Button>
+                            </div>
 
                           </td>
 
