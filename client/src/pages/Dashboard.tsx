@@ -257,21 +257,20 @@ export default function Dashboard() {
 
 
       const validationResults = await validateXMLFiles(files, currentCompany.giro, onBatchProgress);
-
       setProcessingPhase(null);
 
-      const newResults = [...results, ...validationResults];
+      // --- FILTRO DE DESDUPLICACIÓN ---
+      // Evitar que archivos con el mismo UUID se agreguen si ya están en la vista actual
+      const existingUUIDs = new Set(results.map(r => r.uuid));
+      const uniqueNewResults = validationResults.filter(r => !existingUUIDs.has(r.uuid));
+      const skippedCount = validationResults.length - uniqueNewResults.length;
 
+      const newResults = [...results, ...uniqueNewResults];
       setResults(newResults);
-
       setHasValidatedResults(true);
 
-
-
-      // Actualizar contador informativo
-
-      const newCount = incrementXMLCount(validationResults.length);
-
+      // Actualizar contador informativo solo con los nuevos reales
+      const newCount = incrementXMLCount(uniqueNewResults.length);
       setXmlCount(newCount);
 
 
