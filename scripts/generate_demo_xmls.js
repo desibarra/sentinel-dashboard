@@ -16,7 +16,7 @@ const generateXML = (filename, data) => {
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.sat.gob.mx/cfd/4 http://www.sat.gob.mx/sitio_internet/cfd/4/cfdv40.xsd" Version="4.0" Serie="DEMO" Folio="${data.folio || '001'}" Fecha="2026-03-04T12:00:00" Sello="---" FormaPago="03" NoCertificado="00001000000504465950" Certificado="---" SubTotal="${data.subtotal.toFixed(2)}" Moneda="MXN" Total="${data.total.toFixed(2)}" TipoDeComprobante="${data.tipo || 'I'}" Exportacion="01" MetodoPago="PUE" LugarExpedicion="45000">
     <cfdi:Emisor Rfc="${data.emisorRfc}" Nombre="${data.emisorNombre}" RegimenFiscal="601"/>
-    <cfdi:Receptor Rfc="UACJ700101TXA" Nombre="UNIVERSIDAD AUTONOMA DE CIUDAD JUAREZ" DomicilioFiscalReceptor="32310" RegimenFiscalReceptor="603" UsoCFDI="G03"/>
+    <cfdi:Receptor Rfc="IATD70020G77" Nombre="EMPRESA SA DE CV" DomicilioFiscalReceptor="32310" RegimenFiscalReceptor="603" UsoCFDI="G03"/>
     <cfdi:Conceptos>
         <cfdi:Concepto ClaveProdServ="${data.claveProdServ || '84111506'}" NoIdentificacion="7501030034" Cantidad="1.00" ClaveUnidad="E48" Unidad="Unidad de servicio" Descripcion="${data.descripcion}" ValorUnitario="${data.importeUnitario.toFixed(2)}" Importe="${data.importeUnitario.toFixed(2)}" ObjetoImp="02">
             <cfdi:Impuestos>
