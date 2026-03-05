@@ -1897,10 +1897,11 @@
       <h2 class="cta-title">Protege tu empresa<br>del <span class="acc">riesgo fiscal</span></h2>
       <p class="cta-desc">Analiza tus CFDI y detecta posibles inconsistencias antes de que se conviertan en un problema
         con el SAT.</p>
-      <div class="cta-form">
-        <input class="cta-input" type="email" placeholder="correo@tuempresa.com">
-        <button class="cta-submit">Comenzar diagnóstico →</button>
-      </div>
+      <form id="lead-form" class="cta-form" name="leads" method="POST" data-netlify="true">
+        <input type="hidden" name="form-name" value="leads" />
+        <input class="cta-input" type="email" name="email" placeholder="correo@tuempresa.com" required>
+        <button type="submit" class="cta-submit">Comenzar diagnóstico →</button>
+      </form>
       <p class="cta-note">Sin compromisos · Análisis local y privado · Soporte en español</p>
       <div class="cta-trust">
         <div class="trust-item"><span class="ti">✅</span> CFDI 4.0</div>
@@ -1970,10 +1971,64 @@
 
     document.querySelectorAll('a[href^="#"]').forEach(a => {
       a.addEventListener('click', e => {
-        const t = document.querySelector(a.getAttribute('href'));
-        if (t) { e.preventDefault(); t.scrollIntoView({ behavior: 'smooth' }); }
+        const targetId = a.getAttribute('href');
+        const t = document.querySelector(targetId);
+        if (t) { 
+          e.preventDefault(); 
+          t.scrollIntoView({ behavior: 'smooth' }); 
+          
+          if (targetId === '#contacto') {
+            setTimeout(() => {
+              const input = document.querySelector('#lead-form input[type="email"]');
+              if(input) input.focus();
+            }, 600);
+          }
+        }
       });
     });
+
+    const leadForm = document.getElementById('lead-form');
+    if (leadForm) {
+      leadForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const input = leadForm.querySelector('input[type="email"]');
+        const btn = leadForm.querySelector('button[type="submit"]');
+        const email = input.value.trim();
+        
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if(!emailRegex.test(email)) {
+          alert("Por favor, ingresa un correo electrónico válido.");
+          return;
+        }
+
+        const originalText = btn.textContent;
+        btn.textContent = "Procesando...";
+        btn.disabled = true;
+        btn.style.opacity = "0.7";
+
+        try {
+          const formData = new FormData(leadForm);
+          // Netlify forms AJAX submission
+          await fetch("/", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams(formData).toString()
+          });
+
+          // Redirect to WA
+          const waPhone = '524776355734';
+          const waText = encodeURIComponent('Hola, quiero probar gratis la herramienta de diagnóstico fiscal.');
+          window.location.href = `https://wa.me/${waPhone}?text=${waText}`;
+
+        } catch (error) {
+          alert("Hubo un error al procesar tu solicitud. Por favor intenta de nuevo.");
+          btn.textContent = originalText;
+          btn.disabled = false;
+          btn.style.opacity = "1";
+        }
+      });
+    }
   </script>
 </body>
 
