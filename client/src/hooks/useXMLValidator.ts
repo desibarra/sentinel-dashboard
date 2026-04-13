@@ -248,18 +248,32 @@ export function useXMLValidator() {
       // NO exigir TipoRelacion a Facturas, Pagos, Nómina o Traslado
       if (tipoRealDocumento === "Nota de Crédito") {
         if (tieneCfdiRelacionados === "NO" || tipoRelacion !== "01") {
-          return createErrorResult(
+          return createWarningResult(
             fileName,
-            `ERROR FISCAL: Nota de Crédito (Tipo E) debe tener CfdiRelacionados con TipoRelacion='01'. Encontrado: ${tipoRelacion === "NO DISPONIBLE" ? "sin CfdiRelacionados" : `TipoRelacion='${tipoRelacion}'`}. Regla SAT: Anexo 20 CFDI 3.3/4.0 - Tipo de relación 01 para Notas de Crédito.`
+            `Nota de Crédito sin TipoRelacion=01. Encontrado: ${tipoRelacion === "NO DISPONIBLE" ? "sin CfdiRelacionados" : `TipoRelacion='${tipoRelacion}'`}.`,
+            {
+              uuid, tipoCFDI, serie, folio, fechaEmision, horaEmision, añoFiscal,
+              rfcEmisor, nombreEmisor, rfcReceptor, nombreReceptor,
+              tipoRealDocumento: "Nota de Crédito",
+              tieneCfdiRelacionados, tipoRelacion, uuidRelacionado, uuids_relacionados,
+              giroEmpresa,
+            }
           );
         }
       }
 
       if (tipoRealDocumento === "Nota de Cargo") {
         if (tieneCfdiRelacionados === "NO" || tipoRelacion !== "02") {
-          return createErrorResult(
+          return createWarningResult(
             fileName,
-            `ERROR FISCAL: Nota de Cargo (Tipo I con relación) debe tener CfdiRelacionados con TipoRelacion='02'. Encontrado: ${tipoRelacion === "NO DISPONIBLE" ? "sin CfdiRelacionados" : `TipoRelacion='${tipoRelacion}'`}. Regla SAT: Anexo 20 CFDI 3.3/4.0 - Tipo de relación 02 para Notas de Débito/Cargo.`
+            `Nota de Cargo sin TipoRelacion=02. Encontrado: ${tipoRelacion === "NO DISPONIBLE" ? "sin CfdiRelacionados" : `TipoRelacion='${tipoRelacion}'`}.`,
+            {
+              uuid, tipoCFDI, serie, folio, fechaEmision, horaEmision, añoFiscal,
+              rfcEmisor, nombreEmisor, rfcReceptor, nombreReceptor,
+              tipoRealDocumento: "Nota de Cargo",
+              tieneCfdiRelacionados, tipoRelacion, uuidRelacionado, uuids_relacionados,
+              giroEmpresa,
+            }
           );
         }
       }
@@ -361,9 +375,9 @@ export function useXMLValidator() {
             tipoCambio: 1,
             formaPago: comprobante?.getAttribute("FormaPago") || "NO DISPONIBLE",
             metodoPago: comprobante?.getAttribute("MetodoPago") || "NO DISPONIBLE",
-            nivelValidacion: "ESTRUCTURAL, NÓMINA",
+            nivelValidacion: "NÓMINA - ESTRUCTURA INVÁLIDA",
             resultado: "🔴 NO USABLE",
-            comentarioFiscal: `ERROR FISCAL: ${nominaInfo.errorMsg}`,
+            comentarioFiscal: `Complemento de Nómina no encontrado o ilegible. ${nominaInfo.errorMsg}. Verificar que el XML contenga el nodo nomina12:Nomina.`,
             observacionesTecnicas: nominaInfo.errorMsg,
             iva: 0,
             isValid: false,
@@ -408,9 +422,20 @@ export function useXMLValidator() {
       );
 
       // ✅ SKILL sentinel-express-pro v1.0.0 - BLOQUE 5 - Regla 5.1
-      // Si complemento Pagos es obligatorio y no válido → NO USABLE
+      // PPD sin complemento Pagos → 🟡 ALERTA (el CFDI existe, falta el REP)
       if (pagosInfo.valido === "NO" && pagosInfo.errorMsg) {
-        return createErrorResult(fileName, pagosInfo.errorMsg);
+        return createWarningResult(
+          fileName,
+          `CFDI PPD sin Complemento de Pagos (REP). ${pagosInfo.errorMsg}.`,
+          {
+            uuid, tipoCFDI, serie, folio, fechaEmision, horaEmision, añoFiscal,
+            rfcEmisor, nombreEmisor, rfcReceptor, nombreReceptor,
+            tipoRealDocumento,
+            metodoPago: comprobante?.getAttribute("MetodoPago") || "PPD",
+            total: parseFloat(comprobante?.getAttribute("Total") || "0"),
+            giroEmpresa,
+          }
+        );
       }
 
       // IMPUESTOS CORRECTOS (POR CONCEPTO) - Solo para NO nómina
@@ -528,11 +553,11 @@ export function useXMLValidator() {
 
       if (rfcEmisorBlacklist?.found) {
         if (rfcEmisorBlacklist.is69B) {
-          resultado = "🔴 NO USABLE (RFC 69-B)";
+          resultado = "🔴 NO USABLE";
           comentarioFiscal = `[CRÍTICO] RFC EMISOR EN LISTA 69-B (${rfcEmisorBlacklist.situacion}). Operaciones inexistentes. NO DEDUCIBLE. ` + comentarioFiscal;
           blacklistNivelValidacion = "ERROR";
         } else if (rfcEmisorBlacklist.isEFOS) {
-          resultado = "🟡 ALERTA (RFC EFOS)";
+          resultado = "🟡 ALERTA";
           comentarioFiscal = `[ALERTA] RFC EMISOR EN LISTA EFOS (Facturera). Revisar documentación soporte. ` + comentarioFiscal;
         }
       }
@@ -593,7 +618,7 @@ export function useXMLValidator() {
 
       // REGLA CRÍTICA: Si está CANCELADO, anular validez fiscal
       if (finalEstatusSAT === "Cancelado") {
-        finalResultado = `🔴 NO DISPONIBLE (CANCELADO)`;
+        finalResultado = `🔴 NO USABLE`;
         finalComentarioFiscal = `[CRÍTICO] CFDI CANCELADO en SAT. ${finalEstatusCancelacion}. No tiene efectos fiscales. ` + comentarioMotor;
         finalNivelValidacion = "ERROR";
         finalScore = 0;
@@ -700,12 +725,26 @@ export function useXMLValidator() {
     }
   };
 
-  const createErrorResult = (fileName: string, errorMsg: string, giroEmpresa?: string): ValidationResult => ({
-    fileName,
-    uuid: "NO DISPONIBLE",
-    resultadoMotor: "🔴 NO USABLE",
-    comentarioMotor: errorMsg,
-    giroEmpresa,
+  const createErrorResult = (
+    fileName: string, 
+    errorMsg: string, 
+    giroEmpresa?: string,
+    errorGrave: boolean = true,
+    warning: boolean = false
+  ): ValidationResult => {
+    let resultado = "🟢 USABLE";
+    if (errorGrave) {
+      resultado = "🔴 NO USABLE";
+    } else if (warning) {
+      resultado = "🟡 ALERTA";
+    }
+
+    return {
+      fileName,
+      uuid: "NO DISPONIBLE",
+      resultadoMotor: resultado,
+      comentarioMotor: errorMsg,
+      giroEmpresa,
     ultimoRefrescoSAT: new Date().toISOString(),
     versionCFDI: "NO DISPONIBLE",
     tipoCFDI: "NO DISPONIBLE",
@@ -765,7 +804,7 @@ export function useXMLValidator() {
     formaPago: "NO DISPONIBLE",
     metodoPago: "NO DISPONIBLE",
     nivelValidacion: "ERROR",
-    resultado: "🔴 NO USABLE",
+    resultado: resultado,
     comentarioFiscal: errorMsg,
     observacionesTecnicas: `Error al procesar: ${errorMsg}`,
     iva: 0,
@@ -782,7 +821,41 @@ export function useXMLValidator() {
     isrRetenidoNomina: 0,
     totalCalculadoNomina: 0,
     observacionesContador: "",
-  });
+    ultimoRefrescoSAT: new Date().toISOString(),
+  };
+};
+
+  // 🟡 Para casos con datos válidos pero con alertas fiscales (NC, PPD sin REP, etc.)
+  type WarningBase = Pick<
+    ValidationResult,
+    | "uuid"
+    | "tipoCFDI"
+    | "serie"
+    | "folio"
+    | "fechaEmision"
+    | "horaEmision"
+    | "añoFiscal"
+    | "rfcEmisor"
+    | "nombreEmisor"
+    | "rfcReceptor"
+    | "nombreReceptor"
+    | "tipoRealDocumento"
+  >;
+
+  const createWarningResult = (
+    fileName: string,
+    warningMsg: string,
+    base: WarningBase & Partial<ValidationResult>
+  ): ValidationResult => {
+    return {
+      ...base,
+      fileName,
+      resultado: "🟡 ALERTA",
+      comentarioFiscal: warningMsg,
+      nivelValidacion: "ALERTA",
+      isValid: true,
+    } as ValidationResult;
+  };
 
   const clearResults = () => {
     setValidationResults([]);
