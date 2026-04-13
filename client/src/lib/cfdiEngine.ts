@@ -444,22 +444,92 @@ export const calcularScoreInformativo = (resultado: string, isValid: boolean, di
 export const detectarNomina = (xmlContent: string, tipoCFDI: string) => tipoCFDI === "N" && (xmlContent.includes("nomina11:Nomina") || xmlContent.includes("nomina12:Nomina"));
 
 export const extractNominaInfo = (xmlDoc: XMLDocument, xmlContent: string) => {
-    const nodes = Array.from(xmlDoc.getElementsByTagName("*"));
+    const nodes = Array.from(xmlDoc.documentElement?.getElementsByTagName("*") || []);
     const node = nodes.find(n => (n.localName || n.nodeName).includes("Nomina"));
-    if (!node) return { versionNomina: "NO DISPONIBLE", totalPercepciones: 0, totalDeducciones: 0, totalOtrosPagos: 0, isrRetenido: 0, esValida: false, errorMsg: "No hay nodo Nómina" };
+    if (!node) return { 
+        versionNomina: "NO DISPONIBLE", totalPercepciones: 0, totalDeducciones: 0, totalOtrosPagos: 0, 
+        isrRetenido: 0, subsidioCausado: 0, percepcionesGravadas: 0, percepcionesExentas: 0, diasPagados: 15,
+        esValida: false, errorMsg: "No hay nodo Nómina" 
+    };
+    
     const version = node.getAttribute("Version") || "1.2";
-    const pMatch = xmlContent.match(/Percepciones[^>]*TotalGravado="([^"]+)"[^>]*TotalExento="([^"]+)"/);
-    const totalP = pMatch ? parseFloat(pMatch[1] || "0") + parseFloat(pMatch[2] || "0") : 0;
-    const dNode = xmlContent.match(/Deducciones[^>]*TotalOtrasDeducciones="([^"]+)"|Deducciones[^>]*TotalImpuestosRetenidos="([^"]+)"/);
-    const totalD = dNode ? parseFloat(dNode[1] || "0") + parseFloat(dNode[2] || "0") : 0;
-    const oMatch = xmlContent.match(/OtrosPagos[^>]*TotalOtrosPagos="([^"]+)"/);
-    const totalO = oMatch ? parseFloat(oMatch[1] || "0") : 0;
-    return { versionNomina: version, totalPercepciones: totalP, totalDeducciones: totalD, totalOtrosPagos: totalO, isrRetenido: 0, esValida: true, errorMsg: "" };
+    const diasPagados = parseFloat(node.getAttribute("NumDiasPagados") || "15") || 15;
+
+    let percepcionesGravadas = 0, percepcionesExentas = 0, isrRetenido = 0, subsidioCausado = 0, totalD = 0, totalO = 0;
+
+    const percepcionesNode = nodes.find(n => (n.localName || n.nodeName) === "Percepciones");
+    if (percepcionesNode) {
+        percepcionesGravadas = parseFloat(percepcionesNode.getAttribute("TotalGravado") || "0");
+        percepcionesExentas = parseFloat(percepcionesNode.getAttribute("TotalExento") || "0");
+    }
+    const totalP = percepcionesGravadas + percepcionesExentas;
+
+    const deduccionesNode = nodes.find(n => (n.localName || n.nodeName) === "Deducciones");
+    if (deduccionesNode) {
+        const otrasDeducciones = parseFloat(deduccionesNode.getAttribute("TotalOtrasDeducciones") || "0");
+        const impuestosRetenidos = parseFloat(deduccionesNode.getAttribute("TotalImpuestosRetenidos") || "0");
+        totalD = otrasDeducciones + impuestosRetenidos;
+        
+        Array.from(deduccionesNode.children).forEach((child: any) => {
+            if ((child.localName || child.nodeName) === "Deduccion" && child.getAttribute("TipoDeduccion") === "002") {
+                isrRetenido += parseFloat(child.getAttribute("Importe") || "0");
+            }
+        });
+    }
+
+    const otrosPagosNode = nodes.find(n => (n.localName || n.nodeName) === "OtrosPagos");
+    if (otrosPagosNode) {
+        totalO = parseFloat(otrosPagosNode.getAttribute("TotalOtrosPagos") || "0");
+        const subsidioNode = nodes.find(n => (n.localName || n.nodeName) === "SubsidioAlEmpleo");
+        if (subsidioNode) {
+            subsidioCausado = parseFloat(subsidioNode.getAttribute("SubsidioCausado") || "0");
+        }
+    }
+
+    return { 
+        versionNomina: version, 
+        totalPercepciones: Math.round(totalP * 100) / 100, 
+        totalDeducciones: Math.round(totalD * 100) / 100, 
+        totalOtrosPagos: totalO, 
+        isrRetenido,
+        subsidioCausado,
+        percepcionesGravadas,
+        percepcionesExentas,
+        diasPagados,
+        esValida: true, 
+        errorMsg: "" 
+    };
+};
+
+// Heurística simplificada de estimación de ISR (no cálculo exacto, solo proxy de validación ligera)
+export const estimarISRHeuristicoMensual = (baseGravable: number, diasPagados: number): number => {
+    if (baseGravable <= 0 || diasPagados <= 0) return 0;
+    
+    // Ingreso mensualizado base
+    const ingresoMensual = (baseGravable / diasPagados) * 30.4;
+    
+    // Tramos heurísticos muy simplificados
+    let porcentaje = 0;
+    if (ingresoMensual > 40000) porcentaje = 0.25;
+    else if (ingresoMensual > 20000) porcentaje = 0.18;
+    else if (ingresoMensual > 10000) porcentaje = 0.12;
+    else if (ingresoMensual > 7000) porcentaje = 0.08;
+    else if (ingresoMensual > 0) porcentaje = 0.02;
+
+    const isrMensual = ingresoMensual * porcentaje;
+    return (isrMensual / 30.4) * diasPagados;
 };
 
 export const validateNominaTotals = (p: number, d: number, o: number, total: number) => {
-    const calc = p + o - d;
-    return { isValid: Math.abs(calc - total) <= 0.01, calculado: Math.round(calc * 100) / 100, diferencia: Math.abs(calc - total) };
+    const totalCalculado = p + o - d;
+    const diferencia = Math.abs(totalCalculado - total);
+
+    // ✅ REGLA: Retornar false en isValid si hay diferencia para que classifyCFDI maneje la lógica detallada
+    return { 
+        isValid: diferencia <= 0.01, 
+        calculado: Math.round(totalCalculado * 100) / 100, 
+        diferencia: Math.round(diferencia * 100) / 100 
+    };
 };
 
 export const classifyCFDI = (
@@ -550,20 +620,63 @@ export const classifyCFDI = (
     }
 
     // B. Validación de Totales vs ECC12 (Combustibles)
-    if (!validation.isValid && !tieneECC) {
+    if (!validation.isValid && !tieneECC && !esNomina) {
         resultado = "🔴 NO USABLE";
-        comentarioFiscal = `ERROR FISCAL: Total declarado no coincide con cálculo SAT. Diferencia de $${validation.diferencia}.`;
+        comentarioFiscal = `ERROR FISCAL: Total declarado no coincide con cálculo SAT. Diferencia de $${validation.diferencia.toFixed(2)}.`;
     } else if (tieneECC) {
-        resultado = "🟡 CON ALERTAS";
+        resultado = "🟡 ALERTA";
         comentarioFiscal = "CFDI con complemento de Estado de Cuenta de Combustible. La información relevante de litros, importes e impuestos viene en el complemento. Revisar deducibilidad y acreditamiento de IVA conforme a política interna.";
-    } else {
-        // Caso Base Sano
+    }
+
+    // AUDITORÍA FOCALIZADA EN NÓMINA HEURÍSTICA Y LIGERA
+    if (esNomina && resultado !== "🔴 NO USABLE") {
+        let isrEstimado = estimarISRHeuristicoMensual(nominaInfo.percepcionesGravadas, nominaInfo.diasPagados);
+        let difISR = Math.abs(isrEstimado - nominaInfo.isrRetenido);
+        
+        let alertasFiscales: string[] = [];
+
+        // 1. Diferencias estructurales matemáticas graves son los ÚNICOS motivos de error no-estructural en nómina
+        const difTotales = validation.diferencia;
+        if (difTotales > 1000) {
+            resultado = "🔴 NO USABLE";
+            nivelValidacion = "NÓMINA - ERROR GRAVE";
+            comentarioFiscal = `ERROR FISCAL: Diferencia matemática anormal en nómina ($${difTotales.toFixed(2)}). Se detectan inconsistencias graves en estructura.`;
+            return { resultado, comentarioFiscal, nivelValidacion };
+        } 
+
+        // 2. Validación Heurística de ISR
+        if (difISR > 20 && nominaInfo.percepcionesGravadas > 0) { 
+           alertasFiscales.push("Se detectan inconsistencias en ISR retenido que requieren revisión detallada contra estimación fiscal.");
+        }
+
+        // 3. Validación Heurística de Subsidio
+        const ingresoMensualEstimado = (nominaInfo.percepcionesGravadas / nominaInfo.diasPagados) * 30.4;
+        if (nominaInfo.subsidioCausado > 0 && ingresoMensualEstimado > 10000) {
+            alertasFiscales.push("El subsidio aplicado podría no corresponder al nivel de ingreso mensual estimado (rango atípico).");
+        }
+
+        // 4. Validación Heurística Gravado vs Exento
+        if (nominaInfo.percepcionesGravadas === 0 && (nominaInfo.percepcionesGravadas + nominaInfo.percepcionesExentas) > 0) {
+            alertasFiscales.push("Percepciones clasificadas completamente como exentas. La clasificación fiscal de estas percepciones puede representar un riesgo de auditoría.");
+        }
+
+        if (alertasFiscales.length > 0) {
+            resultado = "🟡 ALERTA";
+            nivelValidacion = "NÓMINA - REVISIÓN";
+            comentarioFiscal = "HALLAZGOS DE REVISIÓN EN NÓMINA:\n- " + alertasFiscales.join("\n- ");
+        } else {
+            resultado = "🟢 USABLE";
+            nivelValidacion = "NÓMINA - VÁLIDA";
+            comentarioFiscal = "Nómina congruente con estatus válido. Ausencia de indicadores de riesgo heurístico en cálculos de impuestos e ingresos.";
+        }
+    } else if (!esNomina && !tieneECC && validation.isValid) {
+        // Caso Base Sano - Facturas/REP
         resultado = "🟢 USABLE";
         comentarioFiscal = "CFDI válido. Total correcto calculado por concepto considerando impuestos y retenciones. Sin inconsistencias relevantes detectadas.";
     }
 
-    // C. Clasificación de IVA (Exento vs Riesgo)
-    if (resultado !== "🔴 NO USABLE" && tieneObjetoImp02IVA0) {
+    // C. Clasificación de IVA (Exento vs Riesgo) — no aplica a nómina
+    if (!esNomina && resultado !== "🔴 NO USABLE" && tieneObjetoImp02IVA0) {
         if (esRubroExentoBueno) {
             // Caso Exento "Bueno" (Educación/Salud)
             resultado = "🟢 USABLE";
@@ -576,12 +689,12 @@ export const classifyCFDI = (
         }
     }
 
-    // D. Comentario informativo sobre clasificación fiscal por ObjetoImp
+    // D. Comentario informativo sobre clasificación fiscal por ObjetoImp — no aplica a nómina
     const baseNoObjetoVal = taxes.baseNoObjeto ?? 0;
     const baseSinDesglose = taxes.baseObjetoSinDesglose ?? 0;
     const clasificacion = taxes.clasificacionFiscal ?? "";
 
-    if (resultado !== "🔴 NO USABLE") {
+    if (!esNomina && resultado !== "🔴 NO USABLE") {
         if (clasificacion === "NO_OBJETO" || baseNoObjetoVal > 0) {
             // ✅ REGLA SAT: ObjetoImp=01 → NO OBJETO DE IMPUESTO. No confundir con Exento.
             comentarioFiscal += (comentarioFiscal ? " " : "")
@@ -598,12 +711,12 @@ export const classifyCFDI = (
     }
 
     // E. Ajustes por Carta Porte
-    if (resultado === "🟢 USABLE" || resultado === "🟡 CON ALERTAS") {
+    if (resultado === "🟢 USABLE" || resultado === "🟡 ALERTA") {
         if (requiereCartaPorte === "SÍ" && cartaPorteInfo.presente === "NO") {
-            resultado = "🟡 CON ALERTAS";
+            resultado = "🟡 ALERTA";
             comentarioFiscal += " ALERTA: Requiere complemento Carta Porte pero no se detectó.";
         } else if (cartaPorteInfo.presente === "SÍ" && cartaPorteInfo.completa === "NO") {
-            resultado = "🟡 CON ALERTAS";
+            resultado = "🟡 ALERTA";
             comentarioFiscal += " ALERTA: Carta Porte incompleta.";
         }
     }
@@ -614,6 +727,13 @@ export const classifyCFDI = (
         if (materialidad.tieneRiesgo) {
             comentarioFiscal += (comentarioFiscal ? " " : "") + materialidad.mensaje;
         }
+    }
+
+    // Ajustar nivelValidacion final para nómina según resultado
+    if (esNomina) {
+        if (resultado.includes("🟢")) nivelValidacion = "NÓMINA - VÁLIDA";
+        else if (resultado.includes("🟡")) nivelValidacion = "NÓMINA - REVISIÓN";
+        // 🔴 ya se asignó arriba en el early return estructural
     }
 
     return { resultado, comentarioFiscal, nivelValidacion };

@@ -442,21 +442,28 @@ export default function Dashboard() {
 
   // Calcular estadísticas
 
-  const stats = {
-
-    total: visibleResults.length,
-
-    usable: visibleResults.filter((r) => r.resultado.includes("🟢")).length,
-
-    alertas: visibleResults.filter((r) => r.resultado.includes("🟡")).length,
-
-    noUsable: visibleResults.filter((r) => r.resultado.includes("🔴")).length,
-
-    totalMonto: visibleResults.reduce((sum, r) => sum + r.total, 0),
-
-    totalIVA: visibleResults.reduce((sum, r) => sum + r.ivaTraslado, 0),
-
-  };
+  const stats = (() => {
+    const total = visibleResults.length;
+    const usables = visibleResults.filter(r => r.resultado.includes("🟢")).length;
+    const alertas = visibleResults.filter(r => r.resultado.includes("🟡")).length;
+    const noUsable = visibleResults.filter(r => r.resultado.includes("🔴")).length;
+    // Salud ponderada: 🟢 = 100%, 🟡 = 50%, 🔴 = 0%
+    const salud = total > 0 ? Math.round(((usables + alertas * 0.5) / total) * 100) : 100;
+    // Monto en riesgo: suma de totales con 🔴 o 🟡
+    const montoRiesgo = visibleResults
+      .filter(r => r.resultado.includes("🔴") || r.resultado.includes("🟡"))
+      .reduce((sum, r) => sum + r.total, 0);
+    return {
+      total,
+      usables,
+      alertas,
+      noUsable,
+      salud,
+      montoRiesgo,
+      totalMonto: visibleResults.reduce((sum, r) => sum + r.total, 0),
+      totalIVA: visibleResults.reduce((sum, r) => sum + r.ivaTraslado, 0),
+    };
+  })();
 
 
 
@@ -464,7 +471,7 @@ export default function Dashboard() {
 
   const statusData = [
 
-    { name: "Usable", value: stats.usable, color: "#166534" },
+    { name: "Usable", value: stats.usables, color: "#166534" },
 
     { name: "Alertas", value: stats.alertas, color: "#B45309" },
 
@@ -1174,13 +1181,25 @@ export default function Dashboard() {
 
                     strokeDasharray={452.4}
 
-                    strokeDashoffset={452.4 * (1 - (results.length > 0 ? (stats.usable / Math.max(stats.total, 1)) : 1))}
+                    strokeDashoffset={452.4 * (1 - stats.salud / 100)}
 
-                    className="text-[#059669] transition-all duration-1000 ease-out"
+                    className={
+                      stats.salud >= 70
+                        ? "text-[#059669] transition-all duration-1000 ease-out"
+                        : stats.salud >= 40
+                        ? "text-[#D97706] transition-all duration-1000 ease-out"
+                        : "text-[#DC2626] transition-all duration-1000 ease-out"
+                    }
 
                     strokeLinecap="round"
 
-                    style={{ filter: 'drop-shadow(0 0 8px rgba(5,150,105,0.3))' }}
+                    style={{
+                      filter: stats.salud >= 70
+                        ? 'drop-shadow(0 0 8px rgba(5,150,105,0.3))'
+                        : stats.salud >= 40
+                        ? 'drop-shadow(0 0 8px rgba(217,119,6,0.3))'
+                        : 'drop-shadow(0 0 8px rgba(220,38,38,0.3))'
+                    }}
 
                   />
 
@@ -1190,7 +1209,7 @@ export default function Dashboard() {
 
                   <span className="text-4xl font-black text-[#0B2340] dark:text-white tracking-tighter">
 
-                    {results.length > 0 ? Math.round((stats.usable / Math.max(stats.total, 1)) * 100) : 100}%
+                    {stats.salud}%
 
                   </span>
 
@@ -1200,13 +1219,33 @@ export default function Dashboard() {
 
               </div>
 
-              <div className="flex items-center gap-2 px-4 py-2 bg-emerald-50 dark:bg-emerald-900/20 rounded-2xl border border-emerald-100 dark:border-emerald-900/30">
-
-                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-
-                <span className="text-[10px] font-black text-emerald-700 dark:text-emerald-400 uppercase tracking-widest">SISTEMA PROTEGIDO</span>
-
-              </div>
+              {/* Mensaje de nivel de riesgo dinámico */}
+              {stats.total === 0 ? (
+                <div className="flex items-center gap-2 px-4 py-2 bg-emerald-50 dark:bg-emerald-900/20 rounded-2xl border border-emerald-100 dark:border-emerald-900/30">
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+                  <span className="text-[10px] font-black text-emerald-700 dark:text-emerald-400 uppercase tracking-widest">SISTEMA LISTO</span>
+                </div>
+              ) : stats.salud >= 80 ? (
+                <div className="flex items-center gap-2 px-4 py-2 bg-emerald-50 dark:bg-emerald-900/20 rounded-2xl border border-emerald-100 dark:border-emerald-900/30">
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+                  <span className="text-[10px] font-black text-emerald-700 dark:text-emerald-400 uppercase tracking-widest">RIESGO BAJO</span>
+                </div>
+              ) : stats.salud >= 60 ? (
+                <div className="flex items-center gap-2 px-4 py-2 bg-amber-50 dark:bg-amber-900/20 rounded-2xl border border-amber-100 dark:border-amber-900/30">
+                  <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></div>
+                  <span className="text-[10px] font-black text-amber-700 dark:text-amber-400 uppercase tracking-widest">REVISIÓN RECOMENDADA</span>
+                </div>
+              ) : stats.salud >= 40 ? (
+                <div className="flex items-center gap-2 px-4 py-2 bg-orange-50 dark:bg-orange-900/20 rounded-2xl border border-orange-100 dark:border-orange-900/30">
+                  <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse"></div>
+                  <span className="text-[10px] font-black text-orange-700 dark:text-orange-400 uppercase tracking-widest">RIESGO MODERADO</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 px-4 py-2 bg-red-50 dark:bg-red-900/20 rounded-2xl border border-red-100 dark:border-red-900/30">
+                  <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
+                  <span className="text-[10px] font-black text-red-700 dark:text-red-400 uppercase tracking-widest">ALTO RIESGO FISCAL</span>
+                </div>
+              )}
 
             </CardContent>
 
@@ -1350,7 +1389,7 @@ export default function Dashboard() {
 
                 <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600 mb-2">🟢 Usables</p>
 
-                <p className="text-4xl font-black text-emerald-800 dark:text-emerald-300 tracking-tighter">{stats.usable}</p>
+                <p className="text-4xl font-black text-emerald-800 dark:text-emerald-300 tracking-tighter">{stats.usables}</p>
 
               </div>
 
@@ -1399,6 +1438,45 @@ export default function Dashboard() {
                 <p className="text-[10px] font-black uppercase tracking-[0.2em] text-red-600 mb-2">🔴 No Usables</p>
 
                 <p className="text-4xl font-black text-red-800 dark:text-red-300 tracking-tighter">{stats.noUsable}</p>
+
+              </div>
+
+            </CardContent>
+
+          </Card>
+
+
+
+          {/* KPI: Monto en Riesgo */}
+          <Card className="border-0 shadow-xl bg-white dark:bg-slate-800 rounded-3xl border-b-8 border-orange-500 hover:-translate-y-1 transition-transform duration-300">
+
+            <CardContent className="pt-8 pb-8">
+
+              <div className="flex flex-col items-center">
+
+                <div className="p-4 bg-orange-50 dark:bg-orange-900/10 rounded-2xl mb-4 shadow-inner">
+
+                  <AlertCircle className="w-7 h-7 text-orange-600 dark:text-orange-400" />
+
+                </div>
+
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-orange-600 mb-2">⚠️ Monto en Riesgo</p>
+
+                <div className="flex items-baseline gap-1">
+
+                  <span className="text-xs font-bold text-orange-700 dark:text-orange-400">$</span>
+
+                  <p className="text-4xl font-black text-orange-800 dark:text-orange-300 tracking-tighter">
+
+                    {stats.montoRiesgo >= 1000
+                      ? `${(stats.montoRiesgo / 1000).toFixed(1)}K`
+                      : stats.montoRiesgo.toFixed(0)}
+
+                  </p>
+
+                </div>
+
+                <p className="text-[9px] text-orange-400 dark:text-orange-500 uppercase tracking-wider mt-1">🔴 + 🟡 CFDI</p>
 
               </div>
 
