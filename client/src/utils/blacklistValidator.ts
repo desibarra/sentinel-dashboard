@@ -1,7 +1,5 @@
-import { getBlacklistByRFC } from "@/db/blacklistDB";
-
 export interface BlacklistValidation {
-    rfc?: string; // Added field
+    rfc?: string;
     isEFOS: boolean;
     is69B: boolean;
     found: boolean;
@@ -17,25 +15,24 @@ export async function checkRFCBlacklist(rfc: string): Promise<BlacklistValidatio
     }
 
     try {
-        const record = await getBlacklistByRFC(rfc);
+        const response = await fetch(`/api/blacklist/check?rfc=${encodeURIComponent(rfc)}`);
+        const data = await response.json();
 
-        if (record) {
+        if (data.found) {
             return {
-                rfc: record.rfc, // Include RFC in return
-                isEFOS: record.tipo === 'EFOS',
-                is69B: record.tipo === '69B',
+                rfc: data.rfc,
+                isEFOS: data.isEFOS,
+                is69B: data.is69B,
                 found: true,
-                tipo: record.tipo,
-                fechaPublicacion: record.fechaPublicacion,
-                razonSocial: record.razonSocial,
-                situacion: record.situacion
+                tipo: data.tipo,
+                situacion: data.situacion
             };
         }
 
         return { rfc, isEFOS: false, is69B: false, found: false };
     } catch (error) {
         console.error("Blacklist check error:", error);
-        return { rfc, isEFOS: false, is69B: false, found: false }; // Fail safe
+        return { rfc, isEFOS: false, is69B: false, found: false };
     }
 }
 

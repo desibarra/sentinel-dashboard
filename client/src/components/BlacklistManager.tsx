@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import { getMetadata, BlacklistMetadata, addBlacklistRecordsBulk, updateMetadata } from "@/db/blacklistDB";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardTitle, CardHeader } from "@/components/ui/card";
 import {
@@ -16,6 +15,13 @@ import {
 import { PolarAngleAxis, RadialBar, RadialBarChart, ResponsiveContainer } from "recharts";
 import { toast } from 'sonner';
 
+interface BlacklistMetadata {
+    efosLastUpdate?: number;
+    list69BLastUpdate?: number;
+    efosCount?: number;
+    list69BCount?: number;
+}
+
 export function BlacklistManager() {
     const [metadata, setMetadata] = useState<BlacklistMetadata | null>(null);
     const [isSyncing, setIsSyncing] = useState(false);
@@ -26,62 +32,35 @@ export function BlacklistManager() {
     }, []);
 
     async function loadMetadata() {
-        const meta = await getMetadata();
-        setMetadata(meta);
+        try {
+            const res = await fetch('/api/blacklist/metadata');
+            const data = await res.json();
+            setMetadata(data);
+        } catch (error) {
+            console.error("Error loading metadata:", error);
+        }
     }
 
     async function handleSync() {
         setIsSyncing(true);
-        const toastId = toast.loading("Cargando listas oficiales del SAT...");
+        const toastId = toast.loading("Sincronizando con el servidor SAT...");
 
         try {
-            const efosRes = await fetch('/efos.json');
-            const efosData = await efosRes.json();
+            const res = await fetch('/api/blacklist/sync', { method: 'POST' });
+            const data = await res.json();
 
-            const b69Res = await fetch('/69b.json');
-            const b69Data = await b69Res.json();
-
-            const efosRecords = efosData.map((r: any) => ({
-                rfc: r.rfc,
-                tipo: 'EFOS' as const,
-                situacion: r.situacion || 'Presunto',
-                fechaPublicacion: new Date().toISOString()
-            }));
-
-            const b69Records = b69Data.map((r: any) => ({
-                rfc: r.rfc,
-                tipo: '69B' as const,
-                situacion: r.situacion || 'Definitivo',
-                fechaPublicacion: new Date().toISOString()
-            }));
-
-            const totalSAT = efosRecords.length + b69Records.length;
-
-            if (efosRecords.length > 0) {
-                await addBlacklistRecordsBulk(efosRecords);
+            if (data.success) {
+                await loadMetadata();
+                toast.success(
+                    `Servidor actualizado (${data.total.toLocaleString()} registros)`,
+                    { id: toastId }
+                );
+            } else {
+                throw new Error(data.error || 'Error en sincronización');
             }
-            if (b69Records.length > 0) {
-                await addBlacklistRecordsBulk(b69Records);
-            }
-
-            const newMeta: BlacklistMetadata = {
-                key: 'lastUpdate',
-                efosLastUpdate: new Date().toISOString(),
-                list69BLastUpdate: new Date().toISOString(),
-                efosCount: efosRecords.length,
-                list69BCount: b69Records.length
-            };
-
-            await updateMetadata(newMeta);
-            await loadMetadata();
-            
-            toast.success(
-                `Base SAT actualizada correctamente (${totalSAT.toLocaleString()} registros)`,
-                { id: toastId }
-            );
         } catch (error) {
-            console.error("Error loading blacklist:", error);
-            toast.error("No se pudo actualizar. Se mantiene la base local vigente", { id: toastId });
+            console.error("Error syncing:", error);
+            toast.error("Error al sincronizar con el servidor", { id: toastId });
         } finally {
             setIsSyncing(false);
         }
@@ -91,6 +70,7 @@ export function BlacklistManager() {
     const data69b = metadata?.list69BCount || 0;
     const totalRegistros = dataEfos + data69b;
     const hasData = totalRegistros > 0;
+    const lastUpdate = metadata?.efosLastUpdate || metadata?.list69BLastUpdate;
 
     const circleData = [{ value: hasData ? 100 : 0, fill: hasData ? '#10b981' : '#94a3b8' }];
 
@@ -118,9 +98,9 @@ export function BlacklistManager() {
 
                 <div className="flex gap-3">
                     <div className="flex flex-col items-end">
-                        <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Última Actualización</p>
+                        <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Fuente: SAT (centralizado)</p>
                         <p className="text-xs text-slate-700 dark:text-slate-300 font-mono">
-                            {metadata?.efosLastUpdate ? new Date(metadata.efosLastUpdate).toLocaleString() : 'Pendiente cargar'}
+                            {lastUpdate ? new Date(lastUpdate).toLocaleString() : 'Pendiente sincronizar'}
                         </p>
                     </div>
                     <Button
@@ -172,10 +152,10 @@ export function BlacklistManager() {
                                 </span>
                             </div>
                         </div>
-                        <p className="text-[10px] text-center px-4 text-slate-400 dark:text-slate-500 mt-2 font-medium">
+                            <p className="text-[10px] text-center px-4 text-slate-400 dark:text-slate-500 mt-2 font-medium">
                             {hasData 
                                 ? `Más de ${totalRegistros.toLocaleString()} registros oficiales del SAT disponibles para validación`
-                                : "Base SAT no cargada"}
+                                : "Servidor no sincronizado"}
                         </p>
                     </CardContent>
                 </Card>
@@ -243,11 +223,11 @@ export function BlacklistManager() {
                             <div className="font-mono text-[10px] space-y-2 flex-grow overflow-y-auto text-slate-300">
                                 <p className="text-emerald-500/80 leading-tight">
                                     <span className="text-slate-600 mr-2">[00:00:00]</span>
-                                    INFO: Listas SAT {hasData ? 'cargadas' : 'no disponibles'}
+                                    INFO: Base SAT {hasData ? 'sincronizada' : 'no disponible'}
                                 </p>
                                 <p className="leading-tight">
                                     <span className="text-slate-600 mr-2">[00:05:12]</span>
-                                    RFC_QUERY: {hasData ? `${totalRegistros} registros` : 'vacio'} -- {hasData ? 'READY' : 'EMPTY'}
+                                    SOURCE: SAT-CENTRALIZED -- {hasData ? `${totalRegistros} regs` : 'EMPTY'}
                                 </p>
                                 {hasData && (
                                     <p className="leading-tight text-emerald-500 bg-emerald-500/5 p-1 rounded">
