@@ -223,14 +223,94 @@ apiRouter.delete("/xml/:id", async (req: Request, res: Response) => {
 apiRouter.get("/blacklist/metadata", async (_req: Request, res: Response) => {
     const db = await getDB();
     const metadata = await db.all("SELECT * FROM blacklist_metadata");
-    res.json(metadata);
+    const result: any = {};
+    metadata.forEach((m: any) => {
+        if (m.tipo === 'EFOS') {
+            result.efosLastUpdate = m.last_sync;
+            result.efosCount = m.count;
+        } else if (m.tipo === '69B') {
+            result.list69BLastUpdate = m.last_sync;
+            result.list69BCount = m.count;
+        }
+    });
+    res.json(result);
+});
+
+apiRouter.get("/blacklist/check", async (req: Request, res: Response) => {
+    const { rfc } = req.query;
+    if (!rfc) return res.status(400).json({ error: "RFC requerido" });
+
+    const db = await getDB();
+    const record = await db.get("SELECT * FROM blacklist_data WHERE rfc = ?", [rfc]);
+
+    if (!record) {
+        return res.json({ found: false });
+    }
+
+    return res.json({
+        found: true,
+        isEFOS: record.tipo === "EFOS",
+        is69B: record.tipo === "69B",
+        tipo: record.tipo,
+        rfc: record.rfc,
+        situacion: record.status
+    });
+});
+
+apiRouter.post("/blacklist/sync", async (_req: Request, res: Response) => {
+    try {
+        const fetchList = async (url: string, tipo: 'EFOS' | '69B') => {
+            const response = await fetch(url);
+            const data = await response.json();
+            return data.map((r: any) => ({
+                rfc: r.rfc,
+                tipo,
+                status: r.situacion || (tipo === 'EFOS' ? 'Presunto' : 'Definitivo'),
+                added_at: Date.now()
+            }));
+        };
+
+        const [efosData, b69Data] = await Promise.all([
+            fetchList('/efos.json', 'EFOS'),
+            fetchList('/69b.json', '69B')
+        ]);
+
+        const db = await getDB();
+        
+        await db.run("DELETE FROM blacklist_data");
+        await db.run("DELETE FROM blacklist_metadata");
+
+        const allRecords = [...efosData, ...b69Data];
+        for (const record of allRecords) {
+            await db.run(
+                "INSERT OR REPLACE INTO blacklist_data (rfc, tipo, status, added_at) VALUES (?, ?, ?, ?)",
+                [record.rfc, record.tipo, record.status, record.added_at]
+            );
+        }
+
+        const now = Date.now();
+        await db.run(
+            "INSERT INTO blacklist_metadata (tipo, last_sync, count) VALUES (?, ?, ?)",
+            ['EFOS', now, efosData.length]
+        );
+        await db.run(
+            "INSERT INTO blacklist_metadata (tipo, last_sync, count) VALUES (?, ?, ?)",
+            ['69B', now, b69Data.length]
+        );
+
+        const total = efosData.length + b69Data.length;
+        res.json({ success: true, total, efos: efosData.length, b69: b69Data.length });
+    } catch (error) {
+        console.error("Blacklist sync error:", error);
+        res.status(500).json({ error: "Error sincronizando blacklist" });
+    }
 });
 
 apiRouter.get("/blacklist/data/:tipo", async (req: Request, res: Response) => {
     const { tipo } = req.params;
     const db = await getDB();
     const data = await db.all("SELECT rfc FROM blacklist_data WHERE tipo = ?", [tipo]);
-    res.json(data.map(d => d.rfc));
+    res.json(data.map((d: any) => d.rfc));
 });
 
 // -- SAT CFDI STATUS PROXY --
