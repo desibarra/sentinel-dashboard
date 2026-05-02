@@ -1,4 +1,10 @@
 [[redirects]]
+  from = "/"
+  to = "/sentinel-express-landing.html"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/api/sat/*"
   to = "https://consultaqr.facturaelectronica.sat.gob.mx/:splat"
   status = 200

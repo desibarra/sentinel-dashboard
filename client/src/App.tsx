@@ -118,7 +118,8 @@ function Router() {
 
           {user ? (
             <Switch>
-              <Route path="/" component={Dashboard} />
+              <Route path="/dashboard" component={Dashboard} />
+              <Route path="/" component={() => { window.location.replace('/dashboard'); return null; }} />
               <Route path="/settings" component={Settings} />
               <Route path="/payment-audit" component={PaymentAudit} />
               <Route path="/help" component={HelpCenter} />
