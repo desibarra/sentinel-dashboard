@@ -76,16 +76,7 @@ export async function getDB() {
       );
     `);
 
-    // Creates a default admin user if no users exist
-    const userCount = await dbInstance.get('SELECT COUNT(*) as count FROM users');
-    if (userCount.count === 0) {
-      const passwordHash = await bcrypt.hash("admin123", 10);
-      await dbInstance.run(
-        `INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)`,
-        [nanoid(), "admin", passwordHash, "admin", Date.now()]
-      );
-      console.log("Default admin user created. Username: admin / Password: admin123");
-    }
+    // Se ha eliminado la creación del usuario por defecto 'admin123' por razones de seguridad.
   }
   return dbInstance;
 }
