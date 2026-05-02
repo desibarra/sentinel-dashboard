@@ -30,7 +30,7 @@ export default function Login() {
                     role: "admin"
                 };
                 login(mockUser);
-                setLocation("/");
+                setLocation("/dashboard");
                 toast.success("¡Bienvenido a Sentinel Express (Modo Local)!");
             } else {
                 toast.error("Credenciales incorrectas (Solo admin/admin123 en este modo)");
