@@ -18,28 +18,13 @@ export default function Login() {
         e.preventDefault();
         setLoading(true);
 
-        // Simulamos un retraso de red para mejor UX
+        // Simulamos un retraso de red
         await new Promise(resolve => setTimeout(resolve, 800));
 
-        try {
-            // MOCK LOGIN: Solo admin/admin123
-            if (username === "admin" && password === "admin123") {
-                const mockUser = {
-                    id: "local-admin-id",
-                    username: "admin",
-                    role: "admin"
-                };
-                login(mockUser);
-                setLocation("/dashboard");
-                toast.success("¡Bienvenido a Sentinel Express (Modo Local)!");
-            } else {
-                toast.error("Credenciales incorrectas (Solo admin/admin123 en este modo)");
-            }
-        } catch (error) {
-            toast.error("Error al iniciar sesión local");
-        } finally {
-            setLoading(false);
-        }
+        // MOCK LOGIN REMOVIDO POR SEGURIDAD.
+        // En producción Serverless, el acceso al dashboard se hace vía Token Mágico.
+        toast.error("Acceso denegado. Utiliza tu Token de Acceso seguro para ingresar al sistema.");
+        setLoading(false);
     };
 
     return (
