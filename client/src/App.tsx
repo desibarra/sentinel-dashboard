@@ -130,12 +130,21 @@ function Router() {
               <Route component={NotFound} />
             </Switch>
           ) : (
-            <Route>
-              {() => {
-                window.location.replace('/login');
-                return null;
-              }}
-            </Route>
+            <Switch>
+              <Route path="/">
+                {() => {
+                  // Si React intenta navegar a /, forzamos recarga para que Netlify sirva la landing
+                  window.location.href = '/';
+                  return null;
+                }}
+              </Route>
+              <Route>
+                {() => {
+                  window.location.replace('/login');
+                  return null;
+                }}
+              </Route>
+            </Switch>
           )}
         </Switch>
       </div>
