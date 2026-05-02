@@ -31,19 +31,7 @@ function Router() {
   const [isCheckingToken, setIsCheckingToken] = useState(false);
   const [tokenInvalid, setTokenInvalid] = useState(false);
   const [tokenExpired, setTokenExpired] = useState(false);
-  // Lead capture: ya registrado en este navegador?
-  // Demo mode no requiere formulario (ya viene de un token controlado)
-  const [leadReady, setLeadReady] = useState(isLeadRegistered());
-
-  // Efecto: si el usuario finaliza demo o cambia modo, re-evaluar
-  useEffect(() => {
-    if (isDemoMode) setLeadReady(true);
-  }, [isDemoMode]);
-
-  const handleLeadComplete = () => {
-    markLeadRegistered();
-    setLeadReady(true);
-  };
+  // Eliminar estado leadReady innecesario ahora que /registro es público.
 
   // Leer ?token= de la URL al montar el componente y validar contra JSONBin
   useEffect(() => {
@@ -102,12 +90,7 @@ function Router() {
     return <TokenExpired />;
   }
 
-  // Lead capture: mostrar formulario si el usuario está autenticado
-  // pero aún no se ha registrado como prospecto.
-  // Las rutas públicas (/login, /admin-tokens, /token-expired) no lo requieren.
-  if (user && !leadReady && user.role !== 'admin') {
-    return <LeadCapture onComplete={handleLeadComplete} />;
-  }
+  // La página de captura de leads ahora es pública en /registro
 
   return (
     <>
@@ -131,6 +114,7 @@ function Router() {
           <Route path="/login" component={Login} />
           <Route path="/token-expired" component={TokenExpired} />
           <Route path="/admin-tokens" component={AdminTokens} />
+          <Route path="/registro" component={() => <LeadCapture onComplete={() => {}} />} />
 
           {user ? (
             <Switch>
