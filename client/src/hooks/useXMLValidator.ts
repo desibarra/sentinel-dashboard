@@ -821,7 +821,6 @@ export function useXMLValidator() {
     isrRetenidoNomina: 0,
     totalCalculadoNomina: 0,
     observacionesContador: "",
-    ultimoRefrescoSAT: new Date().toISOString(),
   };
 };
 

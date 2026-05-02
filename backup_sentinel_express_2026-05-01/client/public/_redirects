@@ -1,0 +1,2 @@
+/api/sat/*  https://consultaqr.facturaelectronica.sat.gob.mx/:splat  200
+/*  /index.html  200

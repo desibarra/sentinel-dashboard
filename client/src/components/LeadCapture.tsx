@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { saveLeadToJSONBin, markLeadRegistered, Lead } from "@/services/leadService";
+import { saveLeadToServer, markLeadRegistered, Lead } from "@/services/leadService";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -60,6 +60,14 @@ export default function LeadCapture({ onComplete }: LeadCaptureProps) {
     });
     const [errors, setErrors] = useState<FormErrors>({});
     const [loading, setLoading] = useState(false);
+    const [generatedToken, setGeneratedToken] = useState<string | null>(null);
+
+    const trackEvent = (eventName: string, data?: any) => {
+        console.log(`[Event Tracker] ${eventName}`, data || "");
+        if (typeof window !== "undefined" && (window as any).umami) {
+            (window as any).umami.track(eventName, data);
+        }
+    };
 
     const handleChange = (field: keyof FormData, value: string) => {
         setForm((prev) => ({ ...prev, [field]: value }));
@@ -88,39 +96,39 @@ export default function LeadCapture({ onComplete }: LeadCaptureProps) {
                 origen: "sentinel_express",
             };
 
-            const result = await saveLeadToJSONBin(lead);
+            const result = await saveLeadToServer(lead);
 
-            if (!result.ok) {
-                // Error de red o JSONBin — continuamos de todas formas,
-                // al menos el usuario puede usar la herramienta
-                console.warn("[LeadCapture] No se pudo guardar en JSONBin:", result.error);
-                toast.warning("No se pudo registrar tu información en este momento, pero puedes continuar.");
-            } else {
-                toast.success("¡Registro exitoso! Redirigiendo a WhatsApp para solicitar tu acceso...");
+            if (!result.ok || !result.token) {
+                console.warn("[LeadCapture] Error en backend:", result.error);
+                toast.warning("Hubo un problema procesando tu acceso, por favor contacta soporte.");
+                return;
+            }
+
+            // Track events
+            if (result.events) {
+                result.events.forEach(ev => trackEvent(ev, { email: lead.email }));
             }
 
             markLeadRegistered();
-
-            // Redirigir a WhatsApp para solicitar el token
-            const whatsappNumber = "524776355734";
-            const text = `Hola, quiero probar gratis la herramienta de diagnóstico fiscal. Acabo de registrarme.\n\nMi nombre es ${form.nombre} de la empresa ${form.empresa}. me podrías proporcionar mi token de acceso?`;
-            const encodedText = encodeURIComponent(text);
-            const whatsappUrl = `https://wa.me/${whatsappNumber}?text=${encodedText}`;
-
-            // Pequeño delay para que lean el toast y luego redirigir
-            setTimeout(() => {
-                window.location.href = whatsappUrl;
-                onComplete();
-            }, 1500);
+            setGeneratedToken(result.token);
+            toast.success("¡Acceso generado con éxito!");
 
         } catch (err) {
             console.error("[LeadCapture] Error inesperado:", err);
-            // Aun con error, no bloqueamos al usuario
-            markLeadRegistered();
-            onComplete();
+            toast.error("Ocurrió un error de red. Intenta nuevamente.");
         } finally {
             setLoading(false);
         }
+    };
+
+    const handleWhatsAppRedirect = () => {
+        trackEvent("whatsapp_redirect_clicked", { token: generatedToken });
+        const whatsappNumber = "524776355734";
+        const text = `Hola, acabo de registrarme. El sistema me asignó el token ${generatedToken}. Vengo a iniciar mi prueba.`;
+        const encodedText = encodeURIComponent(text);
+        const whatsappUrl = `https://wa.me/${whatsappNumber}?text=${encodedText}`;
+        window.location.href = whatsappUrl;
+        onComplete();
     };
 
     return (
@@ -202,141 +210,166 @@ export default function LeadCapture({ onComplete }: LeadCaptureProps) {
                         </p>
                     </div>
 
-                    <form onSubmit={handleSubmit} className="space-y-4" noValidate>
-                        {/* Nombre */}
-                        <div className="space-y-1.5">
-                            <Label htmlFor="lc-nombre" className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                                Nombre completo *
-                            </Label>
-                            <Input
-                                id="lc-nombre"
-                                value={form.nombre}
-                                onChange={(e) => handleChange("nombre", e.target.value)}
-                                placeholder="Ej. Juan Pérez López"
-                                className={`rounded-xl border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 ${errors.nombre ? "border-red-400 focus-visible:ring-red-300" : ""}`}
-                            />
-                            {errors.nombre && (
-                                <p className="text-red-500 text-xs flex items-center gap-1">
-                                    <AlertTriangle className="w-3 h-3" /> {errors.nombre}
+                    {generatedToken ? (
+                        <div className="space-y-6 text-center animate-in fade-in slide-in-from-bottom-4 duration-500">
+                            <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 p-6 rounded-2xl">
+                                <h4 className="text-green-800 dark:text-green-400 font-bold uppercase tracking-widest text-xs mb-2">
+                                    Tu Token Automático Es:
+                                </h4>
+                                <div className="text-3xl font-black font-mono text-slate-800 dark:text-white tracking-widest">
+                                    {generatedToken}
+                                </div>
+                                <p className="text-xs text-green-700 dark:text-green-500 mt-3">
+                                    Cópialo o guárdalo, es tu llave de acceso privado.
                                 </p>
-                            )}
-                        </div>
-
-                        {/* Empresa */}
-                        <div className="space-y-1.5">
-                            <Label htmlFor="lc-empresa" className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                                Empresa / Despacho *
-                            </Label>
-                            <Input
-                                id="lc-empresa"
-                                value={form.empresa}
-                                onChange={(e) => handleChange("empresa", e.target.value)}
-                                placeholder="Ej. Corporativo XYZ SA de CV"
-                                className={`rounded-xl border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 ${errors.empresa ? "border-red-400 focus-visible:ring-red-300" : ""}`}
-                            />
-                            {errors.empresa && (
-                                <p className="text-red-500 text-xs flex items-center gap-1">
-                                    <AlertTriangle className="w-3 h-3" /> {errors.empresa}
-                                </p>
-                            )}
-                        </div>
-
-                        {/* Email */}
-                        <div className="space-y-1.5">
-                            <Label htmlFor="lc-email" className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                                Correo electrónico *
-                            </Label>
-                            <Input
-                                id="lc-email"
-                                type="email"
-                                value={form.email}
-                                onChange={(e) => handleChange("email", e.target.value)}
-                                placeholder="correo@empresa.com"
-                                className={`rounded-xl border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 ${errors.email ? "border-red-400 focus-visible:ring-red-300" : ""}`}
-                            />
-                            {errors.email && (
-                                <p className="text-red-500 text-xs flex items-center gap-1">
-                                    <AlertTriangle className="w-3 h-3" /> {errors.email}
-                                </p>
-                            )}
-                        </div>
-
-                        {/* Teléfono */}
-                        <div className="space-y-1.5">
-                            <Label htmlFor="lc-tel" className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                                Teléfono *
-                            </Label>
-                            <Input
-                                id="lc-tel"
-                                type="tel"
-                                value={form.telefono}
-                                onChange={(e) => handleChange("telefono", e.target.value)}
-                                placeholder="Ej. 81 1234 5678"
-                                className={`rounded-xl border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 ${errors.telefono ? "border-red-400 focus-visible:ring-red-300" : ""}`}
-                            />
-                            {errors.telefono && (
-                                <p className="text-red-500 text-xs flex items-center gap-1">
-                                    <AlertTriangle className="w-3 h-3" /> {errors.telefono}
-                                </p>
-                            )}
-                        </div>
-
-                        {/* CFDI mensuales (opcional) */}
-                        <div className="space-y-1.5">
-                            <Label htmlFor="lc-cfdi" className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                                ¿Cuántos CFDI procesas al mes? <span className="normal-case font-normal">(opcional)</span>
-                            </Label>
-                            <Select value={form.cfdi_mensuales} onValueChange={(val) => handleChange("cfdi_mensuales", val)}>
-                                <SelectTrigger id="lc-cfdi" className="rounded-xl border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800">
-                                    <SelectValue placeholder="Selecciona un rango..." />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {CFDI_OPTIONS.map((opt) => (
-                                        <SelectItem key={opt.value} value={opt.value}>
-                                            {opt.label}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        {/* Submit */}
-                        <Button
-                            type="submit"
-                            disabled={loading}
-                            className="w-full bg-[#0B2340] hover:bg-[#1a3a6e] text-white font-black uppercase tracking-tighter py-6 rounded-xl shadow-lg mt-2 text-sm transition-all duration-200 hover:scale-[1.01] active:scale-95"
-                        >
-                            {loading ? (
+                            </div>
+                            
+                            <Button
+                                onClick={handleWhatsAppRedirect}
+                                className="w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-black uppercase tracking-tighter py-6 rounded-xl shadow-lg text-sm transition-all duration-200 hover:scale-[1.01]"
+                            >
                                 <span className="flex items-center gap-2">
-                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                    Procesando...
+                                    Continuar a WhatsApp
                                 </span>
-                            ) : (
-                                "Probar Sentinel Express"
-                            )}
-                        </Button>
-
-                        <div className="flex flex-col items-center gap-1.5 py-2 mt-2">
-                            <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 font-medium tracking-tight">
-                                <CheckCircle2 className="w-3.5 h-3.5 text-[#F9C646]" />
-                                <span>Sin instalación</span>
-                            </div>
-                            <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 font-medium tracking-tight">
-                                <CheckCircle2 className="w-3.5 h-3.5 text-[#F9C646]" />
-                                <span>Resultados en menos de 2 minutos</span>
-                            </div>
-                            <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 font-medium tracking-tight">
-                                <CheckCircle2 className="w-3.5 h-3.5 text-[#F9C646]" />
-                                <span>Hasta 500 CFDI en la prueba gratuita</span>
-                            </div>
+                            </Button>
                         </div>
+                    ) : (
+                        <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+                            {/* Nombre */}
+                            <div className="space-y-1.5">
+                                <Label htmlFor="lc-nombre" className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                                    Nombre completo *
+                                </Label>
+                                <Input
+                                    id="lc-nombre"
+                                    value={form.nombre}
+                                    onChange={(e) => handleChange("nombre", e.target.value)}
+                                    placeholder="Ej. Juan Pérez López"
+                                    className={`rounded-xl border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 ${errors.nombre ? "border-red-400 focus-visible:ring-red-300" : ""}`}
+                                />
+                                {errors.nombre && (
+                                    <p className="text-red-500 text-xs flex items-center gap-1">
+                                        <AlertTriangle className="w-3 h-3" /> {errors.nombre}
+                                    </p>
+                                )}
+                            </div>
 
-                        <p className="text-center text-[10px] text-slate-400 dark:text-slate-500 mt-1">
-                            Al continuar, aceptas que tus datos sean utilizados para darte seguimiento comercial.
-                            <br />
-                            Tu información fiscal permanece privada en tu dispositivo.
-                        </p>
-                    </form>
+                            {/* Empresa */}
+                            <div className="space-y-1.5">
+                                <Label htmlFor="lc-empresa" className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                                    Empresa / Despacho *
+                                </Label>
+                                <Input
+                                    id="lc-empresa"
+                                    value={form.empresa}
+                                    onChange={(e) => handleChange("empresa", e.target.value)}
+                                    placeholder="Ej. Corporativo XYZ SA de CV"
+                                    className={`rounded-xl border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 ${errors.empresa ? "border-red-400 focus-visible:ring-red-300" : ""}`}
+                                />
+                                {errors.empresa && (
+                                    <p className="text-red-500 text-xs flex items-center gap-1">
+                                        <AlertTriangle className="w-3 h-3" /> {errors.empresa}
+                                    </p>
+                                )}
+                            </div>
+
+                            {/* Email */}
+                            <div className="space-y-1.5">
+                                <Label htmlFor="lc-email" className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                                    Correo electrónico *
+                                </Label>
+                                <Input
+                                    id="lc-email"
+                                    type="email"
+                                    value={form.email}
+                                    onChange={(e) => handleChange("email", e.target.value)}
+                                    placeholder="correo@empresa.com"
+                                    className={`rounded-xl border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 ${errors.email ? "border-red-400 focus-visible:ring-red-300" : ""}`}
+                                />
+                                {errors.email && (
+                                    <p className="text-red-500 text-xs flex items-center gap-1">
+                                        <AlertTriangle className="w-3 h-3" /> {errors.email}
+                                    </p>
+                                )}
+                            </div>
+
+                            {/* Teléfono */}
+                            <div className="space-y-1.5">
+                                <Label htmlFor="lc-tel" className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                                    Teléfono *
+                                </Label>
+                                <Input
+                                    id="lc-tel"
+                                    type="tel"
+                                    value={form.telefono}
+                                    onChange={(e) => handleChange("telefono", e.target.value)}
+                                    placeholder="Ej. 81 1234 5678"
+                                    className={`rounded-xl border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 ${errors.telefono ? "border-red-400 focus-visible:ring-red-300" : ""}`}
+                                />
+                                {errors.telefono && (
+                                    <p className="text-red-500 text-xs flex items-center gap-1">
+                                        <AlertTriangle className="w-3 h-3" /> {errors.telefono}
+                                    </p>
+                                )}
+                            </div>
+
+                            {/* CFDI mensuales (opcional) */}
+                            <div className="space-y-1.5">
+                                <Label htmlFor="lc-cfdi" className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                                    ¿Cuántos CFDI procesas al mes? <span className="normal-case font-normal">(opcional)</span>
+                                </Label>
+                                <Select value={form.cfdi_mensuales} onValueChange={(val) => handleChange("cfdi_mensuales", val)}>
+                                    <SelectTrigger id="lc-cfdi" className="rounded-xl border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800">
+                                        <SelectValue placeholder="Selecciona un rango..." />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {CFDI_OPTIONS.map((opt) => (
+                                            <SelectItem key={opt.value} value={opt.value}>
+                                                {opt.label}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+
+                            {/* Submit */}
+                            <Button
+                                type="submit"
+                                disabled={loading}
+                                className="w-full bg-[#0B2340] hover:bg-[#1a3a6e] text-white font-black uppercase tracking-tighter py-6 rounded-xl shadow-lg mt-2 text-sm transition-all duration-200 hover:scale-[1.01] active:scale-95"
+                            >
+                                {loading ? (
+                                    <span className="flex items-center gap-2">
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                        Procesando...
+                                    </span>
+                                ) : (
+                                    "Probar Sentinel Express"
+                                )}
+                            </Button>
+
+                            <div className="flex flex-col items-center gap-1.5 py-2 mt-2">
+                                <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 font-medium tracking-tight">
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-[#F9C646]" />
+                                    <span>Sin instalación</span>
+                                </div>
+                                <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 font-medium tracking-tight">
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-[#F9C646]" />
+                                    <span>Resultados en menos de 2 minutos</span>
+                                </div>
+                                <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 font-medium tracking-tight">
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-[#F9C646]" />
+                                    <span>Hasta 500 CFDI en la prueba gratuita</span>
+                                </div>
+                            </div>
+
+                            <p className="text-center text-[10px] text-slate-400 dark:text-slate-500 mt-1">
+                                Al continuar, aceptas que tus datos sean utilizados para darte seguimiento comercial.
+                                <br />
+                                Tu información fiscal permanece privada en tu dispositivo.
+                            </p>
+                        </form>
+                    )}
                 </div>
             </div>
         </div>

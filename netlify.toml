@@ -12,11 +12,17 @@
 [build]
   command = "npm run build"
   publish = "dist/public"
+  functions = "netlify/functions"
+
+[[redirects]]
+  from = "/api/functions/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
 
 [build.environment]
   PNPM_FLAGS = "--no-frozen-lockfile"
   NODE_VERSION = "20"
   VITE_API_URL = ""
-  VITE_JSONBIN_MASTER_KEY = "$2a$10$JYwKhQ4YTzO/uA2wYBrDEO9tGD95gSlhvRvB33z.E91zcYHs45HKi"
-  VITE_JSONBIN_BIN_ID = "69a5f1cdd0ea881f40e85bf9"
-  VITE_ADMIN_TOKENS_PASSWORD = "Mentores2026!"
+  JSONBIN_MASTER_KEY = "$2a$10$JYwKhQ4YTzO/uA2wYBrDEO9tGD95gSlhvRvB33z.E91zcYHs45HKi"
+  JSONBIN_BIN_ID = "69a5f1cdd0ea881f40e85bf9"
+  ADMIN_TOKENS_PASSWORD = "Mentores2026!"
