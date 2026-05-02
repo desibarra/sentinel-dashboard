@@ -1,12 +1,3 @@
-/**
- * Servicio para interactuar con JSONBin.io
- * Almacena y gestiona los tokens de demo en la nube.
- */
-
-const MASTER_KEY = import.meta.env.VITE_JSONBIN_MASTER_KEY;
-const BIN_ID = import.meta.env.VITE_JSONBIN_BIN_ID;
-const BASE_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
-
 export interface ManagedToken {
     id: string;
     token: string;
@@ -17,119 +8,82 @@ export interface ManagedToken {
     demoCompanyName: string;
     demoCompanyRFC: string;
     // Tracking de uso
-    accessCount?: number;    // Cuántas veces abrieron el link
-    lastAccessed?: string;   // ISO - fecha del último acceso
+    accessCount?: number;
+    lastAccessed?: string;
+    // Lead info (optional)
+    leadName?: string;
+    leadEmail?: string;
+    leadPhone?: string;
+    leadCfdi?: string;
+    leadOrigen?: string;
 }
 
-interface BinData {
-    tokens: ManagedToken[];
-}
-
-async function fetchBin(): Promise<BinData> {
-    const res = await fetch(`${BASE_URL}/latest`, {
-        headers: {
-            "X-Master-Key": MASTER_KEY,
-            "X-Bin-Meta": "false",
-        },
-    });
-    if (!res.ok) throw new Error(`JSONBin error: ${res.status}`);
-    return res.json();
-}
-
-async function updateBin(data: BinData): Promise<void> {
-    const res = await fetch(BASE_URL, {
-        method: "PUT",
-        headers: {
-            "Content-Type": "application/json",
-            "X-Master-Key": MASTER_KEY,
-        },
-        body: JSON.stringify(data),
-    });
-    if (!res.ok) throw new Error(`JSONBin update error: ${res.status}`);
-}
+const ADMIN_ENDPOINT = "/api/functions/admin-proxy";
+const PUBLIC_ENDPOINT = "/api/functions/token-validate";
 
 export const jsonbinService = {
     /** Obtiene todos los tokens del bin */
-    async getTokens(): Promise<ManagedToken[]> {
-        const data = await fetchBin();
-        return data.tokens || [];
+    async getTokens(password: string): Promise<ManagedToken[]> {
+        const res = await fetch(ADMIN_ENDPOINT, {
+            headers: { "x-admin-password": password }
+        });
+        if (!res.ok) throw new Error("Unauthorized");
+        return res.json();
     },
 
     /** Crea un nuevo token */
-    async createToken(token: Omit<ManagedToken, "id" | "createdAt">): Promise<ManagedToken> {
-        const data = await fetchBin();
-        const newToken: ManagedToken = {
-            ...token,
-            id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-            createdAt: new Date().toISOString(),
-        };
-        data.tokens = [...(data.tokens || []), newToken];
-        await updateBin(data);
-        return newToken;
+    async createToken(token: Omit<ManagedToken, "id" | "createdAt">, password: string): Promise<ManagedToken> {
+        const res = await fetch(ADMIN_ENDPOINT, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-admin-password": password },
+            body: JSON.stringify({ action: "create", payload: token })
+        });
+        if (!res.ok) throw new Error("Unauthorized");
+        return res.json();
     },
 
     /** Activa o desactiva un token */
-    async toggleToken(id: string, active: boolean): Promise<void> {
-        const data = await fetchBin();
-        data.tokens = data.tokens.map(t =>
-            t.id === id ? { ...t, active } : t
-        );
-        await updateBin(data);
+    async toggleToken(id: string, active: boolean, password: string): Promise<void> {
+        const res = await fetch(ADMIN_ENDPOINT, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-admin-password": password },
+            body: JSON.stringify({ action: "toggle", payload: { id, active } })
+        });
+        if (!res.ok) throw new Error("Unauthorized");
     },
 
     /** Elimina un token permanentemente */
-    async deleteToken(id: string): Promise<void> {
-        const data = await fetchBin();
-        data.tokens = data.tokens.filter(t => t.id !== id);
-        await updateBin(data);
+    async deleteToken(id: string, password: string): Promise<void> {
+        const res = await fetch(ADMIN_ENDPOINT, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-admin-password": password },
+            body: JSON.stringify({ action: "delete", payload: { id } })
+        });
+        if (!res.ok) throw new Error("Unauthorized");
     },
 
-    /** Valida un token y registra el acceso en 2 peticiones (GET + PUT) */
+    /** Valida un token (PÚBLICO) */
     async validateToken(tokenCode: string): Promise<ManagedToken | null> {
         try {
-            // 1 GET: leemos el bin completo
-            const data = await fetchBin();
-            const tokens = data.tokens || [];
-
-            const found = tokens.find(
-                t => t.token.toLowerCase() === tokenCode.toLowerCase() && t.active
-            );
-            if (!found) return null;
-
-            // Verificar expiración
-            const expiry = new Date(found.expiresAt + "T23:59:59");
-            if (new Date() > expiry) return null;
-
-            // Actualizar contador en los datos ya leídos (sin otro GET)
-            const updatedToken = {
-                ...found,
-                accessCount: (found.accessCount || 0) + 1,
-                lastAccessed: new Date().toISOString(),
-            };
-            data.tokens = tokens.map(t => t.id === found.id ? updatedToken : t);
-
-            // 1 PUT: guardamos todo en un solo paso
-            updateBin(data).catch(() => { }); // En background, no bloquea el login
-
-            return updatedToken;
+            const res = await fetch(PUBLIC_ENDPOINT, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "validate", payload: { tokenCode } })
+            });
+            if (!res.ok) return null;
+            return res.json();
         } catch {
             return null;
         }
     },
 
-    /** Tracking manual (por si se necesita en otro contexto) */
+    /** Tracking manual (PÚBLICO) */
     async trackTokenAccess(id: string): Promise<void> {
-        const data = await fetchBin();
-        data.tokens = data.tokens.map(t =>
-            t.id === id
-                ? {
-                    ...t,
-                    accessCount: (t.accessCount || 0) + 1,
-                    lastAccessed: new Date().toISOString(),
-                }
-                : t
-        );
-        await updateBin(data);
+        await fetch(PUBLIC_ENDPOINT, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "track", payload: { id } })
+        });
     },
 };
 

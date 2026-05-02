@@ -2,9 +2,6 @@ import { useState, useEffect } from "react";
 import { jsonbinService, ManagedToken } from "@/services/jsonbinService";
 import { Shield, Plus, Trash2, ToggleLeft, ToggleRight, Copy, Check, LogOut, RefreshCw, AlertTriangle, Key } from "lucide-react";
 import { toast } from "sonner";
-
-const MASTER_PASSWORD = import.meta.env.VITE_ADMIN_TOKENS_PASSWORD || "Mentores2026!";
-
 function formatDate(dateStr: string): string {
     return new Date(dateStr + "T00:00:00").toLocaleDateString("es-MX", {
         year: "numeric",
@@ -44,23 +41,29 @@ export default function AdminTokens() {
         if (authenticated) loadTokens();
     }, [authenticated]);
 
-    const handleLogin = (e: React.FormEvent) => {
+    const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (password === MASTER_PASSWORD) {
+        setLoading(true);
+        try {
+            const tokensList = await jsonbinService.getTokens(password);
+            setTokens(tokensList);
             setAuthenticated(true);
             setPwError(false);
-        } else {
+        } catch (err) {
             setPwError(true);
+        } finally {
+            setLoading(false);
         }
     };
 
     const loadTokens = async () => {
         setLoading(true);
         try {
-            const tokens = await jsonbinService.getTokens();
-            setTokens(tokens);
+            const tokensList = await jsonbinService.getTokens(password);
+            setTokens(tokensList);
         } catch (err) {
-            toast.error("Error al conectar con JSONBin. Verifica la API Key.");
+            toast.error("Error al conectar con el servidor. Verifica tu sesión.");
+            setAuthenticated(false);
         } finally {
             setLoading(false);
         }
@@ -77,7 +80,7 @@ export default function AdminTokens() {
             const newToken = await jsonbinService.createToken({
                 ...form,
                 active: true,
-            });
+            }, password);
             setTokens(prev => [...prev, newToken]);
             setForm({ token: "", label: "", expiresAt: "", demoCompanyName: "Empresa Demo SA de CV", demoCompanyRFC: "AAA010101AAA" });
             setShowForm(false);
@@ -91,7 +94,7 @@ export default function AdminTokens() {
 
     const handleToggle = async (id: string, currentActive: boolean) => {
         try {
-            await jsonbinService.toggleToken(id, !currentActive);
+            await jsonbinService.toggleToken(id, !currentActive, password);
             setTokens(prev => prev.map(t => t.id === id ? { ...t, active: !currentActive } : t));
             toast.success(currentActive ? "Token desactivado." : "Token activado.");
         } catch {
@@ -102,7 +105,7 @@ export default function AdminTokens() {
     const handleDelete = async (id: string, tokenCode: string) => {
         if (!confirm(`¿Eliminar el token "${tokenCode}" permanentemente?`)) return;
         try {
-            await jsonbinService.deleteToken(id);
+            await jsonbinService.deleteToken(id, password);
             setTokens(prev => prev.filter(t => t.id !== id));
             toast.success("Token eliminado.");
         } catch {
