@@ -111,7 +111,7 @@ export default function LeadCapture({ onComplete }: LeadCaptureProps) {
 
             markLeadRegistered();
             setGeneratedToken(result.token);
-            toast.success("¡Acceso generado con éxito!");
+            toast.success("Tu solicitud fue recibida. Token en espera de activación.");
 
         } catch (err) {
             console.error("[LeadCapture] Error inesperado:", err);
@@ -124,7 +124,7 @@ export default function LeadCapture({ onComplete }: LeadCaptureProps) {
     const handleWhatsAppRedirect = () => {
         trackEvent("whatsapp_redirect_clicked", { token: generatedToken });
         const whatsappNumber = "524776355734";
-        const text = `Hola, acabo de registrarme. El sistema me asignó el token ${generatedToken}. Vengo a iniciar mi prueba.`;
+        const text = `Hola, acabo de registrarme en Sentinel Express. El sistema me asignó el token ${generatedToken}. Quedo a la espera de que activen mi prueba de 30 días.`;
         const encodedText = encodeURIComponent(text);
         const whatsappUrl = `https://wa.me/${whatsappNumber}?text=${encodedText}`;
         window.location.href = whatsappUrl;
@@ -213,14 +213,14 @@ export default function LeadCapture({ onComplete }: LeadCaptureProps) {
                     {generatedToken ? (
                         <div className="space-y-6 text-center animate-in fade-in slide-in-from-bottom-4 duration-500">
                             <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 p-6 rounded-2xl">
-                                <h4 className="text-green-800 dark:text-green-400 font-bold uppercase tracking-widest text-xs mb-2">
-                                    Tu Token Automático Es:
+                                <h4 className="text-blue-800 dark:text-blue-400 font-bold uppercase tracking-widest text-xs mb-2">
+                                    Tu Solicitud Fue Recibida
                                 </h4>
                                 <div className="text-3xl font-black font-mono text-slate-800 dark:text-white tracking-widest">
                                     {generatedToken}
                                 </div>
-                                <p className="text-xs text-green-700 dark:text-green-500 mt-3">
-                                    Cópialo o guárdalo, es tu llave de acceso privado.
+                                <p className="text-xs text-blue-700 dark:text-blue-500 mt-3 font-medium">
+                                    Este es tu token temporal. Te contactaremos por WhatsApp para activar tu prueba de 30 días.
                                 </p>
                             </div>
                             
