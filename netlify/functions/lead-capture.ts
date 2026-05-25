@@ -22,7 +22,7 @@ export const handler = async (event: any) => {
         if (event.httpMethod !== "POST") return { statusCode: 405, body: "Method Not Allowed" };
 
         const body = JSON.parse(event.body || "{}");
-        const { nombre, empresa, email, telefono, cfdi_mensuales, origen } = body;
+        const { nombre, empresa, email, telefono, cfdi_mensuales, origen, token } = body;
         
         if (!email || !telefono) return { statusCode: 400, body: JSON.stringify({ error: "Faltan datos requeridos" }) };
 
@@ -59,9 +59,9 @@ export const handler = async (event: any) => {
             }
         }
 
-        // Generate new token
+        // Generate new token or use provided one
         const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        const code = Array.from({ length: 8 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+        const code = token || Array.from({ length: 8 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
         
         const expiryDate = new Date();
         expiryDate.setDate(expiryDate.getDate() + 7); // +7 days
