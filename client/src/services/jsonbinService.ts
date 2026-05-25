@@ -31,11 +31,18 @@ export const jsonbinService = {
             const errBody = await res.json().catch(() => ({}));
             throw { status: res.status, error: errBody.error || "Unknown Error" };
         }
+        
+        const headerDisabled = res.headers.get("x-jsonbin-disabled") === "true";
         const data = await res.json();
+        
         if (Array.isArray(data)) {
-            return { tokens: data };
+            return { tokens: data, disabled: headerDisabled };
         }
-        return data;
+        
+        return { 
+            tokens: Array.isArray(data?.tokens) ? data.tokens : [], 
+            disabled: headerDisabled || data?.disabled || false 
+        };
     },
 
     /** Crea un nuevo token */

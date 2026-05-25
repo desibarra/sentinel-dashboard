@@ -181,6 +181,8 @@ export default function AdminTokens() {
     }
 
     // --- PANEL PRINCIPAL ---
+    const safeTokens = Array.isArray(tokens) ? tokens : [];
+
     return (
         <div className="min-h-screen bg-zinc-950 text-white">
             {/* Header */}
@@ -227,7 +229,7 @@ export default function AdminTokens() {
                 {/* Botón crear */}
                 <div className="flex items-center justify-between">
                     <div>
-                        <p className="text-sm text-zinc-400">{tokens.length} token{tokens.length !== 1 ? "s" : ""} registrado{tokens.length !== 1 ? "s" : ""}</p>
+                        <p className="text-sm text-zinc-400">{safeTokens.length} token{safeTokens.length !== 1 ? "s" : ""} registrado{safeTokens.length !== 1 ? "s" : ""}</p>
                     </div>
                     {!jsonbinDisabled && (
                         <button
@@ -313,15 +315,17 @@ export default function AdminTokens() {
                         <div className="w-8 h-8 border-4 border-yellow-400 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
                         <p className="text-xs uppercase tracking-widest">Cargando tokens...</p>
                     </div>
-                ) : tokens.length === 0 ? (
+                ) : safeTokens.length === 0 ? (
                     <div className="text-center py-16 space-y-3 border-2 border-dashed border-zinc-800 rounded-2xl">
                         <Key className="w-10 h-10 text-zinc-700 mx-auto" />
                         <p className="text-sm text-zinc-500">No hay tokens creados todavía.</p>
-                        <button onClick={() => setShowForm(true)} className="text-xs text-yellow-400 hover:underline">+ Crear el primero</button>
+                        {!jsonbinDisabled && (
+                            <button onClick={() => setShowForm(true)} className="text-xs text-yellow-400 hover:underline">+ Crear el primero</button>
+                        )}
                     </div>
                 ) : (
                     <div className="space-y-3">
-                        {tokens.map(token => {
+                        {safeTokens.map(token => {
                             const days = daysUntil(token.expiresAt);
                             const expired = days < 0;
                             const urgent = days >= 0 && days <= 5;

@@ -33,10 +33,18 @@ export const handler = async (event: any) => {
 
         if (event.httpMethod === "GET") {
             if (!isJsonBinConfigured) {
-                return { statusCode: 200, body: JSON.stringify({ disabled: true, tokens: [] }) };
+                return { 
+                    statusCode: 200, 
+                    headers: { "x-jsonbin-disabled": "true" },
+                    body: JSON.stringify([]) 
+                };
             }
             const data = await fetchBin();
-            return { statusCode: 200, body: JSON.stringify({ disabled: false, tokens: data.tokens || [] }) };
+            return { 
+                statusCode: 200, 
+                headers: { "x-jsonbin-disabled": "false" },
+                body: JSON.stringify(data.tokens || []) 
+            };
         }
 
         if (event.httpMethod === "POST") {
