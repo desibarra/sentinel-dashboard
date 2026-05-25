@@ -41,12 +41,21 @@ export default function AdminTokens() {
         setPwError(false);
         setLoginErrorMsg("");
         try {
-            const tokensList = await tokenService.getTokens(password);
-            setTokens(tokensList);
+            const data = await tokenService.getTokens(password);
             setAuthenticated(true);
+            if (data.blobError) {
+                toast.error("Error al conectar con la base de accesos (Blobs).");
+            }
+            setTokens(data.tokens || []);
         } catch (err: any) {
             setPwError(true);
-            setLoginErrorMsg("Contraseña incorrecta o error de conexión.");
+            if (err.code === "INVALID_PASSWORD") {
+                setLoginErrorMsg("Contraseña incorrecta.");
+            } else if (err.code === "MISSING_ADMIN_PASSWORD") {
+                setLoginErrorMsg("Falta ADMIN_TOKENS_PASSWORD en Netlify.");
+            } else {
+                setLoginErrorMsg("Error de conexión al verificar credenciales.");
+            }
         } finally {
             setLoading(false);
         }
@@ -55,8 +64,12 @@ export default function AdminTokens() {
     const loadTokens = async () => {
         setLoading(true);
         try {
-            const tokensList = await tokenService.getTokens(password);
+            const data = await tokenService.getTokens(password);
+            if (data.blobError) {
+                toast.error("Error de conexión con la base de accesos de Blobs.");
+            }
             // Ordenar pendientes primero, luego activos
+            const tokensList = data.tokens || [];
             const sorted = tokensList.sort((a, b) => {
                 if (a.status === 'pending' && b.status !== 'pending') return -1;
                 if (a.status !== 'pending' && b.status === 'pending') return 1;
