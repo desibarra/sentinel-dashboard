@@ -20,7 +20,18 @@ export const handler = async (event: any) => {
             return { statusCode: 400, body: JSON.stringify({ error: "Token required" }) };
         }
 
-        const store = getStore("sentinel-tokens");
+        let store;
+        try {
+            store = getStore({
+                name: "sentinel-tokens",
+                consistency: "strong",
+                siteID: process.env.NETLIFY_SITE_ID || "45d68d70-756c-49fd-8162-9efbc826c577",
+                token: process.env.NETLIFY_API_TOKEN
+            });
+        } catch (e: any) {
+            console.error("[ValidateToken] Error configurando Blobs:", e.message);
+            return { statusCode: 500, body: JSON.stringify({ error: "Error de conexión con la base de tokens" }) };
+        }
         const tokenData: any = await store.get(tokenCode, { type: "json" });
 
         if (!tokenData) {
