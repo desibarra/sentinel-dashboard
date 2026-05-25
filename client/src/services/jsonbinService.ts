@@ -27,7 +27,10 @@ export const jsonbinService = {
         const res = await fetch(ADMIN_ENDPOINT, {
             headers: { "x-admin-password": password }
         });
-        if (!res.ok) throw new Error("Unauthorized");
+        if (!res.ok) {
+            const errBody = await res.json().catch(() => ({}));
+            throw { status: res.status, error: errBody.error || "Unknown Error" };
+        }
         return res.json();
     },
 
@@ -38,7 +41,10 @@ export const jsonbinService = {
             headers: { "Content-Type": "application/json", "x-admin-password": password },
             body: JSON.stringify({ action: "create", payload: token })
         });
-        if (!res.ok) throw new Error("Unauthorized");
+        if (!res.ok) {
+            const errBody = await res.json().catch(() => ({}));
+            throw { status: res.status, error: errBody.error || "Unknown Error" };
+        }
         return res.json();
     },
 
@@ -49,7 +55,10 @@ export const jsonbinService = {
             headers: { "Content-Type": "application/json", "x-admin-password": password },
             body: JSON.stringify({ action: "toggle", payload: { id, active } })
         });
-        if (!res.ok) throw new Error("Unauthorized");
+        if (!res.ok) {
+            const errBody = await res.json().catch(() => ({}));
+            throw { status: res.status, error: errBody.error || "Unknown Error" };
+        }
     },
 
     /** Elimina un token permanentemente */
@@ -59,7 +68,10 @@ export const jsonbinService = {
             headers: { "Content-Type": "application/json", "x-admin-password": password },
             body: JSON.stringify({ action: "delete", payload: { id } })
         });
-        if (!res.ok) throw new Error("Unauthorized");
+        if (!res.ok) {
+            const errBody = await res.json().catch(() => ({}));
+            throw { status: res.status, error: errBody.error || "Unknown Error" };
+        }
     },
 
     /** Valida un token (PÚBLICO) */
@@ -86,4 +98,3 @@ export const jsonbinService = {
         });
     },
 };
-

@@ -21,6 +21,7 @@ export default function AdminTokens() {
     const [authenticated, setAuthenticated] = useState(false);
     const [password, setPassword] = useState("");
     const [pwError, setPwError] = useState(false);
+    const [loginErrorMsg, setLoginErrorMsg] = useState("");
 
     const [tokens, setTokens] = useState<ManagedToken[]>([]);
     const [loading, setLoading] = useState(false);
@@ -44,13 +45,20 @@ export default function AdminTokens() {
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
+        setPwError(false);
+        setLoginErrorMsg("");
         try {
             const tokensList = await jsonbinService.getTokens(password);
             setTokens(tokensList);
             setAuthenticated(true);
-            setPwError(false);
-        } catch (err) {
-            setPwError(true);
+        } catch (err: any) {
+            if (err.status === 401) {
+                setPwError(true);
+            } else if (err.status === 503 || err.error === "MISSING_ENV_VARS") {
+                setLoginErrorMsg("Error de configuración: Faltan variables de entorno en el servidor.");
+            } else {
+                setLoginErrorMsg("La contraseña parece correcta, pero no se pudo conectar con la base de datos de leads. Revisa JSONBin o variables de entorno.");
+            }
         } finally {
             setLoading(false);
         }
@@ -150,16 +158,18 @@ export default function AdminTokens() {
                                 onChange={e => setPassword(e.target.value)}
                                 placeholder="Contraseña maestra"
                                 autoFocus
-                                className={`w-full px-4 py-3 rounded-xl bg-zinc-800 border text-white text-sm placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-yellow-400 ${pwError ? "border-red-500" : "border-zinc-700"
+                                className={`w-full px-4 py-3 rounded-xl bg-zinc-800 border text-white text-sm placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-yellow-400 ${pwError || loginErrorMsg ? "border-red-500" : "border-zinc-700"
                                     }`}
                             />
                             {pwError && <p className="text-xs text-red-400 mt-1">Contraseña incorrecta.</p>}
+                            {loginErrorMsg && <p className="text-xs text-red-400 mt-1">{loginErrorMsg}</p>}
                         </div>
                         <button
                             type="submit"
-                            className="w-full py-3 bg-yellow-400 hover:bg-yellow-300 text-zinc-950 font-black uppercase tracking-tighter rounded-xl transition-all"
+                            disabled={loading}
+                            className="w-full py-3 bg-yellow-400 hover:bg-yellow-300 disabled:opacity-50 text-zinc-950 font-black uppercase tracking-tighter rounded-xl transition-all"
                         >
-                            Acceder al Panel
+                            {loading ? "Verificando..." : "Acceder al Panel"}
                         </button>
                     </form>
                 </div>

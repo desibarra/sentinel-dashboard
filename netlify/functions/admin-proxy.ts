@@ -4,25 +4,34 @@ const ADMIN_PW = process.env.ADMIN_TOKENS_PASSWORD;
 const BASE_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
 
 async function fetchBin() {
-    const res = await fetch(`${BASE_URL}/latest`, { headers: { "X-Master-Key": MASTER_KEY!, "X-Bin-Meta": "false" } });
-    if (!res.ok) throw new Error("JSONBin GET error");
+    const res = await fetch(`${BASE_URL}/latest`, { headers: { "X-Master-Key": MASTER_KEY || "", "X-Bin-Meta": "false" } });
+    if (!res.ok) throw new Error(`JSONBIN_ERROR:${res.status}`);
     return res.json();
 }
 
 async function updateBin(data: any) {
     const res = await fetch(BASE_URL, {
         method: "PUT",
-        headers: { "Content-Type": "application/json", "X-Master-Key": MASTER_KEY! },
+        headers: { "Content-Type": "application/json", "X-Master-Key": MASTER_KEY || "" },
         body: JSON.stringify(data),
     });
-    if (!res.ok) throw new Error("JSONBin PUT error");
+    if (!res.ok) throw new Error(`JSONBIN_ERROR:${res.status}`);
 }
 
 export const handler = async (event: any) => {
     try {
+        console.log(`[AdminProxy] ADMIN_TOKENS_PASSWORD existe: ${!!ADMIN_PW}`);
+        console.log(`[AdminProxy] JSONBIN_MASTER_KEY existe: ${!!MASTER_KEY}`);
+        console.log(`[AdminProxy] JSONBIN_BIN_ID existe: ${!!BIN_ID}`);
+
         const password = event.headers["x-admin-password"];
         if (!password || password !== ADMIN_PW) {
             return { statusCode: 401, body: JSON.stringify({ error: "Unauthorized" }) };
+        }
+
+        if (!MASTER_KEY || !BIN_ID) {
+            console.error(`[AdminProxy] Error de configuración: Faltan variables de entorno para JSONBin`);
+            return { statusCode: 503, body: JSON.stringify({ error: "MISSING_ENV_VARS" }) };
         }
 
         if (event.httpMethod === "GET") {
@@ -57,6 +66,11 @@ export const handler = async (event: any) => {
         }
         return { statusCode: 400, body: "Bad Request" };
     } catch (e: any) {
-        return { statusCode: 500, body: JSON.stringify({ error: e.message }) };
+        if (e.message.startsWith("JSONBIN_ERROR")) {
+            console.error(`[AdminProxy] Error de conexión con JSONBin: ${e.message}`);
+            return { statusCode: 502, body: JSON.stringify({ error: "JSONBIN_CONNECTION_ERROR", details: e.message }) };
+        }
+        console.error(`[AdminProxy] Error interno del servidor: ${e.message}`);
+        return { statusCode: 500, body: JSON.stringify({ error: "INTERNAL_ERROR", details: e.message }) };
     }
 };
