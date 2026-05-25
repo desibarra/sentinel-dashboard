@@ -22,8 +22,8 @@ const ADMIN_ENDPOINT = "/api/functions/admin-proxy";
 const PUBLIC_ENDPOINT = "/api/functions/token-validate";
 
 export const jsonbinService = {
-    /** Obtiene todos los tokens del bin */
-    async getTokens(password: string): Promise<ManagedToken[]> {
+    /** Obtiene todos los tokens. Retorna también si JSONBin está deshabilitado. */
+    async getTokens(password: string): Promise<{ tokens: ManagedToken[], disabled?: boolean }> {
         const res = await fetch(ADMIN_ENDPOINT, {
             headers: { "x-admin-password": password }
         });
@@ -31,7 +31,11 @@ export const jsonbinService = {
             const errBody = await res.json().catch(() => ({}));
             throw { status: res.status, error: errBody.error || "Unknown Error" };
         }
-        return res.json();
+        const data = await res.json();
+        if (Array.isArray(data)) {
+            return { tokens: data };
+        }
+        return data;
     },
 
     /** Crea un nuevo token */

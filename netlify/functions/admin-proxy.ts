@@ -29,17 +29,20 @@ export const handler = async (event: any) => {
             return { statusCode: 401, body: JSON.stringify({ error: "Unauthorized" }) };
         }
 
-        if (!MASTER_KEY || !BIN_ID) {
-            console.error(`[AdminProxy] Error de configuración: Faltan variables de entorno para JSONBin`);
-            return { statusCode: 503, body: JSON.stringify({ error: "MISSING_ENV_VARS" }) };
-        }
+        const isJsonBinConfigured = !!(MASTER_KEY && BIN_ID);
 
         if (event.httpMethod === "GET") {
+            if (!isJsonBinConfigured) {
+                return { statusCode: 200, body: JSON.stringify({ disabled: true, tokens: [] }) };
+            }
             const data = await fetchBin();
-            return { statusCode: 200, body: JSON.stringify(data.tokens || []) };
+            return { statusCode: 200, body: JSON.stringify({ disabled: false, tokens: data.tokens || [] }) };
         }
 
         if (event.httpMethod === "POST") {
+            if (!isJsonBinConfigured) {
+                return { statusCode: 403, body: JSON.stringify({ error: "JSONBIN_NOT_CONFIGURED" }) };
+            }
             const body = JSON.parse(event.body || "{}");
             const { action, payload } = body;
             const data = await fetchBin();
