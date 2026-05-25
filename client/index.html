@@ -88,6 +88,19 @@
 </head>
 
 <body>
+  <!-- Netlify Forms (Hidden static form for detection) -->
+  <form name="sentinel-leads" data-netlify="true" hidden>
+    <input type="hidden" name="form-name" value="sentinel-leads" />
+    <input type="text" name="nombre" />
+    <input type="text" name="empresa" />
+    <input type="email" name="correo" />
+    <input type="tel" name="telefono" />
+    <input type="text" name="cfdi" />
+    <input type="text" name="token" />
+    <input type="text" name="origen" />
+    <input type="text" name="fecha" />
+  </form>
+
   <div id="root"></div>
   <script type="module" src="/src/main.tsx"></script>
   <!-- El script de Umami se inyectará dinámicamente desde vite.config.ts en producción -->
