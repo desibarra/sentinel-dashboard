@@ -3,18 +3,18 @@ const BIN_ID = process.env.JSONBIN_BIN_ID;
 const BASE_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
 
 async function fetchBin() {
-    const res = await fetch(`${BASE_URL}/latest`, { headers: { "X-Master-Key": MASTER_KEY!, "X-Bin-Meta": "false" } });
-    if (!res.ok) throw new Error("JSONBin GET error");
+    const res = await fetch(`${BASE_URL}/latest`, { headers: { "X-Master-Key": MASTER_KEY || "", "X-Bin-Meta": "false" } });
+    if (!res.ok) throw new Error(`JSONBin GET error: Status ${res.status}`);
     return res.json();
 }
 
 async function updateBin(data: any) {
     const res = await fetch(BASE_URL, {
         method: "PUT",
-        headers: { "Content-Type": "application/json", "X-Master-Key": MASTER_KEY! },
+        headers: { "Content-Type": "application/json", "X-Master-Key": MASTER_KEY || "" },
         body: JSON.stringify(data),
     });
-    if (!res.ok) throw new Error("JSONBin PUT error");
+    if (!res.ok) throw new Error(`JSONBin PUT error: Status ${res.status}`);
 }
 
 export const handler = async (event: any) => {
@@ -26,11 +26,21 @@ export const handler = async (event: any) => {
         
         if (!email || !telefono) return { statusCode: 400, body: JSON.stringify({ error: "Faltan datos requeridos" }) };
 
-        const data = await fetchBin();
-        data.tokens = data.tokens || [];
+        console.log(`[LeadCapture] JSONBIN_API_KEY existe: ${!!MASTER_KEY}`);
+        console.log(`[LeadCapture] JSONBIN_BIN_ID existe: ${!!BIN_ID}`);
 
-        // Duplicate check
-        const existingToken = data.tokens.find((t: any) => t.leadEmail === email || t.leadPhone === telefono);
+        let data: any = { tokens: [] };
+        let jsonbinError: string | null = null;
+        let existingToken: any = null;
+
+        try {
+            data = await fetchBin();
+            data.tokens = data.tokens || [];
+            existingToken = data.tokens.find((t: any) => t.leadEmail === email || t.leadPhone === telefono);
+        } catch (e: any) {
+            console.log(`[LeadCapture] Error en JSONBin GET: ${e.message}`);
+            jsonbinError = e.message;
+        }
 
         if (existingToken) {
             const expiry = new Date(existingToken.expiresAt + "T23:59:59");
@@ -39,12 +49,14 @@ export const handler = async (event: any) => {
                 return { 
                     statusCode: 200, 
                     body: JSON.stringify({ 
+                        success: true,
+                        saved: !jsonbinError,
+                        warning: jsonbinError ? "Lead no validado correctamente (JSONBin caído), acceso permitido con token anterior" : undefined,
                         token: existingToken.token, 
                         events: ["duplicate_detected", "token_reused"] 
                     }) 
                 };
             }
-            // Expired or inactive, generate new
         }
 
         // Generate new token
@@ -70,18 +82,37 @@ export const handler = async (event: any) => {
             leadOrigen: origen
         };
 
-        data.tokens.push(newToken);
-        await updateBin(data);
+        if (!jsonbinError) {
+            try {
+                data.tokens.push(newToken);
+                await updateBin(data);
+            } catch (e: any) {
+                console.log(`[LeadCapture] Error en JSONBin PUT: ${e.message}`);
+                jsonbinError = e.message;
+            }
+        }
+
+        let saved = true;
+        let warning = undefined;
+        if (jsonbinError) {
+            saved = false;
+            warning = "Lead no guardado temporalmente, acceso permitido";
+            console.log(`[LeadCapture] Respaldo activado: Devolviendo acceso sin persistencia debido a: ${jsonbinError}`);
+        }
 
         return { 
             statusCode: 200, 
-            body: JSON.stringify({ 
+            body: JSON.stringify({
+                success: true,
+                saved,
+                warning,
                 token: code, 
                 events: existingToken ? ["duplicate_detected", "token_generated"] : ["lead_registered", "token_generated"] 
             }) 
         };
 
     } catch (e: any) {
+        console.error(`[LeadCapture] Error inesperado en el backend: ${e.message}`);
         return { statusCode: 500, body: JSON.stringify({ error: e.message }) };
     }
 };

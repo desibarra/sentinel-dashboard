@@ -35,6 +35,9 @@ export async function saveLeadToServer(lead: Lead): Promise<{ ok: boolean; token
         }
 
         const data = await response.json();
+        if (data.saved === false) {
+            console.warn(`[LeadService] backend warning: ${data.warning}`);
+        }
         return { ok: true, token: data.token, events: data.events };
     } catch (err: any) {
         console.error("[LeadService] Network error:", err);
