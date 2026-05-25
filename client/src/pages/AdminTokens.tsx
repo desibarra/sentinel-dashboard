@@ -24,6 +24,7 @@ export default function AdminTokens() {
     const [loginErrorMsg, setLoginErrorMsg] = useState("");
 
     const [tokens, setTokens] = useState<ManagedToken[]>([]);
+    const [jsonbinDisabled, setJsonbinDisabled] = useState(false);
     const [loading, setLoading] = useState(false);
     const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -48,8 +49,9 @@ export default function AdminTokens() {
         setPwError(false);
         setLoginErrorMsg("");
         try {
-            const tokensList = await jsonbinService.getTokens(password);
-            setTokens(tokensList);
+            const response = await jsonbinService.getTokens(password);
+            setTokens(response.tokens || []);
+            setJsonbinDisabled(response.disabled || false);
             setAuthenticated(true);
         } catch (err: any) {
             if (err.status === 401) {
@@ -67,8 +69,9 @@ export default function AdminTokens() {
     const loadTokens = async () => {
         setLoading(true);
         try {
-            const tokensList = await jsonbinService.getTokens(password);
-            setTokens(tokensList);
+            const response = await jsonbinService.getTokens(password);
+            setTokens(response.tokens || []);
+            setJsonbinDisabled(response.disabled || false);
         } catch (err) {
             toast.error("Error al conectar con el servidor. Verifica tu sesión.");
             setAuthenticated(false);
@@ -210,18 +213,31 @@ export default function AdminTokens() {
             </div>
 
             <div className="max-w-5xl mx-auto px-4 py-8 space-y-6">
+                {jsonbinDisabled && (
+                    <div className="bg-blue-950 border border-blue-800 rounded-xl p-4 flex gap-3 items-start">
+                        <span className="text-xl">ℹ️</span>
+                        <div className="text-sm text-blue-200">
+                            <strong className="block text-blue-100 mb-1">JSONBin no está configurado</strong>
+                            Los leads ahora se consultan nativamente desde <b>Netlify Forms</b>. <br/>
+                            Revisa Netlify → sentinel-express → Forms → <b>sentinel-leads</b> para ver los registros. La gestión manual de tokens está desactivada en este modo.
+                        </div>
+                    </div>
+                )}
+
                 {/* Botón crear */}
                 <div className="flex items-center justify-between">
                     <div>
                         <p className="text-sm text-zinc-400">{tokens.length} token{tokens.length !== 1 ? "s" : ""} registrado{tokens.length !== 1 ? "s" : ""}</p>
                     </div>
-                    <button
-                        onClick={() => setShowForm(!showForm)}
-                        className="flex items-center gap-2 px-4 py-2 bg-yellow-400 hover:bg-yellow-300 text-zinc-950 font-black uppercase text-xs tracking-tighter rounded-xl transition-all"
-                    >
-                        <Plus className="w-4 h-4" />
-                        Nuevo Token
-                    </button>
+                    {!jsonbinDisabled && (
+                        <button
+                            onClick={() => setShowForm(!showForm)}
+                            className="flex items-center gap-2 px-4 py-2 bg-yellow-400 hover:bg-yellow-300 text-zinc-950 font-black uppercase text-xs tracking-tighter rounded-xl transition-all"
+                        >
+                            <Plus className="w-4 h-4" />
+                            Nuevo Token
+                        </button>
+                    )}
                 </div>
 
                 {/* Formulario nuevo token */}
