@@ -37,12 +37,13 @@ export const tokenService = {
     },
 
     /** Obtiene todos los tokens para el panel de admin */
-    async getTokens(password: string): Promise<TokenData[]> {
+    async getTokens(password: string): Promise<{ authenticated: boolean, blobError?: boolean, errorDetails?: string, tokens: TokenData[] }> {
         const res = await fetch(ADMIN_ENDPOINT, {
             headers: { "x-admin-password": password }
         });
         if (!res.ok) {
-            throw new Error("Unauthorized");
+            const errBody = await res.json().catch(() => ({}));
+            throw { status: res.status, code: errBody.code || "UNKNOWN", error: errBody.error || "Unknown Error" };
         }
         return await res.json();
     },

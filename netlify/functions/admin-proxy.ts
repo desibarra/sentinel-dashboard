@@ -1,33 +1,57 @@
 import { getStore } from "@netlify/blobs";
 
-const ADMIN_PASSWORD = process.env.ADMIN_TOKENS_PASSWORD || "admin123";
-
 export const handler = async (event: any) => {
+    console.log("[AdminProxy] Function called");
+    console.log(`[AdminProxy] Method: ${event.httpMethod}`);
+    
     try {
-        const passwordHeader = event.headers["x-admin-password"];
+        const ADMIN_PASSWORD = process.env.ADMIN_TOKENS_PASSWORD;
+        console.log(`[AdminProxy] ADMIN_TOKENS_PASSWORD existe: ${!!ADMIN_PASSWORD}`);
         
-        if (passwordHeader !== ADMIN_PASSWORD) {
-            return { statusCode: 401, body: JSON.stringify({ error: "Unauthorized" }) };
+        if (!ADMIN_PASSWORD) {
+            console.log("[AdminProxy] Faltan variables de entorno");
+            return { statusCode: 500, body: JSON.stringify({ code: "MISSING_ADMIN_PASSWORD", error: "Falta ADMIN_TOKENS_PASSWORD en el servidor" }) };
         }
 
-        const store = getStore("sentinel-tokens");
+        const passwordHeader = event.headers["x-admin-password"] || "";
+        console.log(`[AdminProxy] Longitud password recibida: ${passwordHeader.length}`);
+        console.log(`[AdminProxy] Longitud password configurada: ${ADMIN_PASSWORD.length}`);
+        
+        const isMatch = passwordHeader === ADMIN_PASSWORD;
+        console.log(`[AdminProxy] ¿Contraseñas coinciden?: ${isMatch}`);
+
+        if (!isMatch) {
+            return { statusCode: 401, body: JSON.stringify({ code: "INVALID_PASSWORD", error: "Unauthorized" }) };
+        }
+
+        let store;
+        try {
+            store = getStore("sentinel-tokens");
+        } catch (e: any) {
+            console.error(`[AdminProxy] Error al inicializar Blobs: ${e.message}`);
+            return { statusCode: 200, body: JSON.stringify({ authenticated: true, blobError: true, errorDetails: e.message, tokens: [] }) };
+        }
 
         if (event.httpMethod === "GET") {
-            const { blobs } = await store.list();
-            const tokens = [];
-            
-            // Note: Parallel fetching could be faster for many blobs, but sequential is fine for now
-            for (const blob of blobs) {
-                const tokenData = await store.get(blob.key, { type: "json" });
-                if (tokenData) {
-                    tokens.push(tokenData);
+            try {
+                const { blobs } = await store.list();
+                const tokens = [];
+                
+                for (const blob of blobs) {
+                    const tokenData = await store.get(blob.key, { type: "json" });
+                    if (tokenData) {
+                        tokens.push(tokenData);
+                    }
                 }
+                
+                return { 
+                    statusCode: 200, 
+                    body: JSON.stringify({ authenticated: true, blobError: false, tokens }) 
+                };
+            } catch (e: any) {
+                console.error(`[AdminProxy] Error al leer Blobs (GET): ${e.message}`);
+                return { statusCode: 200, body: JSON.stringify({ authenticated: true, blobError: true, errorDetails: e.message, tokens: [] }) };
             }
-            
-            return { 
-                statusCode: 200, 
-                body: JSON.stringify(tokens) 
-            };
         }
 
         if (event.httpMethod === "POST") {
