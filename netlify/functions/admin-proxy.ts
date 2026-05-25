@@ -1,87 +1,87 @@
-const MASTER_KEY = process.env.JSONBIN_MASTER_KEY;
-const BIN_ID = process.env.JSONBIN_BIN_ID;
-const ADMIN_PW = process.env.ADMIN_TOKENS_PASSWORD;
-const BASE_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
+import { getStore } from "@netlify/blobs";
 
-async function fetchBin() {
-    const res = await fetch(`${BASE_URL}/latest`, { headers: { "X-Master-Key": MASTER_KEY || "", "X-Bin-Meta": "false" } });
-    if (!res.ok) throw new Error(`JSONBIN_ERROR:${res.status}`);
-    return res.json();
-}
-
-async function updateBin(data: any) {
-    const res = await fetch(BASE_URL, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", "X-Master-Key": MASTER_KEY || "" },
-        body: JSON.stringify(data),
-    });
-    if (!res.ok) throw new Error(`JSONBIN_ERROR:${res.status}`);
-}
+const ADMIN_PASSWORD = process.env.ADMIN_TOKENS_PASSWORD || "admin123";
 
 export const handler = async (event: any) => {
     try {
-        console.log(`[AdminProxy] ADMIN_TOKENS_PASSWORD existe: ${!!ADMIN_PW}`);
-        console.log(`[AdminProxy] JSONBIN_MASTER_KEY existe: ${!!MASTER_KEY}`);
-        console.log(`[AdminProxy] JSONBIN_BIN_ID existe: ${!!BIN_ID}`);
-
-        const password = event.headers["x-admin-password"];
-        if (!password || password !== ADMIN_PW) {
+        const passwordHeader = event.headers["x-admin-password"];
+        
+        if (passwordHeader !== ADMIN_PASSWORD) {
             return { statusCode: 401, body: JSON.stringify({ error: "Unauthorized" }) };
         }
 
-        const isJsonBinConfigured = !!(MASTER_KEY && BIN_ID);
+        const store = getStore("sentinel-tokens");
 
         if (event.httpMethod === "GET") {
-            if (!isJsonBinConfigured) {
-                return { 
-                    statusCode: 200, 
-                    headers: { "x-jsonbin-disabled": "true" },
-                    body: JSON.stringify([]) 
-                };
+            const { blobs } = await store.list();
+            const tokens = [];
+            
+            // Note: Parallel fetching could be faster for many blobs, but sequential is fine for now
+            for (const blob of blobs) {
+                const tokenData = await store.get(blob.key, { type: "json" });
+                if (tokenData) {
+                    tokens.push(tokenData);
+                }
             }
-            const data = await fetchBin();
+            
             return { 
                 statusCode: 200, 
-                headers: { "x-jsonbin-disabled": "false" },
-                body: JSON.stringify(data.tokens || []) 
+                body: JSON.stringify(tokens) 
             };
         }
 
         if (event.httpMethod === "POST") {
-            if (!isJsonBinConfigured) {
-                return { statusCode: 403, body: JSON.stringify({ error: "JSONBIN_NOT_CONFIGURED" }) };
-            }
             const body = JSON.parse(event.body || "{}");
-            const { action, payload } = body;
-            const data = await fetchBin();
-            data.tokens = data.tokens || [];
+            const { action, tokenId, days } = body;
+            
+            if (!tokenId) {
+                return { statusCode: 400, body: JSON.stringify({ error: "Token ID required" }) };
+            }
 
-            if (action === "create") {
-                const newToken = { ...payload, id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), createdAt: new Date().toISOString() };
-                data.tokens.push(newToken);
-                await updateBin(data);
-                return { statusCode: 200, body: JSON.stringify(newToken) };
+            const tokenData: any = await store.get(tokenId, { type: "json" });
+            if (!tokenData) {
+                return { statusCode: 404, body: JSON.stringify({ error: "Token not found" }) };
             }
-            if (action === "toggle") {
-                const { id, active } = payload;
-                data.tokens = data.tokens.map((t: any) => t.id === id ? { ...t, active } : t);
-                await updateBin(data);
-                return { statusCode: 200, body: JSON.stringify({ success: true }) };
+
+            const now = new Date();
+
+            if (action === "activate") {
+                const expiresAt = new Date(now.getTime() + (days || 30) * 24 * 60 * 60 * 1000);
+                tokenData.status = "active";
+                tokenData.activatedAt = now.toISOString();
+                tokenData.expiresAt = expiresAt.toISOString();
+            } else if (action === "suspend") {
+                tokenData.status = "suspended";
+            } else if (action === "reactivate") {
+                tokenData.status = "active";
+            } else if (action === "expire") {
+                tokenData.status = "expired";
+            } else if (action === "extend") {
+                if (!tokenData.expiresAt) {
+                    return { statusCode: 400, body: JSON.stringify({ error: "Token was never activated" }) };
+                }
+                const oldExpiry = new Date(tokenData.expiresAt);
+                const newExpiry = new Date(oldExpiry.getTime() + (days || 30) * 24 * 60 * 60 * 1000);
+                tokenData.expiresAt = newExpiry.toISOString();
+            } else if (action === "delete") {
+                await store.delete(tokenId);
+                return { statusCode: 200, body: JSON.stringify({ success: true, deleted: true }) };
+            } else {
+                return { statusCode: 400, body: JSON.stringify({ error: "Unknown action" }) };
             }
-            if (action === "delete") {
-                const { id } = payload;
-                data.tokens = data.tokens.filter((t: any) => t.id !== id);
-                await updateBin(data);
-                return { statusCode: 200, body: JSON.stringify({ success: true }) };
-            }
+
+            await store.setJSON(tokenId, tokenData);
+
+            return { 
+                statusCode: 200, 
+                body: JSON.stringify({ success: true, token: tokenData }) 
+            };
         }
-        return { statusCode: 400, body: "Bad Request" };
+
+        return { statusCode: 405, body: "Method Not Allowed" };
+
     } catch (e: any) {
-        if (e.message.startsWith("JSONBIN_ERROR")) {
-            console.error(`[AdminProxy] Error de conexión con JSONBin: ${e.message}`);
-            return { statusCode: 502, body: JSON.stringify({ error: "JSONBIN_CONNECTION_ERROR", details: e.message }) };
-        }
-        console.error(`[AdminProxy] Error interno del servidor: ${e.message}`);
-        return { statusCode: 500, body: JSON.stringify({ error: "INTERNAL_ERROR", details: e.message }) };
+        console.error(`[AdminProxy] Error: ${e.message}`);
+        return { statusCode: 500, body: JSON.stringify({ error: e.message }) };
     }
 };
