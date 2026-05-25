@@ -10,7 +10,18 @@ export const handler = async (event: any) => {
         if (!email || !telefono) return { statusCode: 400, body: JSON.stringify({ error: "Faltan datos requeridos" }) };
 
         // Connect to Netlify Blobs store
-        const store = getStore("sentinel-tokens");
+        let store;
+        try {
+            store = getStore({
+                name: "sentinel-tokens",
+                consistency: "strong",
+                siteID: process.env.NETLIFY_SITE_ID || "45d68d70-756c-49fd-8162-9efbc826c577",
+                token: process.env.NETLIFY_API_TOKEN
+            });
+        } catch (e: any) {
+            console.error("[LeadCapture] Error configurando Blobs:", e.message);
+            // Si Blobs falla, no detenemos el lead capture, simplemente logeamos
+        }
         
         // Generate new token or use provided one
         const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";

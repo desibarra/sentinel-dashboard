@@ -24,11 +24,26 @@ export const handler = async (event: any) => {
             return { statusCode: 401, body: JSON.stringify({ code: "INVALID_PASSWORD", error: "Unauthorized" }) };
         }
 
+        const apiTokenExists = !!process.env.NETLIFY_API_TOKEN;
+        const siteIdExists = !!process.env.NETLIFY_SITE_ID;
+        const usedSiteId = process.env.NETLIFY_SITE_ID || "45d68d70-756c-49fd-8162-9efbc826c577";
+        
+        console.log(`[AdminProxy] NETLIFY_API_TOKEN existe: ${apiTokenExists}`);
+        console.log(`[AdminProxy] NETLIFY_SITE_ID existe: ${siteIdExists}`);
+        console.log(`[AdminProxy] siteID usado: ${usedSiteId}`);
+        console.log(`[AdminProxy] store name usado: sentinel-tokens`);
+
         let store;
         try {
-            store = getStore("sentinel-tokens");
+            store = getStore({
+                name: "sentinel-tokens",
+                consistency: "strong",
+                siteID: usedSiteId,
+                token: process.env.NETLIFY_API_TOKEN
+            });
         } catch (e: any) {
-            console.error(`[AdminProxy] Error al inicializar Blobs: ${e.message}`);
+            console.error(`[AdminProxy] Error.name: ${e.name}`);
+            console.error(`[AdminProxy] Error.message: ${e.message}`);
             return { statusCode: 200, body: JSON.stringify({ authenticated: true, blobError: true, errorDetails: e.message, tokens: [] }) };
         }
 
