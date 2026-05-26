@@ -78,6 +78,15 @@ export const handler = async (event: any) => {
 
         const xmlText = await satResponse.text();
 
+        // -- TELEMETRÍA MÍNIMA VENDIBLE --
+        tokenData.satQueriesCount = (tokenData.satQueriesCount || 0) + 1;
+        tokenData.lastSatQueryAt = new Date().toISOString();
+        try {
+            await store.setJSON(token, tokenData);
+        } catch (err) {
+            console.error("[SAT Proxy] Error guardando telemetría:", err);
+        }
+
         return {
             statusCode: 200,
             headers: {

@@ -149,6 +149,15 @@ export default function AdminTokens() {
             t.id.toLowerCase().includes(term);
     });
 
+    const stats = {
+        total: tokens.length,
+        pending: tokens.filter(t => t.status === 'pending').length,
+        active: tokens.filter(t => t.status === 'active').length,
+        suspended: tokens.filter(t => t.status === 'suspended').length,
+        expired: tokens.filter(t => t.status === 'expired').length,
+        urgent: tokens.filter(t => t.status === 'active' && daysUntil(t.expiresAt) <= 7 && daysUntil(t.expiresAt) >= 0).length,
+    };
+
     const getStatusChip = (status: TokenStatus) => {
         const styles = {
             pending: "bg-blue-900/50 text-blue-400 border border-blue-800/50",
@@ -183,6 +192,34 @@ export default function AdminTokens() {
             </div>
 
             <div className="max-w-5xl mx-auto px-4 py-8 space-y-6">
+                {/* ── MÉTRICAS GLOBALES ── */}
+                <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-center">
+                        <p className="text-[10px] uppercase font-bold text-zinc-500 mb-1">Total Tokens</p>
+                        <p className="text-2xl font-black text-white">{stats.total}</p>
+                    </div>
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-center">
+                        <p className="text-[10px] uppercase font-bold text-blue-500 mb-1">Pendientes</p>
+                        <p className="text-2xl font-black text-blue-400">{stats.pending}</p>
+                    </div>
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-center">
+                        <p className="text-[10px] uppercase font-bold text-green-500 mb-1">Activos</p>
+                        <p className="text-2xl font-black text-green-400">{stats.active}</p>
+                    </div>
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-center">
+                        <p className="text-[10px] uppercase font-bold text-amber-500 mb-1">Suspendidos</p>
+                        <p className="text-2xl font-black text-amber-400">{stats.suspended}</p>
+                    </div>
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-center">
+                        <p className="text-[10px] uppercase font-bold text-red-500 mb-1">Vencidos</p>
+                        <p className="text-2xl font-black text-red-400">{stats.expired}</p>
+                    </div>
+                    <div className="bg-orange-950/30 border border-orange-900/50 rounded-xl p-3 text-center">
+                        <p className="text-[10px] uppercase font-bold text-orange-500 mb-1">Por Vencer &lt;7d</p>
+                        <p className="text-2xl font-black text-orange-400">{stats.urgent}</p>
+                    </div>
+                </div>
+
                 <div className="relative">
                     <Search className="w-4 h-4 absolute left-3 top-3 text-zinc-500" />
                     <input 
@@ -215,6 +252,13 @@ export default function AdminTokens() {
                                             <span>Reg: {formatDate(token.createdAt)}</span>
                                             {token.activatedAt && <span>Inició: {formatDate(token.activatedAt)}</span>}
                                             {token.expiresAt && <span>Vence: {formatDate(token.expiresAt)}</span>}
+                                        </div>
+                                        {/* ── TELEMETRÍA ── */}
+                                        <div className="text-[10px] text-zinc-500 flex flex-wrap gap-x-3 gap-y-1 mt-1 bg-zinc-950/50 p-2 rounded-lg border border-zinc-800/50">
+                                            <span className="flex items-center gap-1"><Key className="w-3 h-3 text-zinc-600"/> Logins: <strong className="text-zinc-300">{token.loginsCount || 0}</strong></span>
+                                            <span className="flex items-center gap-1"><Search className="w-3 h-3 text-zinc-600"/> Dashboard Opens: <strong className="text-zinc-300">{token.dashboardOpensCount || 0}</strong></span>
+                                            <span className="flex items-center gap-1"><Check className="w-3 h-3 text-zinc-600"/> Consultas SAT: <strong className="text-zinc-300">{token.satQueriesCount || 0}</strong></span>
+                                            {token.lastSatQueryAt && <span className="flex items-center gap-1"><Clock className="w-3 h-3 text-zinc-600"/> Último SAT: <span className="text-zinc-400">{formatDate(token.lastSatQueryAt)}</span></span>}
                                         </div>
                                     </div>
 

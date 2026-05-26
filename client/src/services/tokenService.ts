@@ -11,10 +11,17 @@ export interface TokenData {
     createdAt: string;
     activatedAt?: string;
     expiresAt?: string;
+    // --- TELEMETRÍA MÍNIMA VENDIBLE ---
+    loginsCount?: number;
+    lastLoginAt?: string;
+    dashboardOpensCount?: number;
+    satQueriesCount?: number;
+    lastSatQueryAt?: string;
 }
 
 const ADMIN_ENDPOINT = "/api/functions/admin-proxy";
 const VALIDATE_ENDPOINT = "/api/functions/validate-token";
+const TRACK_ENDPOINT = "/.netlify/functions/track-event";
 
 export const tokenService = {
     /** 
@@ -34,6 +41,19 @@ export const tokenService = {
         } catch (err) {
             return { valid: false, reason: "network_error" };
         }
+    },
+
+    /** Registra eventos de telemetría comercial de forma asíncrona (fire-and-forget) */
+    trackEvent(token: string, eventName: 'dashboard_opened') {
+        if (!token) return;
+        fetch(TRACK_ENDPOINT, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "x-sentinel-token": token
+            },
+            body: JSON.stringify({ eventName })
+        }).catch(() => { /* Fallo silencioso de telemetría */ });
     },
 
     /** Obtiene todos los tokens para el panel de admin */
