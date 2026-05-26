@@ -24,7 +24,8 @@ import {
   extractNominaInfo,
   validateNominaTotals,
   classifyCFDI,
-  extractReceptorInfo
+  extractReceptorInfo,
+  evaluarTrazabilidad
 } from "@/lib/cfdiEngine";
 
 
@@ -714,6 +715,13 @@ export function useXMLValidator() {
         resultadoMotor,
         comentarioMotor,
         ultimoRefrescoSAT
+      };
+
+      const trazabilidadInfo = evaluarTrazabilidad(xmlDoc, xmlContent, objVal);
+
+      return {
+          ...objVal,
+          trazabilidadInfo
       };
     } catch (error) {
       console.error(error);
