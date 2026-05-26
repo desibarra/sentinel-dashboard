@@ -5,7 +5,16 @@ export const handler = async (event: any) => {
         if (event.httpMethod !== "POST") return { statusCode: 405, body: "Method Not Allowed" };
 
         const body = JSON.parse(event.body || "{}");
-        const { nombre, empresa, email, telefono, cfdi_mensuales, token } = body;
+        // Extraer datos ya sea de payload directo JSON, o de un webhook de Netlify Forms (payload.data)
+        const data = body.payload && body.payload.data ? body.payload.data : body;
+        
+        // Extraer múltiples posibles nombres de campo por si el frontend o un webhook usa otro schema
+        const nombre = data.nombre || data.name || data.fullName || data.nombreCompleto || "";
+        const empresa = data.empresa || data.company || data.businessName || data.despacho || "";
+        const email = data.email || data.correo || data.mail;
+        const telefono = data.telefono || data.phone || data.celular;
+        const cfdi_mensuales = data.cfdi_mensuales || data.cfdiVolume || data.cfdi || "No especificado";
+        const token = data.token || data.id;
         
         if (!email || !telefono) return { statusCode: 400, body: JSON.stringify({ error: "Faltan datos requeridos" }) };
 
