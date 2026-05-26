@@ -118,37 +118,7 @@ export default function AdminTokens() {
         toast.success("Link copiado.");
     };
 
-    if (!authenticated) {
-        return (
-            <div className="min-h-screen flex items-center justify-center bg-zinc-950 p-4">
-                <div className="w-full max-w-sm space-y-6 bg-zinc-900 p-8 rounded-2xl shadow-2xl border border-zinc-800">
-                    <div className="text-center space-y-2">
-                        <div className="mx-auto w-12 h-12 bg-yellow-500/10 rounded-full flex items-center justify-center">
-                            <Key className="w-6 h-6 text-yellow-400" />
-                        </div>
-                        <h1 className="text-xl font-black text-white uppercase tracking-tighter">
-                            Panel <span className="text-yellow-400">Admin</span>
-                        </h1>
-                        <p className="text-xs text-zinc-400 uppercase tracking-widest">Gestión de Accesos Reales</p>
-                    </div>
-                    <form onSubmit={handleLogin} className="space-y-4">
-                        <input
-                            type="password"
-                            value={password}
-                            onChange={e => setPassword(e.target.value)}
-                            placeholder="Contraseña maestra"
-                            autoFocus
-                            className="w-full px-4 py-3 rounded-xl bg-zinc-800 border border-zinc-700 text-white text-sm"
-                        />
-                        {pwError && <p className="text-xs text-red-400 mt-1">{loginErrorMsg}</p>}
-                        <button type="submit" disabled={loading} className="w-full py-3 bg-yellow-400 hover:bg-yellow-300 text-zinc-950 font-black uppercase tracking-tighter rounded-xl">
-                            {loading ? "Verificando..." : "Acceder"}
-                        </button>
-                    </form>
-                </div>
-            </div>
-        );
-    }
+
 
     const safeTokens = Array.isArray(tokens) ? tokens : [];
 
@@ -199,6 +169,38 @@ export default function AdminTokens() {
         };
         return <span className={`text-xs px-2.5 py-0.5 rounded-full font-medium ${styles[status]}`}>{labels[status]}</span>;
     };
+
+    if (!authenticated) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-zinc-950 p-4">
+                <div className="w-full max-w-sm space-y-6 bg-zinc-900 p-8 rounded-2xl shadow-2xl border border-zinc-800">
+                    <div className="text-center space-y-2">
+                        <div className="mx-auto w-12 h-12 bg-yellow-500/10 rounded-full flex items-center justify-center">
+                            <Key className="w-6 h-6 text-yellow-400" />
+                        </div>
+                        <h1 className="text-xl font-black text-white uppercase tracking-tighter">
+                            Panel <span className="text-yellow-400">Admin</span>
+                        </h1>
+                        <p className="text-xs text-zinc-400 uppercase tracking-widest">Gestión de Accesos Reales</p>
+                    </div>
+                    <form onSubmit={handleLogin} className="space-y-4">
+                        <input
+                            type="password"
+                            value={password}
+                            onChange={e => setPassword(e.target.value)}
+                            placeholder="Contraseña maestra"
+                            autoFocus
+                            className="w-full px-4 py-3 rounded-xl bg-zinc-800 border border-zinc-700 text-white text-sm"
+                        />
+                        {pwError && <p className="text-xs text-red-400 mt-1">{loginErrorMsg}</p>}
+                        <button type="submit" disabled={loading} className="w-full py-3 bg-yellow-400 hover:bg-yellow-300 text-zinc-950 font-black uppercase tracking-tighter rounded-xl">
+                            {loading ? "Verificando..." : "Acceder"}
+                        </button>
+                    </form>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen bg-zinc-950 text-white">
