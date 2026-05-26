@@ -36,24 +36,43 @@ export async function checkCFDIStatusSAT(
   `;
 
     try {
-        // Llamada directa al WebService del SAT a través del PROXY de Netlify/Vite
-        const response = await fetch("/api/sat/ConsultaCFDIService.svc", {
+        // Obtener token activo de sessionStorage
+        const storedDemo = sessionStorage.getItem("demo_token");
+        let token = "";
+        if (storedDemo) {
+            try {
+                const parsed = JSON.parse(storedDemo);
+                token = parsed.token || "";
+            } catch (e) {}
+        }
+
+        // Llamada a nuestro backend seguro (sat-proxy)
+        const response = await fetch("/.netlify/functions/sat-proxy", {
             method: "POST",
             headers: {
                 "Content-Type": "text/xml; charset=utf-8",
-                "SOAPAction": "http://tempuri.org/IConsultaCFDIService/Consulta"
+                "x-sentinel-token": token
             },
             body: soapRequest,
         });
 
         if (!response.ok) {
+            if (response.status === 401 || response.status === 403) {
+                // Forzar cierre de sesión o mostrar mensaje duro
+                const errData = await response.json().catch(() => ({}));
+                throw new Error(errData.error || `Acceso denegado (HTTP ${response.status})`);
+            }
             throw new Error(`Servicio SAT no disponible (HTTP ${response.status})`);
         }
 
-        // Guard: Si el proxy devuelve HTML en lugar de XML (error de Netlify/backend)
+        // Guard: Si el proxy devuelve JSON con error o HTML
         const contentType = response.headers.get("content-type") ?? "";
+        if (contentType.includes("application/json")) {
+            const errData = await response.json();
+            throw new Error(errData.error || "Error devuelto por el servidor");
+        }
         if (contentType.includes("text/html")) {
-            throw new Error("El proxy SAT devolvió HTML en lugar de XML. Verifica la configuración del redirect en netlify.toml.");
+            throw new Error("El proxy devolvió HTML en lugar de XML.");
         }
 
         const xmlText = await response.text();
