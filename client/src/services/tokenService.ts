@@ -7,6 +7,16 @@ export interface TokenData {
     email: string;
     phone: string;
     cfdiVolume: string;
+    
+    // Campos legacy
+    nombre?: string;
+    fullName?: string;
+    empresa?: string;
+    businessName?: string;
+    despacho?: string;
+    telefono?: string;
+    volumenCfdi?: string;
+
     status: TokenStatus;
     createdAt: string;
     activatedAt?: string;
