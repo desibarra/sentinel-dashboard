@@ -88,11 +88,16 @@ export function BlacklistManager() {
                     <div>
                         <h2 className="text-3xl font-black text-slate-900 dark:text-slate-100 tracking-tight uppercase">Inteligencia SAT</h2>
                         <div className="flex items-center gap-2 mt-1">
-                            <div className={`w-2 h-2 rounded-full ${hasData ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`}></div>
-                            <p className={`text-xs font-bold tracking-widest uppercase ${hasData ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500'}`}>
-                                {hasData ? '🟢 ACTIVO' : '🔴 INACTIVO'}
+                            <div className={`w-2 h-2 rounded-full ${hasData ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500 animate-pulse'}`}></div>
+                            <p className={`text-xs font-bold tracking-widest uppercase ${hasData ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-500'}`}>
+                                {hasData ? '🟢 ACTIVO' : '🟡 REQUIERE SINCRONIZACIÓN'}
                             </p>
                         </div>
+                        {!hasData && (
+                            <p className="text-[10px] text-slate-500 mt-2 max-w-sm italic leading-tight">
+                                Esto no bloquea la validación de CFDI. Solo indica que las listas EFOS/69-B aún no se han descargado en este navegador.
+                            </p>
+                        )}
                     </div>
                 </div>
 
@@ -148,7 +153,7 @@ export function BlacklistManager() {
                                     {hasData ? "✓" : "—"}
                                 </span>
                                 <span className="text-[10px] text-slate-500 font-bold uppercase">
-                                    {hasData ? "BASE SAT ACTIVA" : "INACTIVO"}
+                                    {hasData ? "BASE SAT ACTIVA" : "BASE LOCAL PENDIENTE"}
                                 </span>
                             </div>
                         </div>
