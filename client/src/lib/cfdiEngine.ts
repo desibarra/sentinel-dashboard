@@ -109,6 +109,7 @@ export interface TrazabilidadFiscalInfo {
     identificadorBancario: string;
     observacionSAT: string;
 
+    exportacion: string;
     destinoExtranjero: string;
     tienePedimento: string;
     pedimento: string;
@@ -229,7 +230,7 @@ export const evaluarTrazabilidad = (xmlDoc: XMLDocument, xmlContent: string, r: 
         tienePedimento = "Sí";
         const pedMatch = xmlContent.match(/NumeroPedimento="([^"]+)"/g) || xmlContent.match(/NumPedimento="([^"]+)"/g);
         if (pedMatch) {
-            pedimentosStr = pedMatch.map(m => m.split('"')[1]).join(", ");
+            pedimentosStr = Array.from(new Set(pedMatch.map(m => m.split('"')[1]))).join(" | ");
         } else {
             pedimentosStr = "Detectado (sin detalle)";
         }
@@ -370,6 +371,7 @@ export const evaluarTrazabilidad = (xmlDoc: XMLDocument, xmlContent: string, r: 
         identificadorBancario,
         observacionSAT: r.estatusSAT,
 
+        exportacion,
         destinoExtranjero,
         tienePedimento,
         pedimento: pedimentosStr,
