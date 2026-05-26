@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { tokenService, TokenData, TokenStatus } from "@/services/tokenService";
 import { Shield, Search, Copy, Check, LogOut, RefreshCw, AlertTriangle, Key, Play, Pause, Clock, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -30,6 +30,7 @@ export default function AdminTokens() {
     const [loading, setLoading] = useState(false);
     const [copiedId, setCopiedId] = useState<string | null>(null);
     const [search, setSearch] = useState("");
+    const [statusFilter, setStatusFilter] = useState<string>('all');
 
     useEffect(() => {
         if (authenticated) loadTokens();
@@ -149,37 +150,39 @@ export default function AdminTokens() {
         );
     }
 
-    const [statusFilter, setStatusFilter] = useState<string>('all');
+    const safeTokens = Array.isArray(tokens) ? tokens : [];
 
-    const filteredTokens = tokens.filter(t => {
-        // Filtro por estado
-        if (statusFilter !== 'all') {
-            if (statusFilter === 'hot') {
-                if (!(t.dashboardOpensCount && t.dashboardOpensCount > 0 && t.satQueriesCount && t.satQueriesCount > 0)) {
+    const filteredTokens = useMemo(() => {
+        return safeTokens.filter(t => {
+            // Filtro por estado
+            if (statusFilter !== 'all') {
+                if (statusFilter === 'hot') {
+                    if (!(t.dashboardOpensCount && t.dashboardOpensCount > 0 && t.satQueriesCount && t.satQueriesCount > 0)) {
+                        return false;
+                    }
+                } else if (t.status !== statusFilter) {
                     return false;
                 }
-            } else if (t.status !== statusFilter) {
-                return false;
             }
-        }
 
-        // Filtro por búsqueda
-        const term = search.toLowerCase();
-        return t.name?.toLowerCase().includes(term) ||
-            t.company?.toLowerCase().includes(term) ||
-            t.email?.toLowerCase().includes(term) ||
-            t.phone?.includes(term) ||
-            t.id.toLowerCase().includes(term);
-    });
+            // Filtro por búsqueda
+            const term = search.toLowerCase();
+            return t.name?.toLowerCase().includes(term) ||
+                t.company?.toLowerCase().includes(term) ||
+                t.email?.toLowerCase().includes(term) ||
+                t.phone?.includes(term) ||
+                t.id.toLowerCase().includes(term);
+        });
+    }, [safeTokens, statusFilter, search]);
 
-    const stats = {
-        total: tokens.length,
-        pending: tokens.filter(t => t.status === 'pending').length,
-        active: tokens.filter(t => t.status === 'active').length,
-        suspended: tokens.filter(t => t.status === 'suspended').length,
-        expired: tokens.filter(t => t.status === 'expired').length,
-        urgent: tokens.filter(t => t.status === 'active' && daysUntil(t.expiresAt) <= 7 && daysUntil(t.expiresAt) >= 0).length,
-    };
+    const stats = useMemo(() => ({
+        total: safeTokens.length,
+        pending: safeTokens.filter(t => t.status === 'pending').length,
+        active: safeTokens.filter(t => t.status === 'active').length,
+        suspended: safeTokens.filter(t => t.status === 'suspended').length,
+        expired: safeTokens.filter(t => t.status === 'expired').length,
+        urgent: safeTokens.filter(t => t.status === 'active' && daysUntil(t.expiresAt) <= 7 && daysUntil(t.expiresAt) >= 0).length,
+    }), [safeTokens]);
 
     const getStatusChip = (status: TokenStatus) => {
         const styles = {
