@@ -1,153 +1,99 @@
 
-
 import { useEffect, useRef, useState } from "react";
-
 import { CFDISATStatus } from "@/components/CFDISATStatus";
-
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-
 import { Badge } from "@/components/ui/badge";
-
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
-
 import { CheckCircle2, AlertCircle, XCircle, TrendingUp, FileText, DollarSign, Download, Moon, Sun, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Settings, BookOpen, Clock, MessageCircle, Zap } from "lucide-react";
-
 import { Button } from "@/components/ui/button";
-
 import UploadZone, { UploadedFile } from "@/components/UploadZone";
-
 import { useXMLValidator } from "@/hooks/useXMLValidator";
-
 import { ValidationResult } from "@/lib/cfdiEngine";
-
 import { exportToExcel } from "@/lib/excelExporter";
-
 import { toast } from "sonner";
-
 import { useTheme } from "@/contexts/ThemeContext";
-
 import { Link } from "wouter";
-
 import { useCompany } from "@/contexts/CompanyContext";
-
 import { CompanySelector } from "@/components/CompanySelector";
-
 import { HistorySidebar } from "@/components/HistorySidebar";
-
 import { appDB, ValidationHistory } from "@/db/appDB";
-
 import { startMainTour } from "@/utils/tourScript";
-
 import { Input } from "@/components/ui/input";
-
 import { History, RefreshCcw, Save } from "lucide-react";
-
 import { checkCFDIStatusSAT } from "@/utils/satStatusValidator";
-
 import { incrementXMLCount, getXMLCount } from "@/services/leadService";
-
 import { saveSessionCache, loadSessionCache, clearSessionCache, getCacheAge } from "@/hooks/useSessionCache";
-
-
+import { useAuth } from "@/contexts/AuthContext";
+import { tokenService } from "@/services/tokenService";
 
 type DashboardResult = ValidationResult;
-
 type SortField = 'fileName' | 'uuid' | 'tipoCFDI' | 'fechaEmision' | 'rfcEmisor' | 'total' | 'estatusSAT' | 'resultado' | 'comentarioFiscal';
-
 type SortDirection = 'asc' | 'desc' | null;
 
-
-
 export default function Dashboard() {
-
-  const [results, setResults] = useState<ValidationResult[]>([]);
-
-  const [loading, setLoading] = useState(true);
-
-  const [hasValidatedResults, setHasValidatedResults] = useState(false);
-
-  const { isValidating, validateXMLFiles, progress } = useXMLValidator();
-
   const { theme, toggleTheme } = useTheme();
-
   const { currentCompany } = useCompany();
-
+  const { demoTokenData } = useAuth();
+  const [results, setResults] = useState<ValidationResult[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [hasValidatedResults, setHasValidatedResults] = useState(false);
+  const { isValidating, validateXMLFiles, progress } = useXMLValidator();
   const [sortField, setSortField] = useState<SortField | null>('fechaEmision');
-
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
-
   const [currentPage, setCurrentPage] = useState(1);
-
   const ITEMS_PER_PAGE = 50;
 
-
-
   // ── Contador de XMLs procesados (informativo, sin límite visible) ──
-
   const [xmlCount, setXmlCount] = useState<number>(getXMLCount());
 
-
-
   // ── UUIDs que están siendo revalidados en este momento (para deshabilitar su botón) ──
-
   const [revalidatingUUIDs, setRevalidatingUUIDs] = useState<Set<string>>(new Set());
 
-
-
   // WhatsApp CTA constants
-
   const WHATSAPP_NUMBER = "524776355734";
-
   const WHATSAPP_MESSAGE = encodeURIComponent(
-
-    "Hola, estoy probando la herramienta Sentinel Express para revisar mis CFDI. Me gustar\u00eda conocer m\u00e1s sobre c\u00f3mo interpretar el diagn\u00f3stico que genera la plataforma."
-
+    `Hola, estoy usando la herramienta Sentinel Express (Token: ${demoTokenData?.token || 'N/A'}). Solicito un diagnóstico fiscal profesional y asesoría sobre mis resultados.`
   );
-
   const WHATSAPP_URL = `https://wa.me/${WHATSAPP_NUMBER}?text=${WHATSAPP_MESSAGE}`;
 
-
-
   // ── Progreso de procesamiento masivo ──
-
   const [processingPhase, setProcessingPhase] = useState<string | null>(null);
 
-
-
   // FIX 2: ref para detectar primer mount y no borrar caché en la carga inicial
-
   const isFirstMount = useRef(true);
 
+  // Calcular días restantes de prueba
+  const getDaysLeft = () => {
+    if (!demoTokenData?.expiresAt) return null;
+    const expiry = new Date(demoTokenData.expiresAt);
+    const now = new Date();
+    const diffTime = expiry.getTime() - now.getTime();
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  };
+  const daysLeft = getDaysLeft();
 
-
-  // Onboarding
-
+  // Onboarding y Telemetría
   useEffect(() => {
-
     setLoading(false);
-
-    const hasSeenTour = localStorage.getItem('has_seen_main_tour');
-
-    if (!hasSeenTour) {
-
-      setTimeout(() => {
-
-        startMainTour();
-
-        localStorage.setItem('has_seen_main_tour', 'true');
-
-      }, 1000);
-
+    
+    // -- TELEMETRÍA MÍNIMA VENDIBLE --
+    if (demoTokenData?.token) {
+       tokenService.trackEvent(demoTokenData.token, 'dashboard_opened');
     }
 
-  }, []);
+    const hasSeenTour = localStorage.getItem('has_seen_main_tour');
+    if (!hasSeenTour) {
+      setTimeout(() => {
+        startMainTour();
+        localStorage.setItem('has_seen_main_tour', 'true');
+      }, 1000);
+    }
+  }, [demoTokenData?.token]);
 
 
 
   // FIX 2: Restaurar análisis previo de la sesión (TTL 30 min, por empresa)
-
   // Se ejecuta ANTES del cleanup para que los datos restaurados no sean borrados
-
   useEffect(() => {
 
     if (!currentCompany) return;
@@ -1094,6 +1040,40 @@ export default function Dashboard() {
         </div>
 
 
+
+        {/* ── Banners Inteligentes Comerciales ── */}
+        {daysLeft !== null && (
+          <div className="mb-6">
+            {daysLeft > 3 ? (
+              <div className="flex items-center justify-between bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800/40 rounded-2xl px-5 py-3 text-blue-800 dark:text-blue-300">
+                <p className="text-[12px] font-semibold">
+                  <span className="font-black uppercase">Prueba Activa.</span> Te quedan {daysLeft} días de evaluación completa.
+                </p>
+                <Button onClick={() => window.open(WHATSAPP_URL, "_blank")} size="sm" className="bg-blue-600 hover:bg-blue-700 text-white text-[10px] uppercase font-bold h-7 rounded-lg">
+                  Actualizar Plan
+                </Button>
+              </div>
+            ) : daysLeft > 0 ? (
+              <div className="flex items-center justify-between bg-orange-50 dark:bg-orange-900/30 border border-orange-200 dark:border-orange-800/40 rounded-2xl px-5 py-3 text-orange-800 dark:text-orange-300">
+                <p className="text-[12px] font-semibold">
+                  <span className="font-black uppercase text-orange-600">¡Tu prueba expira pronto!</span> Solo te quedan {daysLeft} días de acceso.
+                </p>
+                <Button onClick={() => window.open(WHATSAPP_URL, "_blank")} size="sm" className="bg-orange-600 hover:bg-orange-700 text-white text-[10px] uppercase font-bold h-7 rounded-lg shadow-md shadow-orange-500/20">
+                  Renovar Acceso
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800/40 rounded-2xl px-5 py-3 text-red-800 dark:text-red-300">
+                <p className="text-[12px] font-semibold">
+                  <span className="font-black uppercase text-red-600">Prueba Finalizada.</span> Tu periodo de prueba ha expirado. Por favor contacta a soporte para continuar.
+                </p>
+                <Button onClick={() => window.open(WHATSAPP_URL, "_blank")} size="sm" className="bg-red-600 hover:bg-red-700 text-white text-[10px] uppercase font-bold h-7 rounded-lg shadow-md shadow-red-500/20">
+                  Contactar Soporte
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ── Banner de privacidad / confianza ── */}
 

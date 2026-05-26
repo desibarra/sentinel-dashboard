@@ -62,6 +62,17 @@ export const handler = async (event: any) => {
         }
 
         if (tokenData.status === "active" && !isExpired) {
+            // -- TELEMETRÍA MÍNIMA VENDIBLE --
+            tokenData.loginsCount = (tokenData.loginsCount || 0) + 1;
+            tokenData.lastLoginAt = now.toISOString();
+            
+            // Guardar cambios sin bloquear la respuesta (fire and forget fallback o await)
+            try {
+                await store.setJSON(tokenCode, tokenData);
+            } catch (err) {
+                console.error("[ValidateToken] Error guardando telemetría:", err);
+            }
+
             // Return safe user data for the AuthContext
             return { 
                 statusCode: 200, 
