@@ -14,14 +14,13 @@ export const handler = async (event: any) => {
         }
 
         const passwordHeader = event.headers["x-admin-password"] || "";
-        console.log(`[AdminProxy] Longitud password recibida: ${passwordHeader.length}`);
-        console.log(`[AdminProxy] Longitud password configurada: ${ADMIN_PASSWORD.length}`);
-        
-        const isMatch = passwordHeader === ADMIN_PASSWORD;
-        console.log(`[AdminProxy] ¿Contraseñas coinciden?: ${isMatch}`);
+        if (!passwordHeader) {
+            return { statusCode: 401, body: JSON.stringify({ error: "No autorizado. Credenciales faltantes." }) };
+        }
 
+        const isMatch = passwordHeader === ADMIN_PASSWORD;
         if (!isMatch) {
-            return { statusCode: 401, body: JSON.stringify({ code: "INVALID_PASSWORD", error: "Unauthorized" }) };
+            return { statusCode: 403, body: JSON.stringify({ error: "Acceso denegado. Credenciales incorrectas." }) };
         }
 
         const apiTokenExists = !!process.env.NETLIFY_API_TOKEN;
