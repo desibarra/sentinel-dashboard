@@ -70,7 +70,10 @@ export function useXMLValidator() {
             error instanceof Error && error.message.includes("Timeout")
               ? "Error: Tiempo de procesamiento excedido"
               : "Error al procesar archivo",
-            giroEmpresa
+            giroEmpresa,
+            true,
+            false,
+            file.content
           );
         }
       });
@@ -115,14 +118,14 @@ export function useXMLValidator() {
 
       // Si encoding no soportado → NO USABLE
       if (!encodingInfo.soportado) {
-        return createErrorResult(fileName, encodingInfo.errorMsg, giroEmpresa);
+        return createErrorResult(fileName, encodingInfo.errorMsg, giroEmpresa, true, false, xmlContent);
       }
 
       const parser = new DOMParser();
       const xmlDoc = parser.parseFromString(xmlContent, "text/xml");
 
       if (xmlDoc.getElementsByTagName("parsererror").length > 0) {
-        return createErrorResult(fileName, "Error al procesar XML: formato inválido", giroEmpresa);
+        return createErrorResult(fileName, "Error al procesar XML: formato inválido", giroEmpresa, true, false, xmlContent);
       }
 
       const comprobante = xmlDoc.documentElement;
@@ -135,7 +138,10 @@ export function useXMLValidator() {
         return createErrorResult(
           fileName,
           `Versión no soportada: ${version}. Se aceptan CFDI 2.0, 2.2, 3.0, 3.2, 3.3 y 4.0 según contexto histórico SAT.`,
-          giroEmpresa
+          giroEmpresa,
+          true,
+          false,
+          xmlContent
         );
       }
 
@@ -287,7 +293,11 @@ export function useXMLValidator() {
         if (totalREP !== 0.00) {
           return createErrorResult(
             fileName,
-            `ERROR FISCAL: CFDI Tipo P (Recibo Electrónico de Pago) debe tener Total=0.00. Encontrado: Total=$${totalREP.toFixed(2)}. Regla SAT: Anexo 20 CFDI 3.3/4.0 - Los recibos de pago deben emitirse con Total=0 ya que el importe se registra en el complemento de pagos. Verifica el complemento "pago10:Pagos" o "pago20:Pagos".`
+            `ERROR FISCAL: CFDI Tipo P (Recibo Electrónico de Pago) debe tener Total=0.00. Encontrado: Total=$${totalREP.toFixed(2)}. Regla SAT: Anexo 20 CFDI 3.3/4.0 - Los recibos de pago deben emitirse con Total=0 ya que el importe se registra en el complemento de pagos. Verifica el complemento "pago10:Pagos" o "pago20:Pagos".`,
+            giroEmpresa,
+            true,
+            false,
+            xmlContent
           );
         }
       }
@@ -602,7 +612,13 @@ export function useXMLValidator() {
 
         if (!shouldUseCache) {
           try {
-            const satStatus = await checkCFDIStatusSAT(uuid, rfcEmisor, rfcReceptor, totalXML);
+            // Timeout de 5 segundos para la consulta al SAT
+            const satStatus = await Promise.race([
+              checkCFDIStatusSAT(uuid, rfcEmisor, rfcReceptor, totalXML),
+              new Promise<any>((_, reject) =>
+                setTimeout(() => reject(new Error("Timeout SAT")), 5000)
+              )
+            ]);
             finalEstatusSAT = satStatus.estado;
             finalEstatusCancelacion = satStatus.estatusCancelacion || "";
 
@@ -729,7 +745,10 @@ export function useXMLValidator() {
       return createErrorResult(
         fileName,
         error instanceof Error ? error.message : "Error desconocido al procesar XML",
-        giroEmpresa
+        giroEmpresa,
+        true,
+        false,
+        xmlContent
       );
     }
   };
@@ -739,7 +758,8 @@ export function useXMLValidator() {
     errorMsg: string, 
     giroEmpresa?: string,
     errorGrave: boolean = true,
-    warning: boolean = false
+    warning: boolean = false,
+    xmlContent?: string
   ): ValidationResult => {
     let resultado = "🟢 USABLE";
     if (errorGrave) {
@@ -748,90 +768,263 @@ export function useXMLValidator() {
       resultado = "🟡 ALERTA";
     }
 
+    let uuid = "NO DISPONIBLE";
+    let version = "NO DISPONIBLE";
+    let tipoCFDI = "NO DISPONIBLE";
+    let serie = "SIN SERIE";
+    let folio = "SIN FOLIO";
+    let fechaEmision = "NO DISPONIBLE";
+    let horaEmision = "NO DISPONIBLE";
+    let rfcEmisor = "NO DISPONIBLE";
+    let nombreEmisor = "NO DISPONIBLE";
+    let regimenEmisor = "NO DISPONIBLE";
+    let rfcReceptor = "NO DISPONIBLE";
+    let nombreReceptor = "NO DISPONIBLE";
+    let regimenReceptor = "NO DISPONIBLE";
+    let usoCFDI = "NO DISPONIBLE";
+    let cpReceptor = "NO DISPONIBLE";
+    let subtotal = 0;
+    let total = 0;
+    let moneda = "MXN";
+    let tipoCambio = 1;
+    let metodoPago = "NO DISPONIBLE";
+    let formaPago = "NO DISPONIBLE";
+    let parsedSuccessfully = false;
+
+    if (xmlContent) {
+      try {
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(xmlContent, "text/xml");
+        const parserError = xmlDoc.getElementsByTagName("parsererror");
+        if (parserError.length === 0) {
+          const comprobante = xmlDoc.documentElement;
+          if (comprobante && (comprobante.localName === "Comprobante" || comprobante.nodeName.includes("Comprobante"))) {
+            version = comprobante.getAttribute("Version") || comprobante.getAttribute("version") || "NO DISPONIBLE";
+            tipoCFDI = comprobante.getAttribute("TipoDeComprobante") || "NO DISPONIBLE";
+            serie = comprobante.getAttribute("Serie") || "SIN SERIE";
+            folio = comprobante.getAttribute("Folio") || "SIN FOLIO";
+            const fechaStr = comprobante.getAttribute("Fecha") || "NO DISPONIBLE";
+            if (fechaStr !== "NO DISPONIBLE") {
+              const parts = fechaStr.split("T");
+              fechaEmision = parts[0] || "NO DISPONIBLE";
+              horaEmision = parts[1]?.substring(0, 8) || "NO DISPONIBLE";
+            }
+            subtotal = parseFloat(comprobante.getAttribute("SubTotal") || comprobante.getAttribute("subTotal") || "0") || 0;
+            total = parseFloat(comprobante.getAttribute("Total") || comprobante.getAttribute("total") || "0") || 0;
+            moneda = comprobante.getAttribute("Moneda") || "MXN";
+            tipoCambio = parseFloat(comprobante.getAttribute("TipoCambio") || "1") || 1;
+            metodoPago = comprobante.getAttribute("MetodoPago") || "NO DISPONIBLE";
+            formaPago = comprobante.getAttribute("FormaPago") || "NO DISPONIBLE";
+
+            // Emisor
+            const emisorNode = xmlDoc.getElementsByTagName("cfdi:Emisor")[0] || xmlDoc.getElementsByTagName("Emisor")[0];
+            if (emisorNode) {
+              rfcEmisor = emisorNode.getAttribute("Rfc") || emisorNode.getAttribute("rfc") || "NO DISPONIBLE";
+              nombreEmisor = emisorNode.getAttribute("Nombre") || emisorNode.getAttribute("nombre") || "NO DISPONIBLE";
+              regimenEmisor = emisorNode.getAttribute("RegimenFiscal") || emisorNode.getAttribute("regimenFiscal") || "NO DISPONIBLE";
+            }
+            // Receptor
+            const receptorNode = xmlDoc.getElementsByTagName("cfdi:Receptor")[0] || xmlDoc.getElementsByTagName("Receptor")[0];
+            if (receptorNode) {
+              rfcReceptor = receptorNode.getAttribute("Rfc") || receptorNode.getAttribute("rfc") || "NO DISPONIBLE";
+              nombreReceptor = receptorNode.getAttribute("Nombre") || receptorNode.getAttribute("nombre") || "NO DISPONIBLE";
+              regimenReceptor = receptorNode.getAttribute("RegimenFiscalReceptor") || receptorNode.getAttribute("regimenFiscalReceptor") || "NO DISPONIBLE";
+              usoCFDI = receptorNode.getAttribute("UsoCFDI") || receptorNode.getAttribute("usoCFDI") || "NO DISPONIBLE";
+              cpReceptor = receptorNode.getAttribute("DomicilioFiscalReceptor") || receptorNode.getAttribute("domicilioFiscalReceptor") || "NO DISPONIBLE";
+            }
+
+            // TimbreFiscalDigital UUID
+            const todosNodos = xmlDoc.getElementsByTagName("*");
+            for (let i = 0; i < todosNodos.length; i++) {
+              const nodo = todosNodos[i];
+              const tagName = nodo.localName || nodo.nodeName;
+              if (tagName === "TimbreFiscalDigital" || tagName.includes("TimbreFiscalDigital")) {
+                uuid = nodo.getAttribute("UUID") || nodo.getAttribute("uuid") || "NO DISPONIBLE";
+                break;
+              }
+            }
+            if (uuid && uuid !== "NO DISPONIBLE" && uuid.trim() !== "") {
+              parsedSuccessfully = true;
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Falla al pre-parsear XML en createErrorResult:", err);
+      }
+    }
+
+    if (parsedSuccessfully) {
+      return {
+        fileName,
+        xmlContent,
+        uuid,
+        resultadoMotor: "🟡 ALERTA",
+        comentarioMotor: errorMsg,
+        giroEmpresa,
+        ultimoRefrescoSAT: new Date().toISOString(),
+        versionCFDI: version,
+        tipoCFDI: tipoCFDI,
+        serie,
+        folio,
+        fechaEmision,
+        horaEmision,
+        añoFiscal: fechaEmision !== "NO DISPONIBLE" ? parseInt(fechaEmision.substring(0, 4), 10) : 0,
+        estatusSAT: "Error Conexión",
+        fechaCancelacion: "NO APLICA",
+        rfcEmisorBlacklist: { isEFOS: false, is69B: false, found: false },
+        rfcReceptorBlacklist: { isEFOS: false, is69B: false, found: false },
+        cfdiSustituido: "NO",
+        uuidSustitucion: "NO APLICA",
+        rfcEmisor,
+        nombreEmisor,
+        regimenEmisor,
+        estadoSATEmisor: "NO DISPONIBLE",
+        rfcReceptor,
+        nombreReceptor,
+        regimenReceptor,
+        usoCFDI,
+        cpReceptor,
+        tieneCfdiRelacionados: "NO",
+        tipoRelacion: "NO APLICA",
+        uuidRelacionado: "NO APLICA",
+        uuids_relacionados: [],
+        tipoRealDocumento: tipoCFDI === "I" ? "Ingreso" : (tipoCFDI === "E" ? "Egreso" : (tipoCFDI === "P" ? "Pago" : "Desconocido")),
+        requiereCartaPorte: "NO",
+        cartaPorte: "NO",
+        cartaPorteCompleta: "NO APLICA",
+        versionCartaPorte: "NO APLICA",
+        pagosPresente: "NO",
+        versionPagos: "NO APLICA",
+        pagosValido: "NO APLICA",
+        encodingDetectado: "UTF-8",
+        complementosDetectados: [],
+        scoreInformativo: 50,
+        subtotal,
+        baseIVA16: 0,
+        baseIVA8: 0,
+        baseIVA0: 0,
+        baseIVAExento: 0,
+        baseNoObjeto: 0,
+        baseObjetoSinDesglose: 0,
+        clasificacionFiscal: "SIN_IMPUESTOS",
+        ivaTraslado: 0,
+        ivaRetenido: 0,
+        isrRetenido: 0,
+        iepsTraslado: 0,
+        iepsRetenido: 0,
+        impuestosLocalesTrasladados: 0,
+        impuestosLocalesRetenidos: 0,
+        total,
+        moneda,
+        tipoCambio,
+        formaPago,
+        metodoPago,
+        nivelValidacion: "ALERTA",
+        resultado: "🟡 ALERTA",
+        comentarioFiscal: `[AVISO] No se pudo verificar estatus en SAT (Timeout). ${errorMsg}`,
+        observacionesTecnicas: `Error al procesar: ${errorMsg}`,
+        iva: 0,
+        isValid: true,
+        totalCalculado: total,
+        diferenciaTotales: 0,
+        desglosePorConcepto: [],
+        desglose: "",
+        esNomina: "NO",
+        versionNomina: "NO APLICA",
+        totalPercepciones: 0,
+        totalDeducciones: 0,
+        totalOtrosPagos: 0,
+        isrRetenidoNomina: 0,
+        totalCalculadoNomina: total,
+        observacionesContador: ""
+      };
+    }
+
     return {
       fileName,
       uuid: "NO DISPONIBLE",
       resultadoMotor: resultado,
       comentarioMotor: errorMsg,
       giroEmpresa,
-    ultimoRefrescoSAT: new Date().toISOString(),
-    versionCFDI: "NO DISPONIBLE",
-    tipoCFDI: "NO DISPONIBLE",
-    serie: "NO DISPONIBLE",
-    folio: "NO DISPONIBLE",
-    fechaEmision: "NO DISPONIBLE",
-    horaEmision: "NO DISPONIBLE",
-    añoFiscal: 0,
-    estatusSAT: "Error",
-    fechaCancelacion: "NO APLICA",
-    rfcEmisorBlacklist: { isEFOS: false, is69B: false, found: false },
-    rfcReceptorBlacklist: { isEFOS: false, is69B: false, found: false },
-    cfdiSustituido: "NO",
-    uuidSustitucion: "NO APLICA",
-    rfcEmisor: "NO DISPONIBLE",
-    nombreEmisor: "NO DISPONIBLE",
-    regimenEmisor: "NO DISPONIBLE",
-    estadoSATEmisor: "NO DISPONIBLE",
-    rfcReceptor: "NO DISPONIBLE",
-    nombreReceptor: "NO DISPONIBLE",
-    regimenReceptor: "NO DISPONIBLE",
-    usoCFDI: "NO DISPONIBLE",
-    cpReceptor: "NO DISPONIBLE",
-    tieneCfdiRelacionados: "NO",
-    tipoRelacion: "NO APLICA",
-    uuidRelacionado: "NO APLICA",
-    uuids_relacionados: [],
-    tipoRealDocumento: "Desconocido",
-    requiereCartaPorte: "NO DISPONIBLE",
-    cartaPorte: "NO",
-    cartaPorteCompleta: "NO APLICA",
-    versionCartaPorte: "NO APLICA",
-    pagosPresente: "NO",
-    versionPagos: "NO APLICA",
-    pagosValido: "NO APLICA",
-    encodingDetectado: "UTF-8",
-    complementosDetectados: [],
-    scoreInformativo: 0,
-    subtotal: 0,
-    baseIVA16: 0,
-    baseIVA8: 0,
-    baseIVA0: 0,
-    baseIVAExento: 0,
-    baseNoObjeto: 0,
-    baseObjetoSinDesglose: 0,
-    clasificacionFiscal: "SIN_IMPUESTOS",
-    ivaTraslado: 0,
-    ivaRetenido: 0,
-    isrRetenido: 0,
-    iepsTraslado: 0,
-    iepsRetenido: 0,
-    impuestosLocalesTrasladados: 0,
-    impuestosLocalesRetenidos: 0,
-    total: 0,
-    moneda: "MXN",
-    tipoCambio: 1,
-    formaPago: "NO DISPONIBLE",
-    metodoPago: "NO DISPONIBLE",
-    nivelValidacion: "ERROR",
-    resultado: resultado,
-    comentarioFiscal: errorMsg,
-    observacionesTecnicas: `Error al procesar: ${errorMsg}`,
-    iva: 0,
-    isValid: false,
-    totalCalculado: 0,
-    diferenciaTotales: 0,
-    desglosePorConcepto: [],
-    desglose: "",
-    esNomina: "NO",
-    versionNomina: "NO APLICA",
-    totalPercepciones: 0,
-    totalDeducciones: 0,
-    totalOtrosPagos: 0,
-    isrRetenidoNomina: 0,
-    totalCalculadoNomina: 0,
-    observacionesContador: "",
+      ultimoRefrescoSAT: new Date().toISOString(),
+      versionCFDI: "NO DISPONIBLE",
+      tipoCFDI: "NO DISPONIBLE",
+      serie: "NO DISPONIBLE",
+      folio: "NO DISPONIBLE",
+      fechaEmision: "NO DISPONIBLE",
+      horaEmision: "NO DISPONIBLE",
+      añoFiscal: 0,
+      estatusSAT: "Error",
+      fechaCancelacion: "NO APLICA",
+      rfcEmisorBlacklist: { isEFOS: false, is69B: false, found: false },
+      rfcReceptorBlacklist: { isEFOS: false, is69B: false, found: false },
+      cfdiSustituido: "NO",
+      uuidSustitucion: "NO APLICA",
+      rfcEmisor: "NO DISPONIBLE",
+      nombreEmisor: "NO DISPONIBLE",
+      regimenEmisor: "NO DISPONIBLE",
+      estadoSATEmisor: "NO DISPONIBLE",
+      rfcReceptor: "NO DISPONIBLE",
+      nombreReceptor: "NO DISPONIBLE",
+      regimenReceptor: "NO DISPONIBLE",
+      usoCFDI: "NO DISPONIBLE",
+      cpReceptor: "NO DISPONIBLE",
+      tieneCfdiRelacionados: "NO",
+      tipoRelacion: "NO APLICA",
+      uuidRelacionado: "NO APLICA",
+      uuids_relacionados: [],
+      tipoRealDocumento: "Desconocido",
+      requiereCartaPorte: "NO DISPONIBLE",
+      cartaPorte: "NO",
+      cartaPorteCompleta: "NO APLICA",
+      versionCartaPorte: "NO APLICA",
+      pagosPresente: "NO",
+      versionPagos: "NO APLICA",
+      pagosValido: "NO APLICA",
+      encodingDetectado: "UTF-8",
+      complementosDetectados: [],
+      scoreInformativo: 0,
+      subtotal: 0,
+      baseIVA16: 0,
+      baseIVA8: 0,
+      baseIVA0: 0,
+      baseIVAExento: 0,
+      baseNoObjeto: 0,
+      baseObjetoSinDesglose: 0,
+      clasificacionFiscal: "SIN_IMPUESTOS",
+      ivaTraslado: 0,
+      ivaRetenido: 0,
+      isrRetenido: 0,
+      iepsTraslado: 0,
+      iepsRetenido: 0,
+      impuestosLocalesTrasladados: 0,
+      impuestosLocalesRetenidos: 0,
+      total: 0,
+      moneda: "MXN",
+      tipoCambio: 1,
+      formaPago: "NO DISPONIBLE",
+      metodoPago: "NO DISPONIBLE",
+      nivelValidacion: "ERROR",
+      resultado: resultado,
+      comentarioFiscal: errorMsg,
+      observacionesTecnicas: `Error al procesar: ${errorMsg}`,
+      iva: 0,
+      isValid: false,
+      totalCalculado: 0,
+      diferenciaTotales: 0,
+      desglosePorConcepto: [],
+      desglose: "",
+      esNomina: "NO",
+      versionNomina: "NO APLICA",
+      totalPercepciones: 0,
+      totalDeducciones: 0,
+      totalOtrosPagos: 0,
+      isrRetenidoNomina: 0,
+      totalCalculadoNomina: 0,
+      observacionesContador: "",
+      xmlContent: xmlContent
+    };
   };
-};
 
   // 🟡 Para casos con datos válidos pero con alertas fiscales (NC, PPD sin REP, etc.)
   type WarningBase = Pick<

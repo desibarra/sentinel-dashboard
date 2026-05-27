@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 import { ValidationResult } from '@/lib/cfdiEngine';
 
-const SAT_RETRY_ACTION = 'Reintentar validación SAT o validar con acuse/portal SAT externo';
+const SAT_RETRY_ACTION = 'Reintentar validación SAT';
 const SAT_FAILURE_PATTERN = /(error|conexión|timeout|failed|network|sat\s+no\s+respondió|no\s+respondió|cors|no\s+confirmado)/i;
 
 const normalizeSiNo = (value: unknown): 'SI' | 'NO' => {
@@ -350,10 +350,49 @@ const buildConceptRows = (results: ValidationResult[]) => results.flatMap(r => (
   Observacion: 'Extraído de desglose fiscal del XML',
 })));
 
-const buildTaxRows = (results: ValidationResult[]) => results.flatMap(r => (r.desglosePorConcepto || []).flatMap((c: any, i: number) => [
-  ...(c.traslados || []).map((t: any, j: number) => ({ Archivo_XML: r.fileName, UUID: r.uuid, Indice_Nodo: `${i + 1}.${j + 1}`, Nodo_XML: 'Traslado', Concepto: c.descripcion || 'NO VIENE EN XML', Base: t.base ?? 0, Impuesto: t.impuesto || 'NO VIENE EN XML', TipoFactor: t.tipoFactor || 'NO VIENE EN XML', TasaOCuota: t.tasa || 'NO VIENE EN XML', Importe: t.importe ?? 0, Observacion: 'Impuesto por concepto' })),
-  ...(c.retenciones || []).map((t: any, j: number) => ({ Archivo_XML: r.fileName, UUID: r.uuid, Indice_Nodo: `${i + 1}.R${j + 1}`, Nodo_XML: 'Retencion', Concepto: c.descripcion || 'NO VIENE EN XML', Base: t.base ?? 0, Impuesto: t.impuesto || 'NO VIENE EN XML', TipoFactor: t.tipoFactor || 'NO VIENE EN XML', TasaOCuota: t.tasa || 'NO VIENE EN XML', Importe: t.importe ?? 0, Observacion: 'Retención por concepto' })),
-]));
+const buildTaxRows = (results: ValidationResult[]) => results.flatMap(r => (r.desglosePorConcepto || []).flatMap((c: any, i: number) => {
+  const mapTax = (t: any, tipo: 'Traslado' | 'Retencion') => {
+    let tasaDetectada = 'INDETERMINADO';
+    if (c.objetoImp === '01') {
+      tasaDetectada = 'NO OBJETO';
+    } else {
+      const tfUp = String(t.tipoFactor || '').toUpperCase();
+      if (tfUp === 'EXENTO') {
+        tasaDetectada = 'EXENTO';
+      } else {
+        const tNum = Number(t.tasa);
+        if (!isNaN(tNum)) {
+          if (tNum === 0.16) tasaDetectada = '16%';
+          else if (tNum === 0.08) tasaDetectada = '8%';
+          else if (tNum === 0) tasaDetectada = '0%';
+        }
+      }
+    }
+
+    return {
+      Archivo_XML: r.fileName,
+      UUID: r.uuid,
+      Indice_Concepto: i + 1,
+      ClaveProdServ: c.claveProdServ || 'NO VIENE EN XML',
+      Descripcion_Concepto: c.descripcion || 'NO VIENE EN XML',
+      ObjetoImp: c.objetoImp || 'NO VIENE EN XML',
+      Tipo_Impuesto: tipo,
+      Base: t.base ?? 0,
+      Impuesto: t.impuesto || 'NO VIENE EN XML',
+      TipoFactor: t.tipoFactor || 'NO VIENE EN XML',
+      TasaOCuota: t.tasa || 'NO VIENE EN XML',
+      Importe: t.importe ?? 0,
+      Es_IVA: t.impuesto === '002' ? 'SI' : 'NO',
+      Tasa_Detectada: tasaDetectada,
+      Observacion: tipo === 'Traslado' ? 'Impuesto por concepto' : 'Retención por concepto'
+    };
+  };
+
+  return [
+    ...(c.traslados || []).map((t: any) => mapTax(t, 'Traslado')),
+    ...(c.retenciones || []).map((t: any) => mapTax(t, 'Retencion'))
+  ];
+}));
 
 const buildForensicRows = (results: ValidationResult[]) => results.map(r => {
   const detail = cp(r);
@@ -717,17 +756,16 @@ const resolveCoincideTasa = (
   tasaEsperadaSugerida: string,
   tieneSoporteDocumentalSuficiente: boolean
 ): string => {
-  // Si alguno es INDETERMINADO o NO APLICA, no se puede evaluar
-  if (tasaFacturadaXML === 'INDETERMINADO' || tasaEsperadaSugerida === 'INDETERMINADO') return 'INDETERMINADO';
   if (tasaEsperadaSugerida === 'NO APLICA' || tasaFacturadaXML === 'NO APLICA') return 'NO APLICA';
 
-  // Cualquier tasa esperada condicional/cualitativa → nunca puede ser SI
   const esCondicional =
     tasaEsperadaSugerida.includes('REQUIERE') ||
     tasaEsperadaSugerida.includes('SUJETA') ||
-    tasaEsperadaSugerida.includes('REVISAR') ||
-    tasaEsperadaSugerida.includes('INDETERMINADO');
+    tasaEsperadaSugerida.includes('REVISAR');
+
   if (esCondicional) return 'REVISAR';
+
+  if (tasaFacturadaXML === 'INDETERMINADO' || tasaEsperadaSugerida === 'INDETERMINADO') return 'INDETERMINADO';
 
   // Tasa 0%: exige soporte documental suficiente (Carta Porte + pedimento/DODA)
   if (tasaFacturadaXML === '0%' && tasaEsperadaSugerida === '0%') {
@@ -737,10 +775,9 @@ const resolveCoincideTasa = (
   if (tasaFacturadaXML === '16%' && tasaEsperadaSugerida === '16%') return 'SI';
   // No objeto
   if (tasaFacturadaXML === 'NO OBJETO' && tasaEsperadaSugerida === 'NO OBJETO') return 'SI';
-  // Exento (solo si la esperada es exactamente EXENTO, no EXENTO / REVISAR FUNDAMENTO)
+  // Exento
   if (tasaFacturadaXML === 'EXENTO' && tasaEsperadaSugerida === 'EXENTO') return 'SI';
 
-  // Cualquier otra combinación: no coinciden → REVISAR si hay riesgo medio, NO si clara discrepancia
   return 'NO';
 };
 
@@ -928,6 +965,7 @@ const buildComparativoBaseTasaRows = (results: ValidationResult[]) => {
       // Determine Tasa Facturada XML
       if (concepto.objetoImp === '01') {
         tasaFacturadaXML = 'NO OBJETO';
+        baseXML = Number(concepto.importe || 0) - Number(concepto.descuento || 0);
       } else if (ivaT) {
         const tfUp = tipoFactorXML.toUpperCase();
         if (tfUp === 'EXENTO') {
@@ -1211,11 +1249,45 @@ const applyComparativoSheetDefaults = (ws: any, dataRows: any[]) => {
 // ─── END COMPARATIVO BASE Y TASA IVA ─────────────────────────────────────────
 
 export function exportToExcel(results: ValidationResult[], fileNameOverride?: string) {
+  // 1. Separar resultados válidos e inválidos
+  const isValidUUID = (uuid: string | undefined): boolean => {
+    if (!uuid) return false;
+    const cleanUuid = String(uuid).trim().toUpperCase();
+    return cleanUuid !== 'NO DISPONIBLE' && cleanUuid !== 'NO_DISPONIBLE' && cleanUuid !== 'NO VIENE EN XML' && cleanUuid !== '';
+  };
+
+  const validResults = results.filter(r => isValidUUID(r.uuid));
+  const invalidResults = results.filter(r => !isValidUUID(r.uuid));
+
+  const totalXMLCargados = results.length;
+  const totalCFDIValidosConUUID = validResults.length;
+  const totalXMLConErrorLectura = invalidResults.length;
+  let totalFilasSinUUIDEnHojasPrincipales = 0;
+
+  // Comprobación de integridad
+  validResults.forEach(r => {
+    if (!isValidUUID(r.uuid)) {
+      totalFilasSinUUIDEnHojasPrincipales++;
+    }
+  });
+
+  console.log('\n================ VALIDACIÓN DE INTEGRIDAD EN EXPORTACIÓN ================');
+  console.log(`- totalXMLCargados: ${totalXMLCargados}`);
+  console.log(`- totalCFDIValidosConUUID: ${totalCFDIValidosConUUID}`);
+  console.log(`- totalXMLConErrorLectura: ${totalXMLConErrorLectura}`);
+  console.log(`- totalFilasSinUUIDEnHojasPrincipales: ${totalFilasSinUUIDEnHojasPrincipales}`);
+  console.log('=========================================================================\n');
+
+  if (totalFilasSinUUIDEnHojasPrincipales > 0) {
+    console.error('[INTEGRITY ERROR] Se detectaron filas sin UUID válido destinadas a hojas principales.');
+    throw new Error('Error de integridad: No se permiten filas sin UUID en hojas principales.');
+  }
+
   // Detect if batch is predominantly EMITIDOS or RECIBIDOS
   const emisorCounts = new Map<string, number>();
   const receptorCounts = new Map<string, number>();
   
-  results.forEach(r => {
+  validResults.forEach(r => {
     if (r.rfcEmisor) emisorCounts.set(r.rfcEmisor, (emisorCounts.get(r.rfcEmisor) || 0) + 1);
     if (r.rfcReceptor) receptorCounts.set(r.rfcReceptor, (receptorCounts.get(r.rfcReceptor) || 0) + 1);
   });
@@ -1236,7 +1308,7 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
   const wb = (XLSX as any).utils.book_new();
 
   // Preparar datos en el orden exacto de columnas
-  const data = results.map((r) => {
+  const data = validResults.map((r) => {
     const detail = cp(r);
     const mainOrigen = detail?.origenes?.[0];
     const mainDestino = detail?.destinos?.[0];
@@ -1485,7 +1557,7 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
   (XLSX as any).utils.book_append_sheet(wb, ws, 'Diagnostico_CFDI');
 
   // 1. CEDULA INGRESOS SAT
-  const dataIngresos = results.filter(r => r.tipoCFDI === 'I').map(r => ({
+  const dataIngresos = validResults.filter(r => r.tipoCFDI === 'I').map(r => ({
     UUID: r.uuid,
     Serie: r.serie,
     Folio: r.folio,
@@ -1509,7 +1581,7 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
   (XLSX as any).utils.book_append_sheet(wb, wsIngresos, 'CEDULA INGRESOS SAT');
 
   // 2. CEDULA TASA 0%
-  const dataTasa0 = results.filter(r => (r.baseIVA0 || 0) > 0).map(r => {
+  const dataTasa0 = validResults.filter(r => (r.baseIVA0 || 0) > 0).map(r => {
     const detail = cp(r);
     const mainOrigen = detail?.origenes?.[0];
     const mainDestino = detail?.destinos?.[0];
@@ -1549,7 +1621,7 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
   (XLSX as any).utils.book_append_sheet(wb, wsTasa0, 'CEDULA TASA 0%');
 
   // 2b. AUDITORIA IVA TASA 0%
-  const dataAuditoriaIvaTasa0 = results.flatMap(r => {
+  const dataAuditoriaIvaTasa0 = validResults.flatMap(r => {
     const conceptosFuente = r.desglosePorConcepto || [];
     const conceptosTasa0 = conceptosFuente.filter((concepto: any) => isTasa0Concept(concepto));
     const conceptos = conceptosTasa0.length ? conceptosTasa0 : ((r.baseIVA0 || 0) > 0 ? [{
@@ -1617,7 +1689,7 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
   (XLSX as any).utils.book_append_sheet(wb, wsAuditoriaIvaTasa0, 'AUDITORIA IVA TASA 0%');
 
   // 3. CEDULA IVA (ACREDITABLE/TRASLADADO)
-  const dataIva = results.filter(r => r.tipoCFDI === 'E' || (r.tipoCFDI === 'I' && r.rfcReceptor && !r.rfcReceptor.startsWith('XEXX') && r.rfcEmisor !== r.rfcReceptor)).map(r => ({
+  const dataIva = validResults.filter(r => r.tipoCFDI === 'E' || (r.tipoCFDI === 'I' && r.rfcReceptor && !r.rfcReceptor.startsWith('XEXX') && r.rfcEmisor !== r.rfcReceptor)).map(r => ({
     UUID: r.uuid,
     Fecha: r.fechaEmision,
     RFC_Emisor: r.rfcEmisor,
@@ -1648,7 +1720,7 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
   (XLSX as any).utils.book_append_sheet(wb, wsIva, esLoteEmitidos ? 'CEDULA IVA TRASLADADO' : 'CEDULA IVA ACREDITABLE');
 
   // 4. ANEXO DATOS FALTANTES
-  const dataFaltantes = results.map(r => {
+  const dataFaltantes = validResults.map(r => {
     const detail = cp(r);
     const mainOrigen = detail?.origenes?.[0];
     const mainDestino = detail?.destinos?.[0];
@@ -1684,7 +1756,7 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
   (XLSX as any).utils.book_append_sheet(wb, wsFaltantes, 'ANEXO DATOS FALTANTES');
 
   // 5. MATRIZ DE RASTREABILIDAD
-  const dataMatriz = results.map(r => {
+  const dataMatriz = validResults.map(r => {
     const detail = cp(r);
     const mainOrigen = detail?.origenes?.[0];
     const mainDestino = detail?.destinos?.[0];
@@ -1722,23 +1794,120 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
   const wsMatriz = (XLSX as any).utils.json_to_sheet(dataMatriz);
   (XLSX as any).utils.book_append_sheet(wb, wsMatriz, 'MATRIZ DE RASTREABILIDAD');
 
-  const alertasForenses = buildAlerts(results);
-  appendJsonSheet(wb, extractRawXmlRows(results), 'EXTRACCION CRUDA XML');
-  appendJsonSheet(wb, buildForensicRows(results), 'DETALLE FORENSE POR CFDI');
-  appendJsonSheet(wb, buildConceptRows(results), 'DETALLE CONCEPTOS XML');
-  appendJsonSheet(wb, buildTaxRows(results), 'DETALLE IMPUESTOS CONCEPTO');
-  appendJsonSheet(wb, buildCartaPorteMercancias(results), 'DETALLE CARTA PORTE MERCANCIAS');
-  appendJsonSheet(wb, buildCartaPorteUbicaciones(results), 'DETALLE CP UBICACIONES');
-  appendJsonSheet(wb, buildCartaPorteFiguras(results), 'DETALLE CARTA PORTE FIGURAS');
-  appendJsonSheet(wb, buildPagosRows(results), 'DETALLE COMPLEMENTOS PAGO');
+  const alertasForenses = buildAlerts(validResults);
+  appendJsonSheet(wb, extractRawXmlRows(validResults), 'EXTRACCION CRUDA XML');
+  appendJsonSheet(wb, buildForensicRows(validResults), 'DETALLE FORENSE POR CFDI');
+  appendJsonSheet(wb, buildConceptRows(validResults), 'DETALLE CONCEPTOS XML');
+  appendJsonSheet(wb, buildTaxRows(validResults), 'DETALLE IMPUESTOS CONCEPTO');
+  appendJsonSheet(wb, buildCartaPorteMercancias(validResults), 'DETALLE CARTA PORTE MERCANCIAS');
+  appendJsonSheet(wb, buildCartaPorteUbicaciones(validResults), 'DETALLE CP UBICACIONES');
+  appendJsonSheet(wb, buildCartaPorteFiguras(validResults), 'DETALLE CARTA PORTE FIGURAS');
+  appendJsonSheet(wb, buildPagosRows(validResults), 'DETALLE COMPLEMENTOS PAGO');
   appendJsonSheet(wb, alertasForenses, 'ALERTAS FORENSES');
-  appendJsonSheet(wb, buildQualityRows(results), 'CONTROL CALIDAD XML');
-  appendJsonSheet(wb, buildSummaryRows(results, alertasForenses), 'RESUMEN EJECUTIVO');
+  appendJsonSheet(wb, buildQualityRows(validResults), 'CONTROL CALIDAD XML');
+  appendJsonSheet(wb, buildSummaryRows(validResults, alertasForenses), 'RESUMEN EJECUTIVO');
 
   // ── Nueva hoja: COMPARATIVO BASE Y TASA IVA ──
-  const dataComparativo = buildComparativoBaseTasaRows(results);
+  const dataComparativo = buildComparativoBaseTasaRows(validResults);
   const wsComparativo = (XLSX as any).utils.json_to_sheet(dataComparativo, { origin: 'A10' });
   (XLSX as any).utils.book_append_sheet(wb, wsComparativo, 'COMPARATIVO BASE Y TASA IVA');
+
+  // ── Nueva hoja obligatoria: ERRORES LECTURA XML ──
+  const dataErrores = invalidResults.map(r => {
+    const xmlStr = String(r.xmlContent || '');
+    const errorMsg = String(r.comentarioFiscal || r.comentarioMotor || '');
+    
+    let motivoError = 'XML INCOMPLETO';
+    if (errorMsg.includes('Timeout') || errorMsg.includes('excedido')) {
+      motivoError = 'TIMEOUT EN PROCESAMIENTO';
+    } else if (xmlStr) {
+      const hasComprobante = xmlStr.includes('Comprobante');
+      const hasTimbre = xmlStr.includes('TimbreFiscalDigital');
+      if (!hasComprobante) {
+        motivoError = 'XML NO CFDI';
+      } else if (!hasTimbre) {
+        motivoError = 'CFDI SIN TIMBRE';
+      } else {
+        motivoError = 'UUID NO LOCALIZADO';
+      }
+    } else {
+      if (errorMsg.includes('formato inválido') || errorMsg.includes('parse')) {
+        motivoError = 'XML INCOMPLETO';
+      } else if (errorMsg.includes('Versión no soportada')) {
+        motivoError = 'VERSION NO SOPORTADA';
+      } else {
+        motivoError = 'UUID NO LOCALIZADO';
+      }
+    }
+
+    const tieneComprobante = xmlStr.includes('Comprobante') ? 'SI' : 'NO';
+    const tieneTimbre = xmlStr.includes('TimbreFiscalDigital') ? 'SI' : 'NO';
+
+    let uuidExtraido = 'NO DISPONIBLE';
+    const uuidMatch = xmlStr.match(/UUID="([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})"/i);
+    if (uuidMatch) {
+      uuidExtraido = uuidMatch[1];
+    }
+
+    let versionCFDI = r.versionCFDI || 'NO DISPONIBLE';
+    if (versionCFDI === 'NO DISPONIBLE' && xmlStr) {
+      const versionMatch = xmlStr.match(/Version="([^"]+)"/);
+      if (versionMatch) versionCFDI = versionMatch[1];
+    }
+
+    let tipoCFDI = r.tipoCFDI || 'NO DISPONIBLE';
+    if (tipoCFDI === 'NO DISPONIBLE' && xmlStr) {
+      const tipoMatch = xmlStr.match(/TipoDeComprobante="([^"]+)"/);
+      if (tipoMatch) tipoCFDI = tipoMatch[1];
+    }
+
+    let rfcEmisor = r.rfcEmisor || 'NO DISPONIBLE';
+    if (rfcEmisor === 'NO DISPONIBLE' && xmlStr) {
+      const rfcMatch = xmlStr.match(/Emisor[^>]*Rfc="([A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3})"/i);
+      if (rfcMatch) rfcEmisor = rfcMatch[1];
+    }
+
+    let rfcReceptor = r.rfcReceptor || 'NO DISPONIBLE';
+    if (rfcReceptor === 'NO DISPONIBLE' && xmlStr) {
+      const rfcMatch = xmlStr.match(/Receptor[^>]*Rfc="([A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3})"/i);
+      if (rfcMatch) rfcReceptor = rfcMatch[1];
+    }
+
+    let fecha = r.fechaEmision || 'NO DISPONIBLE';
+    if (fecha === 'NO DISPONIBLE' && xmlStr) {
+      const fechaMatch = xmlStr.match(/Fecha="([^T"]+)/);
+      if (fechaMatch) fecha = fechaMatch[1];
+    }
+
+    let accionRecomendada = 'Revisar archivo XML manualmente';
+    if (motivoError === 'TIMEOUT EN PROCESAMIENTO') {
+      accionRecomendada = 'Reintentar procesamiento; el servicio del SAT podría estar congestionado';
+    } else if (motivoError === 'XML NO CFDI') {
+      accionRecomendada = 'Verificar que el archivo sea un CFDI válido emitido por el SAT';
+    } else if (motivoError === 'CFDI SIN TIMBRE') {
+      accionRecomendada = 'Verificar que el comprobante esté debidamente timbrado';
+    } else if (motivoError === 'VERSION NO SOPORTADA') {
+      accionRecomendada = 'Utilizar una versión de CFDI soportada (3.3 o 4.0)';
+    }
+
+    return {
+      Archivo_XML: r.fileName,
+      Motivo_Error: motivoError,
+      Tiene_Comprobante: tieneComprobante,
+      Tiene_Complemento_TimbreFiscalDigital: tieneTimbre,
+      UUID_Extraido: uuidExtraido,
+      Version_CFDI: versionCFDI,
+      Tipo_CFDI: tipoCFDI,
+      RFC_Emisor: rfcEmisor,
+      RFC_Receptor: rfcReceptor,
+      Fecha: fecha,
+      Error_Tecnico: r.observacionesTecnicas || errorMsg || 'Error desconocido',
+      Accion_Recomendada: accionRecomendada
+    };
+  });
+
+  const wsErrores = (XLSX as any).utils.json_to_sheet(dataErrores.length ? dataErrores : [{ Archivo_XML: 'SIN REGISTROS', Motivo_Error: 'Ningún XML con error de lectura.' }]);
+  (XLSX as any).utils.book_append_sheet(wb, wsErrores, 'ERRORES LECTURA XML');
 
   wb.SheetNames.forEach((sheetName: string) => {
     if (sheetName === 'COMPARATIVO BASE Y TASA IVA') {
