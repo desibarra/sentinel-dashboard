@@ -1070,7 +1070,7 @@ export const determineRequiereCartaPorte = (xmlContent: string, tipoCFDI: string
 };
 
 export const extractCartaPorteInfo = (xmlContent: string, version: string) => {
-    const tiene = /<[^>]*:?CartaPorte\b/i.test(xmlContent);
+    const tiene = /<(?:[a-zA-Z0-9_]+:)?CartaPorte[\s\/>]/i.test(xmlContent);
     if (version === "3.3" && !tiene) return { presente: "NO APLICA", completa: "NO APLICA", version: "NO APLICA" };
     if (!tiene) return { presente: "NO", completa: "NO APLICA", version: "NO APLICA" };
     let cpVersion = "3.1";
@@ -1082,7 +1082,7 @@ export const extractCartaPorteInfo = (xmlContent: string, version: string) => {
         cpVersion = "2.0";
     } else {
         const vMatch = xmlContent.match(/CartaPorte[^>]*Version="([^"]+)"/);
-        cpVersion = vMatch ? vMatch[1] : "3.1";
+        cpVersion = vMatch ? vMatch[1] : "NO VIENE EN XML";
     }
     if (cpVersion === "4.0" || cpVersion === "2.0" || cpVersion === "NO DISPONIBLE") {
         cpVersion = "3.1";
