@@ -24,6 +24,7 @@ export interface ValidationResult {
     folio: string;
     fechaEmision: string;
     horaEmision: string;
+    xmlContent?: any;
     añoFiscal: number;
     estatusSAT: string;
     fechaCancelacion: string;
@@ -102,6 +103,87 @@ export interface ValidationResult {
     trazabilidadInfo?: TrazabilidadFiscalInfo;
 }
 
+export interface UbicacionCP {
+  tipoUbicacion: string;
+  idUbicacion: string;
+  rfcRemitenteDestinatario: string;
+  nombreRemitenteDestinatario: string;
+  fechaHoraSalidaLlegada: string;
+  calle: string;
+  numeroExterior: string;
+  numeroInterior: string;
+  colonia: string;
+  localidad: string;
+  municipio: string;
+  estado: string;
+  pais: string;
+  codigoPostal: string;
+  referencia: string;
+}
+
+export interface MercanciaCP {
+  bienesTransp: string;
+  descripcion: string;
+  cantidad: string;
+  claveUnidad: string;
+  unidad: string;
+  pesoEnKg: string;
+  valorMercancia: string;
+  moneda: string;
+  fraccionArancelaria: string;
+  uuidComercioExt: string;
+  materialPeligroso: string;
+  cveMaterialPeligroso: string;
+  embalaje: string;
+}
+
+export interface RemolqueCP {
+  subTipoRem: string;
+  placa: string;
+}
+
+export interface AutotransporteCP {
+  permSCT: string;
+  numPermisoSCT: string;
+  configVehicular: string;
+  placaVM: string;
+  anioModeloVM: string;
+  aseguradoraRespCivil: string;
+  polizaRespCivil: string;
+  remolques: RemolqueCP[];
+}
+
+export interface FiguraCP {
+  tipoFigura: string;
+  rfcFigura: string;
+  nombreFigura: string;
+  numLicencia: string;
+  residenciaFiscal: string;
+  numRegIdTrib: string;
+}
+
+export interface CartaPorteDetalle {
+  version: string;
+  transpInternac: string;
+  transporteInternacional: string;
+  entradaSalidaMercancia: string;
+  paisOrigenDestino: string;
+  viaEntradaSalida: string;
+  totalDistanciaRecorrida: string;
+  pesoBrutoTotal: string;
+  unidadPeso: string;
+  numTotalMercancias: string;
+  origenes: UbicacionCP[];
+  destinos: UbicacionCP[];
+  mercancias: MercanciaCP[];
+  autotransporte: AutotransporteCP | null;
+  figuras: FiguraCP[];
+  origen?: UbicacionCP;
+  destino?: UbicacionCP;
+  operador?: FiguraCP;
+  mercanciaPrincipal?: string;
+}
+
 export interface TrazabilidadFiscalInfo {
     fechaCobro: string;
     folioTransferencia: string;
@@ -131,6 +213,13 @@ export interface TrazabilidadFiscalInfo {
     tieneOrigen: string;
     tieneDestino: string;
     tieneMercancias: string;
+    cartaPorteDetalle?: CartaPorteDetalle | null;
+    placas?: any;
+    remolques?: any;
+    rfcOperador?: any;
+    distancia?: any;
+    permisoSCT?: any;
+    transporteInternacional?: any;
     tienePesoDistancia: string;
     tieneEntryNumber: string;
     datosFaltantes: string;
@@ -144,6 +233,271 @@ export interface TrazabilidadFiscalInfo {
     estatusDocumental: string;
     riesgo: string;
     accionRecomendadaMatriz: string;
+}
+
+export function extraerDetalleCartaPorte(doc: Document): CartaPorteDetalle | null {
+  try {
+    const todosLosElementos = doc.getElementsByTagName("*");
+    let nodoCP: Element | null = null;
+    for (let i = 0; i < todosLosElementos.length; i++) {
+      const el = todosLosElementos[i];
+      if (el.localName === "CartaPorte") {
+        nodoCP = el;
+        break;
+      }
+    }
+    if (!nodoCP) return null;
+
+    const getAttr = (el: Element | null | undefined, name: string): string => {
+      if (!el) return "NO VIENE EN XML";
+      const val = el.getAttribute(name);
+      return val !== null && val !== undefined ? val : "NO VIENE EN XML";
+    };
+
+    const transpInternac = getAttr(nodoCP, "TranspInternac");
+    const entradaSalidaMerc = getAttr(nodoCP, "EntradaSalidaMerc");
+    const paisOrigenDestino = getAttr(nodoCP, "PaisOrigenDestino");
+    const viaEntradaSalida = getAttr(nodoCP, "ViaEntradaSalida");
+    const totalDistRecorrida = getAttr(nodoCP, "TotalDistRecorrida") !== "NO VIENE EN XML" ? getAttr(nodoCP, "TotalDistRecorrida") : getAttr(nodoCP, "TotalDistRec");
+
+    let cpVersion = getAttr(nodoCP, "Version");
+    const ns = nodoCP.namespaceURI || "";
+    if (ns.includes("CartaPorte31")) {
+      cpVersion = "3.1";
+    } else if (ns.includes("CartaPorte30")) {
+      cpVersion = "3.0";
+    } else if (ns.includes("CartaPorte20")) {
+      cpVersion = "2.0";
+    } else if (cpVersion === "4.0" || cpVersion === "2.0" || cpVersion === "NO VIENE EN XML") {
+      cpVersion = "3.1";
+    }
+
+    const detalle: CartaPorteDetalle = {
+      version: cpVersion,
+      transpInternac,
+      transporteInternacional: transpInternac,
+      entradaSalidaMercancia: entradaSalidaMerc,
+      paisOrigenDestino,
+      viaEntradaSalida,
+      totalDistanciaRecorrida: totalDistRecorrida,
+      pesoBrutoTotal: "NO VIENE EN XML",
+      unidadPeso: "NO VIENE EN XML",
+      numTotalMercancias: "NO VIENE EN XML",
+      origenes: [],
+      destinos: [],
+      mercancias: [],
+      autotransporte: null,
+      figuras: []
+    };
+
+    const hijosCP = nodoCP.children || nodoCP.childNodes;
+    for (let i = 0; i < hijosCP.length; i++) {
+      const hijo = hijosCP[i];
+      if (hijo.nodeType !== 1) continue;
+      const elHijo = hijo as Element;
+
+      if (elHijo.localName === "Ubicaciones") {
+        const ubicaciones = elHijo.children || elHijo.childNodes;
+        for (let j = 0; j < ubicaciones.length; j++) {
+          const u = ubicaciones[j];
+          if (u.nodeType !== 1) continue;
+          const elU = u as Element;
+          if (elU.localName === "Ubicacion") {
+            const tipo = getAttr(elU, "TipoUbicacion");
+            let domCalle = "NO VIENE EN XML";
+            let domNumExt = "NO VIENE EN XML";
+            let domNumInt = "NO VIENE EN XML";
+            let domColonia = "NO VIENE EN XML";
+            let domLocalidad = "NO VIENE EN XML";
+            let domMunicipio = "NO VIENE EN XML";
+            let domEstado = "NO VIENE EN XML";
+            let domPais = "NO VIENE EN XML";
+            let domCP = "NO VIENE EN XML";
+            let domRef = "NO VIENE EN XML";
+
+            const doms = elU.children || elU.childNodes;
+            for (let k = 0; k < doms.length; k++) {
+              const d = doms[k];
+              if (d.nodeType === 1 && (d as Element).localName === "Domicilio") {
+                const elD = d as Element;
+                domCalle = getAttr(elD, "Calle");
+                domNumExt = getAttr(elD, "NumeroExterior");
+                domNumInt = getAttr(elD, "NumeroInterior");
+                domColonia = getAttr(elD, "Colonia");
+                domLocalidad = getAttr(elD, "Localidad");
+                domMunicipio = getAttr(elD, "Municipio");
+                domEstado = getAttr(elD, "Estado");
+                domPais = getAttr(elD, "Pais");
+                domCP = getAttr(elD, "CodigoPostal");
+                domRef = getAttr(elD, "Referencia");
+                break;
+              }
+            }
+
+            const ubicacionObj: UbicacionCP = {
+              tipoUbicacion: tipo,
+              idUbicacion: getAttr(elU, "IDUbicacion"),
+              rfcRemitenteDestinatario: getAttr(elU, "RFCRemitenteDestinatario"),
+              nombreRemitenteDestinatario: getAttr(elU, "NombreRemitenteDestinatario"),
+              fechaHoraSalidaLlegada: getAttr(elU, "FechaHoraSalidaLlegada") !== "NO VIENE EN XML" ? getAttr(elU, "FechaHoraSalidaLlegada") : getAttr(elU, "FechaHoraProg"),
+              calle: domCalle,
+              numeroExterior: domNumExt,
+              numeroInterior: domNumInt,
+              colonia: domColonia,
+              localidad: domLocalidad,
+              municipio: domMunicipio,
+              estado: domEstado,
+              pais: domPais,
+              codigoPostal: domCP,
+              referencia: domRef
+            };
+
+            if (tipo === "Origen") {
+              detalle.origenes.push(ubicacionObj);
+            } else if (tipo === "Destino") {
+              detalle.destinos.push(ubicacionObj);
+            }
+          }
+        }
+      }
+
+      if (elHijo.localName === "Mercancias") {
+        detalle.pesoBrutoTotal = getAttr(elHijo, "PesoBrutoTotal");
+        detalle.unidadPeso = getAttr(elHijo, "UnidadPeso");
+        detalle.numTotalMercancias = getAttr(elHijo, "NumTotalMercancias");
+
+        const mercs = elHijo.children || elHijo.childNodes;
+        for (let j = 0; j < mercs.length; j++) {
+          const m = mercs[j];
+          if (m.nodeType !== 1) continue;
+          const elM = m as Element;
+          if (elM.localName === "Mercancia") {
+            const mercanciaObj: MercanciaCP = {
+              bienesTransp: getAttr(elM, "BienesTransp"),
+              descripcion: getAttr(elM, "Descripcion") !== "NO VIENE EN XML" ? getAttr(elM, "Descripcion") : getAttr(elM, "Descripción"),
+              cantidad: getAttr(elM, "Cantidad"),
+              claveUnidad: getAttr(elM, "ClaveUnidad"),
+              unidad: getAttr(elM, "Unidad"),
+              pesoEnKg: getAttr(elM, "PesoEnKg"),
+              valorMercancia: getAttr(elM, "ValorMercancia"),
+              moneda: getAttr(elM, "Moneda"),
+              fraccionArancelaria: getAttr(elM, "FraccionArancelaria"),
+              uuidComercioExt: getAttr(elM, "UUIDComercioExt"),
+              materialPeligroso: getAttr(elM, "MaterialPeligroso"),
+              cveMaterialPeligroso: getAttr(elM, "CveMaterialPeligroso"),
+              embalaje: getAttr(elM, "Embalaje")
+            };
+            detalle.mercancias.push(mercanciaObj);
+          } else if (elM.localName === "Autotransporte") {
+            detalle.autotransporte = parseAutotransporte(elM, getAttr);
+          }
+        }
+      }
+
+      if (elHijo.localName === "Autotransporte") {
+        detalle.autotransporte = parseAutotransporte(elHijo, getAttr);
+      }
+
+      if (elHijo.localName === "FiguraTransporte" || elHijo.localName === "TiposFigura") {
+        const figs = elHijo.children || elHijo.childNodes;
+        if (elHijo.localName === "TiposFigura") {
+          const figObj = parseFigura(elHijo, getAttr);
+          if (figObj.tipoFigura !== "NO VIENE EN XML" || figObj.rfcFigura !== "NO VIENE EN XML") {
+            detalle.figuras.push(figObj);
+          }
+        }
+        
+        for (let j = 0; j < figs.length; j++) {
+          const f = figs[j];
+          if (f.nodeType !== 1) continue;
+          const elF = f as Element;
+          if (elF.localName === "TiposFigura" || elF.localName === "Operadores" || elF.localName === "Operador" || elF.localName === "FiguraTransporte") {
+            if (elF.localName === "Operador" || elF.localName === "Operadores") {
+              const figObj: FiguraCP = {
+                tipoFigura: "01",
+                rfcFigura: getAttr(elF, "RFCOperador") !== "NO VIENE EN XML" ? getAttr(elF, "RFCOperador") : getAttr(elF, "RFCFigura"),
+                nombreFigura: getAttr(elF, "NombreOperador") !== "NO VIENE EN XML" ? getAttr(elF, "NombreOperador") : getAttr(elF, "NombreFigura"),
+                numLicencia: getAttr(elF, "NumLicencia"),
+                residenciaFiscal: getAttr(elF, "ResidenciaFiscalOperador") !== "NO VIENE EN XML" ? getAttr(elF, "ResidenciaFiscalOperador") : getAttr(elF, "ResidenciaFiscal"),
+                numRegIdTrib: getAttr(elF, "NumRegIdTribOperador") !== "NO VIENE EN XML" ? getAttr(elF, "NumRegIdTribOperador") : getAttr(elF, "NumRegIdTrib")
+              };
+              detalle.figuras.push(figObj);
+            } else {
+              detalle.figuras.push(parseFigura(elF, getAttr));
+            }
+          }
+        }
+      }
+    }
+
+    detalle.origen = detalle.origenes[0];
+    detalle.destino = detalle.destinos[0];
+    detalle.operador = detalle.figuras.find(f => f.tipoFigura === "01") || detalle.figuras[0];
+    detalle.mercanciaPrincipal = detalle.mercancias[0]?.descripcion;
+
+    return detalle;
+  } catch (error) {
+    console.error("Error al extraer detalle de CartaPorte:", error);
+    return null;
+  }
+}
+
+function parseAutotransporte(el: Element, getAttr: (el: Element | null | undefined, name: string) => string): AutotransporteCP {
+  let configVehicular = "NO VIENE EN XML";
+  let placaVM = "NO VIENE EN XML";
+  let anioModeloVM = "NO VIENE EN XML";
+  let aseguradoraRespCivil = "NO VIENE EN XML";
+  let polizaRespCivil = "NO VIENE EN XML";
+  const remolques: RemolqueCP[] = [];
+
+  const hijos = el.children || el.childNodes;
+  for (let i = 0; i < hijos.length; i++) {
+    const h = hijos[i];
+    if (h.nodeType !== 1) continue;
+    const elH = h as Element;
+    if (elH.localName === "IdentificacionVehicular") {
+      configVehicular = getAttr(elH, "ConfigVehicular");
+      placaVM = getAttr(elH, "PlacaVM") !== "NO VIENE EN XML" ? getAttr(elH, "PlacaVM") : getAttr(elH, "Placa");
+      anioModeloVM = getAttr(elH, "AnioModeloVM");
+    } else if (elH.localName === "Seguros") {
+      aseguradoraRespCivil = getAttr(elH, "AseguradoraRespCivil") !== "NO VIENE EN XML" ? getAttr(elH, "AseguradoraRespCivil") : getAttr(elH, "AseguraRespCivil");
+      polizaRespCivil = getAttr(elH, "PolizaRespCivil");
+    } else if (elH.localName === "Remolques") {
+      const rems = elH.children || elH.childNodes;
+      for (let j = 0; j < rems.length; j++) {
+        const rNode = rems[j];
+        if (rNode.nodeType === 1 && (rNode as Element).localName === "Remolque") {
+          const elR = rNode as Element;
+          remolques.push({
+            subTipoRem: getAttr(elR, "SubTipoRem") !== "NO VIENE EN XML" ? getAttr(elR, "SubTipoRem") : getAttr(elR, "SubTipoRemolque"),
+            placa: getAttr(elR, "Placa") !== "NO VIENE EN XML" ? getAttr(elR, "Placa") : getAttr(elR, "PlacaRemolque")
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    permSCT: getAttr(el, "PermSCT"),
+    numPermisoSCT: getAttr(el, "NumPermisoSCT"),
+    configVehicular,
+    placaVM,
+    anioModeloVM,
+    aseguradoraRespCivil,
+    polizaRespCivil,
+    remolques
+  };
+}
+
+function parseFigura(el: Element, getAttr: (el: Element | null | undefined, name: string) => string): FiguraCP {
+  return {
+    tipoFigura: getAttr(el, "TipoFigura"),
+    rfcFigura: getAttr(el, "RFCFigura"),
+    nombreFigura: getAttr(el, "NombreFigura"),
+    numLicencia: getAttr(el, "NumLicencia"),
+    residenciaFiscal: getAttr(el, "ResidenciaFiscal"),
+    numRegIdTrib: getAttr(el, "NumRegIdTrib")
+  };
 }
 
 export const evaluarTrazabilidad = (xmlDoc: XMLDocument, xmlContent: string, r: any): TrazabilidadFiscalInfo => {
@@ -178,7 +532,7 @@ export const evaluarTrazabilidad = (xmlDoc: XMLDocument, xmlContent: string, r: 
     
     const cartaPorteNodes = Array.from(comprobante?.getElementsByTagName("*") || []).filter(n => (n.localName || n.nodeName) === "CartaPorte");
     if (cartaPorteNodes.length > 0) {
-        tieneCartaPorte = "Sí";
+        tieneCartaPorte = "SI";
         const cpNode = cartaPorteNodes[0];
         
         const ubicaciones = cpNode.getElementsByTagName("*");
@@ -187,47 +541,47 @@ export const evaluarTrazabilidad = (xmlDoc: XMLDocument, xmlContent: string, r: 
             const name = u.localName || u.nodeName;
             if (name === "Ubicacion") {
                 const tipo = u.getAttribute("TipoUbicacion");
-                if (tipo === "Origen") tieneOrigen = "Sí";
-                if (tipo === "Destino") tieneDestino = "Sí";
+                if (tipo === "Origen") tieneOrigen = "SI";
+                if (tipo === "Destino") tieneDestino = "SI";
             }
             if (name === "Autotransporte") {
                 const ident = u.getElementsByTagName("*");
                 for (let j = 0; j < ident.length; j++) {
                     const idn = ident[j];
                     if ((idn.localName || idn.nodeName) === "IdentificacionVehicular") {
-                        if (idn.getAttribute("PlacaVM") || idn.getAttribute("Placa")) tienePlacasUnidad = "Sí";
+                        if (idn.getAttribute("PlacaVM") || idn.getAttribute("Placa")) tienePlacasUnidad = "SI";
                     }
                     if ((idn.localName || idn.nodeName) === "Remolque") {
-                        if (idn.getAttribute("Placa")) tieneRemolque = "Sí";
+                        if (idn.getAttribute("Placa")) tieneRemolque = "SI";
                     }
                 }
             }
             if (name === "Mercancias") {
-                tieneMercancias = "Sí";
-                if (u.getAttribute("PesoBrutoTotal")) tienePesoDistancia = "Sí";
+                tieneMercancias = "SI";
+                if (u.getAttribute("PesoBrutoTotal")) tienePesoDistancia = "SI";
             }
             if (name === "TiposFigura" || name === "FiguraTransporte") {
                 const figs = u.getElementsByTagName("*");
                 for (let j = 0; j < figs.length; j++) {
                     const fig = figs[j];
-                    if ((fig.localName || fig.nodeName) === "TiposFigura" && fig.getAttribute("TipoFigura") === "01") tieneOperador = "Sí";
-                    if ((fig.localName || fig.nodeName) === "Operador") tieneOperador = "Sí";
+                    if ((fig.localName || fig.nodeName) === "TiposFigura" && fig.getAttribute("TipoFigura") === "01") tieneOperador = "SI";
+                    if ((fig.localName || fig.nodeName) === "Operador") tieneOperador = "SI";
                 }
             }
         }
     }
     
-    if (tieneOrigen === "No" && xmlContent.includes('TipoUbicacion="Origen"')) tieneOrigen = "Sí (Detectado)";
-    if (tieneDestino === "No" && xmlContent.includes('TipoUbicacion="Destino"')) tieneDestino = "Sí (Detectado)";
-    if (tienePlacasUnidad === "No" && (xmlContent.match(/PlacaVM="[^"]+"/) || xmlContent.match(/Placa="[^"]+"/))) tienePlacasUnidad = "Sí (Detectado)";
-    if (tienePesoDistancia === "No" && xmlContent.match(/PesoBrutoTotal="[^"]+"/)) tienePesoDistancia = "Sí (Detectado)";
-    if (tieneMercancias === "No" && xmlContent.includes("NumTotalMercancias")) tieneMercancias = "Sí (Detectado)";
-    if (tieneOperador === "No" && (xmlContent.includes('TipoFigura="01"') || xmlContent.includes('<cartaporte:Operador'))) tieneOperador = "Sí (Detectado)";
+    if (tieneOrigen === "No" && xmlContent.includes('TipoUbicacion="Origen"')) tieneOrigen = "SI (Detectado)";
+    if (tieneDestino === "No" && xmlContent.includes('TipoUbicacion="Destino"')) tieneDestino = "SI (Detectado)";
+    if (tienePlacasUnidad === "No" && (xmlContent.match(/PlacaVM="[^"]+"/) || xmlContent.match(/Placa="[^"]+"/))) tienePlacasUnidad = "SI (Detectado)";
+    if (tienePesoDistancia === "No" && xmlContent.match(/PesoBrutoTotal="[^"]+"/)) tienePesoDistancia = "SI (Detectado)";
+    if (tieneMercancias === "No" && xmlContent.includes("NumTotalMercancias")) tieneMercancias = "SI (Detectado)";
+    if (tieneOperador === "No" && (xmlContent.includes('TipoFigura="01"') || xmlContent.includes('<cartaporte:Operador'))) tieneOperador = "SI (Detectado)";
 
     let pedimentosStr = "";
     let tienePedimento = "No";
     if (xmlContent.includes("NumeroPedimento") || xmlContent.includes("NumPedimento") || xmlContent.includes("DocumentoAduanero") || xmlContent.includes("ComercioExterior")) {
-        tienePedimento = "Sí";
+        tienePedimento = "SI";
         const pedMatch = xmlContent.match(/NumeroPedimento="([^"]+)"/g) || xmlContent.match(/NumPedimento="([^"]+)"/g);
         if (pedMatch) {
             pedimentosStr = Array.from(new Set(pedMatch.map(m => m.split('"')[1]))).join(" | ");
@@ -243,22 +597,22 @@ export const evaluarTrazabilidad = (xmlDoc: XMLDocument, xmlContent: string, r: 
     const dodaRegex = /(?:DODA|PITA|num(?:ero)?\s*de\s*integracion)[\s-:]*([A-Z0-9]{10,25})/i;
     const matchDoda = xmlContent.match(dodaRegex);
     if (matchDoda) {
-        tieneDoda = "Sí (posible DODA detectado)";
+        tieneDoda = "SI (posible DODA detectado)";
         numeroDodaIntegracion = matchDoda[1];
     }
 
     let tieneEntryNumber = "No";
     if (/Entry[\s-:]*([A-Z0-9]{8,15})/i.test(xmlContent) || xmlContent.includes("Entry Number")) {
-        tieneEntryNumber = "Sí";
+        tieneEntryNumber = "SI";
     }
 
     let identificadorBancario = "REQUIERE CAPTURA/IMPORTACIÓN";
     if (xmlContent.includes("CtaOrdenante") || xmlContent.includes("CtaBeneficiario")) {
-        identificadorBancario = "Sí (Detectado en CEP)";
+        identificadorBancario = "SI (Detectado en CEP)";
     }
     
     let soporteComercioExterior = "REQUIERE CAPTURA/IMPORTACIÓN";
-    let destinoExtranjero = r.rfcReceptor && r.rfcReceptor.startsWith("XEXX") ? "SÍ" : "NO";
+    let destinoExtranjero = r.rfcReceptor && r.rfcReceptor.startsWith("XEXX") ? "SI" : "NO";
     
     let diagnosticoTasa0 = "NO APLICA";
     let accionRecomendadaTasa0 = "NO APLICA";
@@ -283,45 +637,45 @@ export const evaluarTrazabilidad = (xmlDoc: XMLDocument, xmlContent: string, r: 
     }
 
     let ivaAcreditable = (r.tipoCFDI === "E" || (r.tipoCFDI === "I" && r.rfcReceptor !== "Desconocido")) ? r.ivaTraslado : 0;
-    let diagnosticoIvaAcreditable = ivaAcreditable > 0 ? (identificadorBancario.includes("Sí") ? "ACREDITAMIENTO SOPORTADO" : "FALTA CRUCE CON ESTADO DE CUENTA") : "NO APLICA";
-    let accionRecomendadaIvaAcreditable = ivaAcreditable > 0 && !identificadorBancario.includes("Sí") ? "Asociar transferencia o CEP" : "Ninguna";
+    let diagnosticoIvaAcreditable = ivaAcreditable > 0 ? (identificadorBancario.includes("SI") ? "ACREDITAMIENTO SOPORTADO" : "FALTA CRUCE CON ESTADO DE CUENTA") : "NO APLICA";
+    let accionRecomendadaIvaAcreditable = ivaAcreditable > 0 && !identificadorBancario.includes("SI") ? "Asociar transferencia o CEP" : "Ninguna";
 
     let datosFaltantes = "Ninguno";
     let fuenteExternaRequerida = "NO";
     let diagnosticoDatosFaltantes = "XML Básico";
     let accionRecomendadaDatosFaltantes = "Ninguna";
-    let auditableSoloConXML = "SÍ";
+    let auditableSoloConXML = "SI";
 
     let nivelExpediente = "SOPORTE FISCAL PARCIAL";
     let estatusDocumental = "Válido a nivel SAT";
     let riesgo = "MEDIO";
     let accionRecomendadaMatriz = "Ninguna";
 
-    const esFleteOCartaPorte = tieneCartaPorte === "Sí" || /flete|transporte|acarreo/i.test(conceptoPrincipal) || 
+    const esFleteOCartaPorte = tieneCartaPorte === "SI" || /flete|transporte|acarreo/i.test(conceptoPrincipal) || 
                         Array.from(comprobante?.getElementsByTagName("*") || []).some(n => (n.localName || n.nodeName) === "Concepto" && /^78101[78]\d{2}|^78102\d{3}/.test(n.getAttribute("ClaveProdServ")||""));
 
     if (esFleteOCartaPorte) {
         if (tieneCartaPorte === "No") {
             diagnosticoDatosFaltantes = "FALTA CARTA PORTE";
             datosFaltantes = "Complemento Carta Porte";
-            fuenteExternaRequerida = "SÍ (Soporte Transportista)";
+            fuenteExternaRequerida = "SI (Soporte Transportista)";
             accionRecomendadaDatosFaltantes = "Solicitar Carta Porte al emisor";
             auditableSoloConXML = "NO";
             nivelExpediente = "NO APTO PARA TRAZABILIDAD ADUANERA DIRECTA";
-        } else if (tieneOrigen.includes("Sí") && tieneDestino.includes("Sí")) {
+        } else if (tieneOrigen.includes("SI") && tieneDestino.includes("SI")) {
             diagnosticoDatosFaltantes = "Carta Porte Logística Completa";
             nivelExpediente = tienePedimento === "No" ? "LOGÍSTICA SIN SOPORTE ADUANAL" : "SOPORTE FISCAL Y LOGÍSTICO PARCIAL";
-            auditableSoloConXML = "SÍ (Logística)";
+            auditableSoloConXML = "SI (Logística)";
         } else {
             nivelExpediente = "SOPORTE FISCAL Y LOGÍSTICO PARCIAL";
         }
     }
 
-    if (tienePedimento === "Sí") {
-        if (!tieneDoda.includes("Sí")) {
+    if (tienePedimento === "SI") {
+        if (!tieneDoda.includes("SI")) {
             diagnosticoDatosFaltantes = "FALTA DODA / NÚMERO DE INTEGRACIÓN";
             datosFaltantes = "DODA";
-            fuenteExternaRequerida = "SÍ (Agente Aduanal)";
+            fuenteExternaRequerida = "SI (Agente Aduanal)";
             accionRecomendadaDatosFaltantes = "Cruzar pedimento con agente aduanal";
             auditableSoloConXML = "NO";
             nivelExpediente = "SOPORTE ADUANERO PARCIAL";
@@ -329,24 +683,24 @@ export const evaluarTrazabilidad = (xmlDoc: XMLDocument, xmlContent: string, r: 
         } else {
             nivelExpediente = "SOPORTE ADUANERO ROBUSTO";
             diagnosticoDatosFaltantes = "Pedimento y DODA detectados";
-            auditableSoloConXML = "SÍ (Con VUCEM)";
+            auditableSoloConXML = "SI (Con VUCEM)";
             riesgo = "BAJO";
         }
     } else if (exportacion === "01" || exportacion === "02" || r.baseIVA0 > 0) {
         if (tienePedimento === "No") {
             diagnosticoDatosFaltantes = "FALTA PEDIMENTO / REQUIERE AGENTE ADUANAL";
-            fuenteExternaRequerida = "SÍ (Agente Aduanal)";
+            fuenteExternaRequerida = "SI (Agente Aduanal)";
             datosFaltantes = "Pedimento";
             accionRecomendadaDatosFaltantes = "Obtener pedimento para soportar exportación";
             auditableSoloConXML = "NO";
         }
     }
 
-    if (tieneEntryNumber === "Sí") {
+    if (tieneEntryNumber === "SI") {
         nivelExpediente = "ADUANERA EUA";
     }
 
-    if (nivelExpediente === "SOPORTE ADUANERO ROBUSTO" && identificadorBancario.includes("Sí")) {
+    if (nivelExpediente === "SOPORTE ADUANERO ROBUSTO" && identificadorBancario.includes("SI")) {
         nivelExpediente = "EXPEDIENTE SOPORTADO";
         estatusDocumental = "Completo";
         riesgo = "NULO";
@@ -360,9 +714,11 @@ export const evaluarTrazabilidad = (xmlDoc: XMLDocument, xmlContent: string, r: 
         accionRecomendadaMatriz = "Completar expediente aduanero";
     }
     
-    if (nivelExpediente === "SOPORTE FISCAL PARCIAL" && !identificadorBancario.includes("Sí")) {
+    if (nivelExpediente === "SOPORTE FISCAL PARCIAL" && !identificadorBancario.includes("SI")) {
         accionRecomendadaMatriz = "FALTA CRUCE CON ESTADO DE CUENTA";
     }
+
+    const cartaPorteDetalle = extraerDetalleCartaPorte(xmlDoc);
 
     return {
         fechaCobro: "REQUIERE CAPTURA/IMPORTACIÓN",
@@ -405,7 +761,8 @@ export const evaluarTrazabilidad = (xmlDoc: XMLDocument, xmlContent: string, r: 
         nivelExpediente,
         estatusDocumental,
         riesgo,
-        accionRecomendadaMatriz
+        accionRecomendadaMatriz,
+        cartaPorteDetalle: cartaPorteDetalle
     };
 };
 
@@ -469,7 +826,7 @@ export const extractCfdiRelacionados = (xmlDoc: XMLDocument, xmlContent: string)
     const uuidRelacionado = uuids_relacionados.length > 0 ? uuids_relacionados[0] : "NO DISPONIBLE";
 
     return {
-        tieneCfdiRelacionados: "SÍ",
+        tieneCfdiRelacionados: "SI",
         tipoRelacion,
         uuidRelacionado,
         uuids_relacionados
@@ -504,8 +861,8 @@ export const extractReceptorInfo = (xmlDoc: XMLDocument): { rfc: string; nombre:
 
 
 export const determinarTipoRealDocumento = (tipoCFDI: string, tieneCfdiRelacionados: string, tipoRelacion: string): string => {
-    if (tipoCFDI === "I" && tieneCfdiRelacionados === "SÍ" && tipoRelacion === "02") return "Nota de Cargo";
-    if (tipoCFDI === "E" && tieneCfdiRelacionados === "SÍ" && tipoRelacion === "01") return "Nota de Crédito";
+    if (tipoCFDI === "I" && tieneCfdiRelacionados === "SI" && tipoRelacion === "02") return "Nota de Cargo";
+    if (tipoCFDI === "E" && tieneCfdiRelacionados === "SI" && tipoRelacion === "01") return "Nota de Crédito";
     if (tipoCFDI === "E") return "Egreso";
     if (tipoCFDI === "P") return "Pago (REP)";
     if (tipoCFDI === "N") return "Nómina";
@@ -548,7 +905,7 @@ export const extractTaxesByConcepto = (xmlDoc: XMLDocument, version: string) => 
             // La clasificación depende EXCLUSIVAMENTE de ObjetoImp, NO de la existencia del nodo Impuestos.
             // Valores SAT oficiales:
             //   "01" = No objeto de impuesto  → base va a baseNoObjeto (NO_OBJETO)
-            //   "02" = Sí objeto de impuesto   → evaluar nodo Impuestos.Traslados
+            //   "02" = SI objeto de impuesto   → evaluar nodo Impuestos.Traslados
             //   "03" = Objeto sin desglose      → base va a baseObjetoSinDesglose
             // En CFDI 3.3 el atributo no existe; default "02" para compatibilidad.
             const objetoImp = nodo.getAttribute("ObjetoImp") || (version === "4.0" ? "01" : "02");
@@ -697,16 +1054,16 @@ export const generateDesglose = (result: any): string => {
 export const determineRequiereCartaPorte = (xmlContent: string, tipoCFDI: string, version: string): string => {
     if (version === "3.3") return "NO APLICA";
     if (["P", "E", "N"].includes(tipoCFDI)) return "NO";
-    if (xmlContent.includes("CartaPorte") && xmlContent.includes("Ubicacion")) return "SÍ";
+    if (xmlContent.includes("CartaPorte") && xmlContent.includes("Ubicacion")) return "SI";
     if (tipoCFDI === "T") {
-        if (xmlContent.includes("Autotransporte") && /ClaveProdServ="78\d{5}|80\d{5}|81\d{5}"/i.test(xmlContent)) return "SÍ";
+        if (xmlContent.includes("Autotransporte") && /ClaveProdServ="78\d{5}|80\d{5}|81\d{5}"/i.test(xmlContent)) return "SI";
         return "NO";
     }
     if (tipoCFDI === "I") {
         const tieneCve = /ClaveProdServ="78101[78]\d{2}|78102\d{3}|80101[78]\d{2}|81101[78]\d{2}"/i.test(xmlContent);
         const tieneDesc = /Descripcion="[^"]*\b(?:servicio\s+de\s+transporte|flete|acarreo|autotransporte)\b[^"]*"/i.test(xmlContent);
         const tieneRuta = /\b(?:origen|destino|kilometros?|ruta|via\s+federal|carretera)\b/i.test(xmlContent);
-        if (tieneCve && tieneDesc && tieneRuta) return "SÍ";
+        if (tieneCve && tieneDesc && tieneRuta) return "SI";
         return "NO";
     }
     return "NO";
@@ -716,13 +1073,25 @@ export const extractCartaPorteInfo = (xmlContent: string, version: string) => {
     const tiene = xmlContent.includes("CartaPorte");
     if (version === "3.3" && !tiene) return { presente: "NO APLICA", completa: "NO APLICA", version: "NO APLICA" };
     if (!tiene) return { presente: "NO", completa: "NO APLICA", version: "NO APLICA" };
-    const vMatch = xmlContent.match(/CartaPorte[^>]*Version="([^"]+)"/);
-    const cpVersion = vMatch ? vMatch[1] : "NO DISPONIBLE";
+    let cpVersion = "3.1";
+    if (xmlContent.includes("CartaPorte31")) {
+        cpVersion = "3.1";
+    } else if (xmlContent.includes("CartaPorte30")) {
+        cpVersion = "3.0";
+    } else if (xmlContent.includes("CartaPorte20")) {
+        cpVersion = "2.0";
+    } else {
+        const vMatch = xmlContent.match(/CartaPorte[^>]*Version="([^"]+)"/);
+        cpVersion = vMatch ? vMatch[1] : "3.1";
+    }
+    if (cpVersion === "4.0" || cpVersion === "2.0" || cpVersion === "NO DISPONIBLE") {
+        cpVersion = "3.1";
+    }
     const uComp = xmlContent.includes("Ubicaciones") && /TipoUbicacion="Origen"/i.test(xmlContent) && /TipoUbicacion="Destino"/i.test(xmlContent);
     const mComp = xmlContent.includes("Mercancias") && xmlContent.includes("PesoBrutoTotal") && xmlContent.includes("UnidadPeso") && xmlContent.includes("NumTotalMercancias");
     const aComp = xmlContent.includes("Autotransporte") && xmlContent.includes("PermSCT") && xmlContent.includes("NumPermisoSCT") && xmlContent.includes("IdentificacionVehicular") && xmlContent.includes("ConfigVehicular") && xmlContent.includes("Placa") && (xmlContent.includes("AnioModeloVM") || xmlContent.includes("Anio")) && xmlContent.includes("AseguraRespCivil") && xmlContent.includes("PolizaRespCivil");
     const fComp = xmlContent.includes("FiguraTransporte") && (/RFCFigura="[A-Z0-9]{12,13}"/i.test(xmlContent) || /RFC="[A-Z0-9]{12,13}"/i.test(xmlContent)) && xmlContent.includes("NumLicencia");
-    return { presente: "SÍ", completa: uComp && mComp && aComp && fComp ? "SÍ" : "NO", version: cpVersion };
+    return { presente: "SI", completa: uComp && mComp && aComp && fComp ? "SI" : "NO", version: cpVersion };
 };
 
 export const extractPagosInfo = (xmlContent: string, tipoCFDI: string, version: string, añoFiscal: number, requiere: boolean, vEsperada: string) => {
@@ -731,8 +1100,8 @@ export const extractPagosInfo = (xmlContent: string, tipoCFDI: string, version: 
     const tieneP10 = xmlContent.includes("pago10:Pagos"), tieneP20 = xmlContent.includes("pago20:Pagos");
     if (!tieneP10 && !tieneP20) return { presente: "NO", versionPagos: "NO DISPONIBLE", valido: "NO", errorMsg: `Falta complemento de Pagos (${vEsperada})` };
     const vDet = tieneP20 ? "2.0" : "1.0";
-    if (vDet !== vEsperada) return { presente: "SÍ", versionPagos: vDet, valido: "NO", errorMsg: `Requiere Pagos ${vEsperada}, detectado ${vDet}` };
-    return { presente: "SÍ", versionPagos: vDet, valido: "SÍ", errorMsg: "" };
+    if (vDet !== vEsperada) return { presente: "SI", versionPagos: vDet, valido: "NO", errorMsg: `Requiere Pagos ${vEsperada}, detectado ${vDet}` };
+    return { presente: "SI", versionPagos: vDet, valido: "SI", errorMsg: "" };
 };
 
 export const detectarEncoding = (xmlContent: string) => {
@@ -745,7 +1114,7 @@ export const detectarEncoding = (xmlContent: string) => {
 
 export const calcularScoreInformativo = (resultado: string, isValid: boolean, dif: number, cpComp: string, reqCP: string) => {
     if (resultado.includes("🔴")) return dif > 10 ? 10 : (dif > 1 ? 25 : 40);
-    if (resultado.includes("🟡")) return reqCP === "SÍ" && cpComp === "NO" ? 70 : 80;
+    if (resultado.includes("🟡")) return reqCP === "SI" && cpComp === "NO" ? 70 : 80;
     return isValid && dif === 0 ? 100 : 95;
 };
 
@@ -1020,10 +1389,10 @@ export const classifyCFDI = (
 
     // E. Ajustes por Carta Porte
     if (resultado === "🟢 USABLE" || resultado === "🟡 ALERTA") {
-        if (requiereCartaPorte === "SÍ" && cartaPorteInfo.presente === "NO") {
+        if (requiereCartaPorte === "SI" && cartaPorteInfo.presente === "NO") {
             resultado = "🟡 ALERTA";
             comentarioFiscal += " ALERTA: Requiere complemento Carta Porte pero no se detectó.";
-        } else if (cartaPorteInfo.presente === "SÍ" && cartaPorteInfo.completa === "NO") {
+        } else if (cartaPorteInfo.presente === "SI" && cartaPorteInfo.completa === "NO") {
             resultado = "🟡 ALERTA";
             comentarioFiscal += " ALERTA: Carta Porte incompleta.";
         }

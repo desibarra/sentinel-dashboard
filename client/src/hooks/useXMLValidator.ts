@@ -633,8 +633,9 @@ export function useXMLValidator() {
         finalComentarioFiscal = comentarioMotor;
       }
 
-      return {
+      const objVal: ValidationResult = {
         fileName,
+        xmlContent,
         uuid,
         versionCFDI: version,
         tipoCFDI,
