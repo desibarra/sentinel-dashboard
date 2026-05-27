@@ -104,6 +104,9 @@ temp/
 *.db
 *.sqlite
 *.sqlite3
+data/sentinel.db*
+*.db-shm
+*.db-wal
 
 # Local Netlify folder
 .netlify
