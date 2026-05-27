@@ -16,9 +16,17 @@ export async function checkRFCBlacklist(rfc: string): Promise<BlacklistValidatio
 
     try {
         const response = await fetch(`/api/blacklist/check?rfc=${encodeURIComponent(rfc)}`);
+        
+        // Verificar que la respuesta sea JSON antes de parsear
+        const contentType = response.headers.get('content-type');
+        if (!response.ok || !contentType?.includes('application/json')) {
+            // Endpoint no disponible o devolviendo HTML — omitir silenciosamente
+            return { rfc, isEFOS: false, is69B: false, found: false };
+        }
+
         const data = await response.json();
 
-        if (data.found) {
+        if (data && data.found) {
             return {
                 rfc: data.rfc,
                 isEFOS: data.isEFOS,
@@ -31,7 +39,7 @@ export async function checkRFCBlacklist(rfc: string): Promise<BlacklistValidatio
 
         return { rfc, isEFOS: false, is69B: false, found: false };
     } catch (error) {
-        console.error("Blacklist check error:", error);
+        // Silencioso — blacklist no crítica
         return { rfc, isEFOS: false, is69B: false, found: false };
     }
 }
