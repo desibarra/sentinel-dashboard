@@ -1,0 +1,22 @@
+[[redirects]]
+  from = "/api/sat/*"
+  to = "https://consultaqr.facturaelectronica.sat.gob.mx/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[build]
+  command = "npm run build"
+  publish = "dist/public"
+
+[build.environment]
+  PNPM_FLAGS = "--no-frozen-lockfile"
+  NODE_VERSION = "20"
+  VITE_API_URL = ""
+  VITE_JSONBIN_MASTER_KEY = "$2a$10$JYwKhQ4YTzO/uA2wYBrDEO9tGD95gSlhvRvB33z.E91zcYHs45HKi"
+  VITE_JSONBIN_BIN_ID = "69a5f1cdd0ea881f40e85bf9"
+  VITE_ADMIN_TOKENS_PASSWORD = "Mentores2026!"

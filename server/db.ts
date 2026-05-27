@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
+import fs from "fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,6 +17,7 @@ let dbInstance: Database | null = null;
 
 export async function getDB() {
   if (!dbInstance) {
+    fs.mkdirSync(dataDir, { recursive: true });
     dbInstance = await open({
       filename: dbPath,
       driver: sqlite3.Database

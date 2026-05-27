@@ -1,0 +1,32 @@
+[[redirects]]
+  from = "/"
+  to = "/sentinel-express-landing.html"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/sat/*"
+  to = "https://consultaqr.facturaelectronica.sat.gob.mx/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/functions/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[build]
+  command = "npm run build"
+  publish = "dist/public"
+  functions = "netlify/functions"
+
+[build.environment]
+  PNPM_FLAGS = "--no-frozen-lockfile"
+  NODE_VERSION = "20"
+  VITE_API_URL = ""
+  JSONBIN_BIN_ID = "69a5f1cdd0ea881f40e85bf9"

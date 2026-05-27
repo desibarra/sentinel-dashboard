@@ -25,9 +25,22 @@ export function saveSessionCache(companyId: string, results: ValidationResult[])
             timestamp: Date.now(),
             results,
         };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+        const data = JSON.stringify(payload);
+        try {
+            localStorage.setItem(STORAGE_KEY, data);
+        } catch (e) {
+            if (e instanceof DOMException && e.name === 'QuotaExceededError') {
+                localStorage.removeItem(STORAGE_KEY);
+                try {
+                    localStorage.setItem(STORAGE_KEY, data);
+                } catch (e2) {
+                    console.warn('SessionCache: no se pudo guardar incluso después de limpiar', e2);
+                }
+            } else {
+                throw e;
+            }
+        }
     } catch (e) {
-        // Si localStorage está lleno, no interrumpir el flujo
         console.warn("SessionCache: no se pudo guardar (localStorage lleno o bloqueado)", e);
     }
 }
