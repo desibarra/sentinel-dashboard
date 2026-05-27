@@ -11,6 +11,13 @@ const normalizeSiNo = (value: unknown): 'SI' | 'NO' => {
   return ['SI', 'TRUE', '1'].includes(normalized) ? 'SI' : 'NO';
 };
 
+const normalizeI18nSiNo = (value: unknown): string => {
+  const str = String(value ?? '').trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if (str === 'SI' || str === 'SÍ') return 'SI';
+  if (str === 'NO') return 'NO';
+  return str === '' || str === 'NO VIENE EN XML' ? 'NO VIENE EN XML' : str;
+};
+
 const isSatTechnicalFailure = (value: unknown) => SAT_FAILURE_PATTERN.test(String(value ?? ''));
 
 const getSatExportFields = (r: ValidationResult) => {
@@ -32,9 +39,18 @@ const getSatExportFields = (r: ValidationResult) => {
 
 const getCartaPortePresente = (r: ValidationResult) => {
   const diagnostico = normalizeSiNo(r.cartaPorte);
-  const trazabilidad = normalizeSiNo(r.trazabilidadInfo?.tieneCartaPorte);
-  const detalle = normalizeSiNo(r.trazabilidadInfo?.tieneCartaPorte);
-  return diagnostico === 'SI' || trazabilidad === 'SI' || detalle === 'SI' ? 'SI' : 'NO';
+  const detail = cp(r);
+  
+  const tieneVersionReal = detail && detail.version && !['NO VIENE EN XML', 'NO APLICA'].includes(detail.version);
+  const tieneEvidencia = detail && (
+    (detail.origenes && detail.origenes.length > 0) || 
+    (detail.destinos && detail.destinos.length > 0) || 
+    (detail.mercancias && detail.mercancias.length > 0) || 
+    (detail.autotransporte !== null) ||
+    (detail.figuras && detail.figuras.length > 0)
+  );
+
+  return (diagnostico === 'SI' || tieneVersionReal || tieneEvidencia) ? 'SI' : 'NO';
 };
 
 const hasValue = (value: unknown) => {
@@ -384,7 +400,7 @@ const buildForensicRows = (results: ValidationResult[]) => results.map(r => {
     CartaPorte_Presente: getCartaPortePresente(r),
     CartaPorte_Version: detail?.version || r.versionCartaPorte,
     CartaPorte_Completa: r.cartaPorteCompleta,
-    TransporteInternacional: detail?.transporteInternacional || 'NO VIENE EN XML',
+    TransporteInternacional: normalizeI18nSiNo(detail?.transporteInternacional || r.trazabilidadInfo?.transporteInternacional),
     EntradaSalidaMercancia: detail?.entradaSalidaMercancia || 'NO VIENE EN XML',
     PaisOrigenDestino: detail?.paisOrigenDestino || 'NO VIENE EN XML',
     TotalDistanciaRecorrida: detail?.totalDistanciaRecorrida || 'NO VIENE EN XML',
@@ -620,6 +636,7 @@ const buildSummaryRows = (results: ValidationResult[], alerts: any[]) => {
     { Metrica: 'Total CFDI cancelados', Valor: results.filter(r => /cancelado/i.test(r.estatusSAT)).length },
     { Metrica: 'Total con Carta Porte', Valor: cpRows.length },
     { Metrica: 'Total con Carta Porte completa', Valor: cpRows.filter(r => r.cartaPorteCompleta === 'SI').length },
+    { Metrica: 'Regla de Carta Porte Completa', Valor: 'Simultáneamente Origen, Destino, Mercancías con Peso/Cantidad, Vehículo con Placa/Permiso/Seguro y Figura con RFC/Licencia' },
     { Metrica: 'Total sin Carta Porte cuando aplica', Valor: results.filter(r => r.requiereCartaPorte === 'SI' && getCartaPortePresente(r) !== 'SI').length },
     { Metrica: 'Total PPD sin complemento de pago', Valor: ppdSinPago },
     { Metrica: 'Total CFDI tasa 0%', Valor: tasa0 },
@@ -1083,7 +1100,7 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
         Destino: formatAddress(mainDestino),
         Pais_Origen: mainOrigen?.pais || 'NO VIENE EN XML',
         Pais_Destino: mainDestino?.pais || 'NO VIENE EN XML',
-        Transporte_Internacional: detail?.transporteInternacional || r.trazabilidadInfo?.transporteInternacional || 'NO VIENE EN XML',
+        Transporte_Internacional: normalizeI18nSiNo(detail?.transporteInternacional || r.trazabilidadInfo?.transporteInternacional),
         Tiene_Pedimento: r.trazabilidadInfo?.tienePedimento || 'NO',
         Tiene_DODA: r.trazabilidadInfo?.tieneDoda || 'NO',
         Tiene_BOL: getCartaPortePresente(r) === 'SI' ? 'SI' : 'NO',
@@ -1185,7 +1202,7 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
       Mercancia_Principal: detail?.mercanciaPrincipal || 'NO VIENE EN XML',
       Peso_Total: joinClean(detail?.pesoBrutoTotal, detail?.unidadPeso),
       Distancia_Recorrida: detail?.totalDistanciaRecorrida || r.trazabilidadInfo?.distancia || 'NO VIENE EN XML',
-      Transporte_Internacional: detail?.transporteInternacional || r.trazabilidadInfo?.transporteInternacional || 'NO VIENE EN XML',
+      Transporte_Internacional: normalizeI18nSiNo(detail?.transporteInternacional || r.trazabilidadInfo?.transporteInternacional),
       Origen: r.trazabilidadInfo?.tieneOrigen || 'NO VIENE EN XML',
       Destino: r.trazabilidadInfo?.tieneDestino || 'NO VIENE EN XML',
       Mercancia: r.trazabilidadInfo?.tieneMercancias || 'NO VIENE EN XML',
