@@ -709,6 +709,507 @@ const appendJsonSheet = (wb: any, data: any[], name: string) => {
   (XLSX as any).utils.book_append_sheet(wb, ws, name);
 };
 
+// ─── Helper: resuelve Coincide_Tasa con reglas estrictas sin includes/startsWith ───────────────
+// Coincide_Tasa = SI ÚNICAMENTE si la tasa facturada coincide exactamente con la esperada
+// y la tasa esperada NO contiene condiciones, soporte pendiente o indeterminación.
+const resolveCoincideTasa = (
+  tasaFacturadaXML: string,
+  tasaEsperadaSugerida: string,
+  tieneSoporteDocumentalSuficiente: boolean
+): string => {
+  // Si alguno es INDETERMINADO o NO APLICA, no se puede evaluar
+  if (tasaFacturadaXML === 'INDETERMINADO' || tasaEsperadaSugerida === 'INDETERMINADO') return 'INDETERMINADO';
+  if (tasaEsperadaSugerida === 'NO APLICA' || tasaFacturadaXML === 'NO APLICA') return 'NO APLICA';
+
+  // Cualquier tasa esperada condicional/cualitativa → nunca puede ser SI
+  const esCondicional =
+    tasaEsperadaSugerida.includes('REQUIERE') ||
+    tasaEsperadaSugerida.includes('SUJETA') ||
+    tasaEsperadaSugerida.includes('REVISAR') ||
+    tasaEsperadaSugerida.includes('INDETERMINADO');
+  if (esCondicional) return 'REVISAR';
+
+  // Tasa 0%: exige soporte documental suficiente (Carta Porte + pedimento/DODA)
+  if (tasaFacturadaXML === '0%' && tasaEsperadaSugerida === '0%') {
+    return tieneSoporteDocumentalSuficiente ? 'SI' : 'REVISAR';
+  }
+  // Tasa 16%: coincidencia exacta basta
+  if (tasaFacturadaXML === '16%' && tasaEsperadaSugerida === '16%') return 'SI';
+  // No objeto
+  if (tasaFacturadaXML === 'NO OBJETO' && tasaEsperadaSugerida === 'NO OBJETO') return 'SI';
+  // Exento (solo si la esperada es exactamente EXENTO, no EXENTO / REVISAR FUNDAMENTO)
+  if (tasaFacturadaXML === 'EXENTO' && tasaEsperadaSugerida === 'EXENTO') return 'SI';
+
+  // Cualquier otra combinación: no coinciden → REVISAR si hay riesgo medio, NO si clara discrepancia
+  return 'NO';
+};
+
+
+
+const buildComparativoBaseTasaRows = (results: ValidationResult[]) => {
+  // Determine dominant RFC to identify EMITIDO vs RECIBIDO
+  const rfcCounts = new Map<string, number>();
+  results.forEach(r => {
+    const emisor = String(r.rfcEmisor || '').trim().toUpperCase();
+    const receptor = String(r.rfcReceptor || '').trim().toUpperCase();
+    if (emisor) rfcCounts.set(emisor, (rfcCounts.get(emisor) || 0) + 1);
+    if (receptor) rfcCounts.set(receptor, (rfcCounts.get(receptor) || 0) + 1);
+  });
+
+  const sortedRfcs = Array.from(rfcCounts.entries()).sort((a, b) => b[1] - a[1]);
+
+  let rfcPrincipal = '';
+  const THRESHOLD_PERCENT = 10.0;
+
+  if (sortedRfcs.length > 0) {
+    const [firstRfc, firstCount] = sortedRfcs[0];
+    if (sortedRfcs.length > 1) {
+      const [secondRfc, secondCount] = sortedRfcs[1];
+      const diffPercent = ((firstCount - secondCount) / firstCount) * 100;
+      if (diffPercent < THRESHOLD_PERCENT) {
+        rfcPrincipal = 'LOTE_MIXTO';
+        console.log(`[excelExporter] Ambigüedad por margen bajo detectada. Primer RFC: ${firstRfc} (${firstCount}), Segundo RFC: ${secondRfc} (${secondCount}). Diferencia: ${diffPercent.toFixed(2)}% < ${THRESHOLD_PERCENT}%. Se marca como LOTE_MIXTO.`);
+      } else {
+        rfcPrincipal = firstRfc;
+        console.log(`[excelExporter] RFC Principal elegido: ${rfcPrincipal} con ${firstCount} conteos. Segundo RFC: ${secondRfc} con ${secondCount} (Diferencia: ${diffPercent.toFixed(2)}%).`);
+      }
+    } else {
+      rfcPrincipal = firstRfc;
+      console.log(`[excelExporter] RFC Principal elegido (único): ${rfcPrincipal} con ${firstCount} conteos.`);
+    }
+  } else {
+    console.log(`[excelExporter] No se encontraron RFCs en el lote.`);
+  }
+
+  return results.flatMap(r => {
+    const detail = cp(r);
+    const mainOrigen = detail?.origenes?.[0];
+    const mainDestino = detail?.destinos?.[0];
+
+    // ── Perspectiva fiscal ──
+    let perspectivaAnalisis: string;
+    let naturalezaCFDI: string;
+    let efectoFiscalPrincipal: string;
+    let ivaAnalizadoComo: string;
+    let accionSegunPerspectiva: string;
+
+    const cleanEmisor = String(r.rfcEmisor || '').trim().toUpperCase();
+    const cleanReceptor = String(r.rfcReceptor || '').trim().toUpperCase();
+
+    if (r.tipoCFDI === 'P') {
+      perspectivaAnalisis = 'COMPLEMENTO_PAGO';
+      naturalezaCFDI = 'Pago';
+      efectoFiscalPrincipal = 'Soporte de pago (no acumula base)';
+      ivaAnalizadoComo = 'SOPORTE_DE_PAGO';
+      accionSegunPerspectiva = 'Validar soporte de flujo de efectivo; no duplicar en base gravada';
+    } else if (r.tipoCFDI === 'E') {
+      perspectivaAnalisis = 'EGRESO_AJUSTE';
+      naturalezaCFDI = 'Egreso';
+      efectoFiscalPrincipal = 'Amortización/Ajuste (Nota de Crédito)';
+      ivaAnalizadoComo = 'AJUSTE_NO_ACUMULABLE';
+      accionSegunPerspectiva = 'Verificar que disminuye ingresos o devuelve saldos; no sumar como ingreso ordinario';
+    } else if (r.tipoCFDI === 'T') {
+      perspectivaAnalisis = 'TRASLADO_LOGISTICO';
+      naturalezaCFDI = 'Traslado';
+      efectoFiscalPrincipal = 'Movimiento logístico (sin efecto directo en IVA)';
+      ivaAnalizadoComo = 'NO APLICA';
+      accionSegunPerspectiva = 'Usar solo para trazabilidad; no asignar base fiscal de IVA';
+    } else if (rfcPrincipal && rfcPrincipal !== 'LOTE_MIXTO' && cleanEmisor === rfcPrincipal) {
+      perspectivaAnalisis = 'EMITIDO_IVA_TRASLADADO';
+      naturalezaCFDI = 'Ingreso';
+      efectoFiscalPrincipal = 'Ingreso gravado/facturado';
+      ivaAnalizadoComo = 'IVA_TRASLADADO';
+      accionSegunPerspectiva = 'Verificar tasa correcta; corregir CFDI o integrar soporte de tasa 0%';
+    } else if (rfcPrincipal && rfcPrincipal !== 'LOTE_MIXTO' && cleanReceptor === rfcPrincipal) {
+      perspectivaAnalisis = 'RECIBIDO_IVA_ACREDITABLE';
+      naturalezaCFDI = 'Ingreso';
+      efectoFiscalPrincipal = 'Gasto deducible / Acreditamiento';
+      ivaAnalizadoComo = 'IVA_ACREDITABLE_CONDICIONADO';
+      accionSegunPerspectiva = 'Validar materialidad, soporte del gasto y complemento de pago si aplica';
+    } else {
+      if (rfcPrincipal === 'LOTE_MIXTO') {
+        perspectivaAnalisis = 'LOTE_MIXTO_REVISION';
+        naturalezaCFDI = 'Lote mixto o margen insuficiente para determinar empresa auditada dominante; revisar manualmente la perspectiva emitido/recibido antes de interpretar IVA.';
+        efectoFiscalPrincipal = 'Lote mixto o margen insuficiente para determinar empresa auditada dominante; revisar manualmente la perspectiva emitido/recibido antes de interpretar IVA.';
+        ivaAnalizadoComo = 'LOTE_MIXTO';
+        accionSegunPerspectiva = 'Lote mixto o margen insuficiente para determinar empresa auditada dominante; revisar manualmente la perspectiva emitido/recibido antes de interpretar IVA.';
+      } else {
+        perspectivaAnalisis = 'INDETERMINADO';
+        naturalezaCFDI = 'Indeterminado';
+        efectoFiscalPrincipal = 'Indeterminado';
+        ivaAnalizadoComo = 'INDETERMINADO';
+        accionSegunPerspectiva = 'Revisar manualmente la naturaleza del XML antes de interpretar IVA';
+      }
+    }
+
+    // ── PPD / Complemento de pago columns ──
+    const requiereCP = r.metodoPago === 'PPD' ? 'SI' : (r.metodoPago === 'PUE' ? 'NO' : 'NO APLICA');
+    const cpLocalizado = (r.tipoCFDI !== 'P' && r.tipoCFDI !== 'T') ? normalizeSiNo(r.pagosPresente) : 'NO APLICA';
+    let riesgoPPD = 'NO APLICA';
+    if (requiereCP === 'SI' && cpLocalizado === 'NO') {
+      if (perspectivaAnalisis === 'RECIBIDO_IVA_ACREDITABLE') {
+        riesgoPPD = 'ALTO: IVA acreditable condicionado al pago; solicitar REP';
+        accionSegunPerspectiva = 'Solicitar complemento de pago al proveedor';
+      } else if (perspectivaAnalisis === 'EMITIDO_IVA_TRASLADADO') {
+        riesgoPPD = 'MEDIO: REP pendiente de emitir; revisar cobranza';
+        accionSegunPerspectiva = 'Emitir complemento de pago si ya se cobró';
+      }
+    } else if (requiereCP === 'SI' && cpLocalizado === 'SI') {
+      riesgoPPD = 'BAJO: Pago soportado';
+    }
+
+    // ── Cruce fronterizo / Transcruces ──
+    const esTranscruces = /transcruces/i.test(String(r.nombreEmisor || '')) ||
+      /transcruces/i.test(String(r.nombreReceptor || '')) ||
+      /transcruces/i.test(String(r.fileName || ''));
+    const transporteInternacional = normalizeI18nSiNo(detail?.transporteInternacional || r.trazabilidadInfo?.transporteInternacional);
+    const paisOrigen = mainOrigen?.pais || 'NO VIENE EN XML';
+    const paisDestino = mainDestino?.pais || 'NO VIENE EN XML';
+    const esCruceFronterizo =
+      transporteInternacional === 'SI' ||
+      (paisOrigen === 'MEX' && paisDestino !== 'MEX' && paisDestino !== 'NO VIENE EN XML') ||
+      (paisOrigen !== 'MEX' && paisOrigen !== 'NO VIENE EN XML' && paisDestino === 'MEX') ? 'SI' : 'NO';
+
+    const cartaPortePresente = getCartaPortePresente(r);
+    const distanciaCp = Number(detail?.totalDistanciaRecorrida || 0);
+    // Soporte logístico: Carta Porte presente (prueba de movimiento, NO soporte aduanal)
+    const tieneSoporteLogistico = cartaPortePresente === 'SI';
+    // Soporte aduanal: solo pedimento o DODA (evidencia aduanera real)
+    const tieneSoporteAduanal = normalizeSiNo(r.trazabilidadInfo?.tienePedimento) === 'SI' ||
+      normalizeSiNo(r.trazabilidadInfo?.tieneDoda) === 'SI';
+    // Soporte documental suficiente: requiere AMBOS logístico Y aduanal para tasa 0% internacional
+    const tieneSoporteSuficiente = tieneSoporteLogistico && tieneSoporteAduanal;
+    // Compatibilidad: para operaciones nacionales y exentos, Carta Porte es soporte suficiente
+    const tieneSoporte = tieneSoporteAduanal || cartaPortePresente === 'SI';
+
+    // Distancia risk — Transcruces only gets lower risk for SHORT distance; tasa still needs independent validation
+    let riesgoDistancia = 'NO APLICA';
+    let justificacionDistancia = 'NO APLICA';
+    if (cartaPortePresente === 'SI') {
+      if (esTranscruces === true && esCruceFronterizo === 'SI' && distanciaCp < 50) {
+        riesgoDistancia = 'BAJO';
+        justificacionDistancia = 'NORMAL PARA CRUCE FRONTERIZO / REVISAR SOPORTE DOCUMENTAL';
+      } else if (esCruceFronterizo === 'SI') {
+        riesgoDistancia = 'BAJO';
+        justificacionDistancia = 'Distancia consistente con operación internacional';
+      } else if (distanciaCp < 1 || distanciaCp < 50) {
+        riesgoDistancia = 'MEDIO-ALTO';
+        justificacionDistancia = 'Distancia corta; requiere validación contra ruta real';
+      } else {
+        riesgoDistancia = 'BAJO';
+        justificacionDistancia = 'Distancia normal';
+      }
+    }
+
+    // Use single placeholder concept for P/E/T to avoid empty rows
+    const conceptosFuente: any[] = (r.desglosePorConcepto && r.desglosePorConcepto.length > 0)
+      ? r.desglosePorConcepto
+      : [{ claveProdServ: 'N/A', descripcion: `CFDI tipo ${r.tipoCFDI}`, objetoImp: 'N/A', importe: r.total || 0, traslados: [], retenciones: [] }];
+
+    return conceptosFuente.map((concepto: any) => {
+      // ── Extract IVA from traslado ──
+      let baseXML: string | number = 'NO VIENE EN XML';
+      let importeIvaXML: string | number = 'NO VIENE EN XML';
+      let tipoFactorXML = 'NO VIENE EN XML';
+      let tasaOCuotaXML = 'NO VIENE EN XML';
+      let impuestoXML = 'NO VIENE EN XML';
+      let tasaFacturadaXML = 'INDETERMINADO';
+
+      const traslados: any[] = concepto.traslados || [];
+      const ivaT = traslados.find((t: any) => t.impuesto === '002');
+      if (ivaT) {
+        baseXML = ivaT.base ?? 'NO VIENE EN XML';
+        importeIvaXML = ivaT.importe ?? 0;
+        tipoFactorXML = String(ivaT.tipoFactor || 'NO VIENE EN XML');
+        tasaOCuotaXML = String(ivaT.tasa || 'NO VIENE EN XML');
+        impuestoXML = ivaT.impuesto;
+      }
+
+      // Determine Tasa Facturada XML
+      if (concepto.objetoImp === '01') {
+        tasaFacturadaXML = 'NO OBJETO';
+      } else if (ivaT) {
+        const tfUp = tipoFactorXML.toUpperCase();
+        if (tfUp === 'EXENTO') {
+          tasaFacturadaXML = 'EXENTO';
+        } else if (tasaOCuotaXML !== 'NO VIENE EN XML' && tasaOCuotaXML !== '') {
+          const tNum = Number(tasaOCuotaXML);
+          if (!isNaN(tNum)) {
+            if (tNum === 0.16) tasaFacturadaXML = '16%';
+            else if (tNum === 0.08) tasaFacturadaXML = '8%';
+            else if (tNum === 0) tasaFacturadaXML = '0%';
+          }
+        }
+      }
+
+      // ── Tasa esperada + Riesgo ──
+      let tasaEsperadaSugerida = 'INDETERMINADO';
+      let nivelRiesgo = 'BAJO';
+      let motivoDiferencia = 'Operación normal';
+      let accionRecomendada = accionSegunPerspectiva;
+
+      // COMPLEMENTO_PAGO / EGRESO_AJUSTE / TRASLADO_LOGISTICO: no acumulan base fiscal
+      if (perspectivaAnalisis === 'COMPLEMENTO_PAGO' || perspectivaAnalisis === 'EGRESO_AJUSTE' || perspectivaAnalisis === 'TRASLADO_LOGISTICO') {
+        tasaEsperadaSugerida = 'NO APLICA';
+        nivelRiesgo = 'BAJO';
+        motivoDiferencia = `Naturaleza ${naturalezaCFDI}: no acumula a la base de facturación para evitar duplicidad`;
+      }
+      // ObjetoImp=01 no objeto con IVA
+      else if (concepto.objetoImp === '01') {
+        tasaEsperadaSugerida = 'NO OBJETO';
+        if (typeof importeIvaXML === 'number' && importeIvaXML > 0) {
+          nivelRiesgo = 'CRITICO';
+          motivoDiferencia = 'ObjetoImp=01 con IVA trasladado; inconsistencia fiscal';
+          accionRecomendada = 'Revisar estructura fiscal del XML; corregir CFDI';
+        }
+      }
+      // Exento
+      else if (tipoFactorXML.toUpperCase() === 'EXENTO') {
+        tasaEsperadaSugerida = 'EXENTO / REVISAR FUNDAMENTO';
+        if (!tieneSoporte) {
+          nivelRiesgo = 'MEDIO';
+          motivoDiferencia = 'Exención sin soporte claro identificado';
+          accionRecomendada = 'Validar fundamento fiscal de la exención';
+        }
+      }
+      // Transcruces + cruce fronterizo:
+      // La regla especial SOLO ajusta el riesgo por distancia corta.
+      // La tasa requiere soporte ADUANAL (pedimento/DODA), no solo logístico (Carta Porte).
+      else if (esTranscruces && esCruceFronterizo === 'SI') {
+        if (tieneSoporteAduanal) {
+          // Tiene pedimento o DODA: soporte aduanal suficiente
+          tasaEsperadaSugerida = '0% SUJETA A SOPORTE';
+          nivelRiesgo = tasaFacturadaXML === '16%' ? 'MEDIO' : 'BAJO';
+          motivoDiferencia = tasaFacturadaXML === '16%'
+            ? 'Cruce fronterizo facturado al 16%; revisar tratamiento fiscal'
+            : 'Tasa 0% con soporte aduanal detectado (pedimento/DODA)';
+        } else if (tieneSoporteLogistico) {
+          // Solo tiene Carta Porte, sin pedimento/DODA: soporte logístico pero no aduanal completo
+          tasaEsperadaSugerida = '0% REQUIERE SOPORTE ADUANAL';
+          nivelRiesgo = 'MEDIO-ALTO';
+          motivoDiferencia = 'Tasa 0% requiere soporte documental suficiente; distancia corta consistente con cruce fronterizo no valida por si sola el tratamiento fiscal.';
+          accionRecomendada = 'Solicitar pedimento o DODA; la Carta Porte es soporte logístico pero no aduanal suficiente';
+        } else {
+          // Sin Carta Porte ni pedimento/DODA
+          tasaEsperadaSugerida = '0% REQUIERE SOPORTE';
+          nivelRiesgo = 'ALTO';
+          motivoDiferencia = 'Tasa 0% requiere soporte documental suficiente; distancia corta consistente con cruce fronterizo no valida por si sola el tratamiento fiscal.';
+          accionRecomendada = 'Solicitar Carta Porte, pedimento y/o DODA';
+        }
+      }
+      // Internacional sin Transcruces
+      else if (esCruceFronterizo === 'SI') {
+        tasaEsperadaSugerida = '0% SUJETA A SOPORTE';
+        if (tasaFacturadaXML === '16%') {
+          nivelRiesgo = 'MEDIO';
+          motivoDiferencia = 'Operación internacional facturada al 16%; revisar tratamiento fiscal';
+          accionRecomendada = 'Revisar con asesor fiscal antes de declarar';
+        } else if (tasaFacturadaXML === '0%' && !tieneSoporteAduanal) {
+          nivelRiesgo = tieneSoporteLogistico ? 'MEDIO-ALTO' : 'ALTO';
+          motivoDiferencia = tieneSoporteLogistico
+            ? 'Tasa 0% con Carta Porte pero sin soporte aduanal (pedimento/DODA)'
+            : 'Tasa 0% sin soporte documental suficiente';
+          accionRecomendada = 'Solicitar pedimento o soporte de exportación';
+        }
+      }
+      // Nacional
+      else if (paisOrigen === 'MEX' && paisDestino === 'MEX') {
+        tasaEsperadaSugerida = '16%';
+        if (tasaFacturadaXML === '0%') {
+          nivelRiesgo = 'ALTO';
+          motivoDiferencia = 'Tasa 0% en operación aparentemente nacional';
+          accionRecomendada = 'Validar fundamento fiscal de tasa 0% en operación nacional';
+        }
+      }
+      // Indeterminado
+      else {
+        tasaEsperadaSugerida = 'INDETERMINADO';
+        nivelRiesgo = perspectivaAnalisis === 'INDETERMINADO' ? 'MEDIO' : 'MEDIO';
+        motivoDiferencia = 'Datos insuficientes para determinar tipo de operación';
+        accionRecomendada = 'Revisión manual del concepto y soporte documental';
+      }
+
+      // ── Cálculos esperados (solo si NO es pago/egreso/traslado y base válida) ──
+      let baseEsperadaSugerida: string | number = 'NO APLICA';
+      let ivaEsperadoSugerido: string | number = 'NO APLICA';
+      let diferenciaBase: string | number = 'NO APLICA';
+      let diferenciaIVA: string | number = 'NO DETERMINABLE';
+
+      if (perspectivaAnalisis !== 'COMPLEMENTO_PAGO' && perspectivaAnalisis !== 'EGRESO_AJUSTE' && perspectivaAnalisis !== 'TRASLADO_LOGISTICO' && baseXML !== 'NO VIENE EN XML') {
+        baseEsperadaSugerida = baseXML;
+        const bNum = Number(baseXML);
+        if (tasaEsperadaSugerida === '16%') ivaEsperadoSugerido = Math.round(bNum * 0.16 * 100) / 100;
+        else if (tasaEsperadaSugerida.includes('0%')) ivaEsperadoSugerido = 0;
+        if (typeof ivaEsperadoSugerido === 'number' && typeof importeIvaXML === 'number') {
+          diferenciaIVA = Math.round((ivaEsperadoSugerido - importeIvaXML) * 100) / 100;
+        }
+      }
+
+      // ── Coincidencias ──
+      let coincideBase = 'INDETERMINADO';
+      let coincideTasa = 'INDETERMINADO';
+      let coincideXmlVsEsperado = 'INDETERMINADO';
+
+      if (perspectivaAnalisis === 'COMPLEMENTO_PAGO' || perspectivaAnalisis === 'EGRESO_AJUSTE' || perspectivaAnalisis === 'TRASLADO_LOGISTICO') {
+        coincideBase = 'NO APLICA'; coincideTasa = 'NO APLICA'; coincideXmlVsEsperado = 'NO APLICA';
+      } else {
+        if (baseEsperadaSugerida !== 'NO APLICA' && baseXML !== 'NO VIENE EN XML')
+          coincideBase = Number(baseEsperadaSugerida) === Number(baseXML) ? 'SI' : 'NO';
+        if (tasaFacturadaXML !== 'INDETERMINADO' && tasaEsperadaSugerida !== 'INDETERMINADO') {
+          coincideTasa = resolveCoincideTasa(
+            tasaFacturadaXML,
+            tasaEsperadaSugerida,
+            tieneSoporteSuficiente
+          );
+        }
+        if (coincideBase === 'SI' && coincideTasa === 'SI') coincideXmlVsEsperado = 'SI';
+        else if (coincideBase === 'NO' || coincideTasa === 'NO') coincideXmlVsEsperado = 'NO';
+        else coincideXmlVsEsperado = 'REVISAR';
+      }
+
+      const detailMerc = detail?.mercancias?.[0];
+
+      return {
+        UUID: r.uuid,
+        Archivo_XML: r.fileName,
+        RFC_Emisor: r.rfcEmisor,
+        Nombre_Emisor: r.nombreEmisor,
+        RFC_Receptor: r.rfcReceptor,
+        Nombre_Receptor: r.nombreReceptor,
+        Fecha: r.fechaEmision,
+        Tipo_XML: r.tipoCFDI,
+        Naturaleza_CFDI: naturalezaCFDI,
+        Efecto_Fiscal_Principal: efectoFiscalPrincipal,
+        Perspectiva_Analisis: perspectivaAnalisis,
+        IVA_Analizado_Como: ivaAnalizadoComo,
+        Requiere_Complemento_Pago: requiereCP,
+        Complemento_Pago_Localizado: cpLocalizado,
+        Riesgo_PPD_Sin_Pago: riesgoPPD,
+        Accion_Recomendada_Segun_Perspectiva: accionSegunPerspectiva,
+        ClaveProdServ: concepto.claveProdServ || 'NO VIENE EN XML',
+        Descripcion_Concepto: concepto.descripcion || 'NO VIENE EN XML',
+        ObjetoImp_XML: concepto.objetoImp || 'NO VIENE EN XML',
+        Base_XML: baseXML,
+        Impuesto_XML: impuestoXML,
+        TipoFactor_XML: tipoFactorXML,
+        TasaOCuota_XML: tasaOCuotaXML,
+        Importe_IVA_XML: importeIvaXML,
+        Tasa_Facturada_XML: tasaFacturadaXML,
+        Base_Gravada_XML: baseXML,
+        Clasificacion_XML: r.clasificacionFiscal || 'NO APLICA',
+        Carta_Porte_Presente: cartaPortePresente,
+        Version_Carta_Porte: detail?.version || r.versionCartaPorte || 'NO VIENE EN XML',
+        Transporte_Internacional: transporteInternacional,
+        Origen_Pais: paisOrigen,
+        Origen_Estado: mainOrigen?.estado || 'NO VIENE EN XML',
+        Destino_Pais: paisDestino,
+        Destino_Estado: mainDestino?.estado || 'NO VIENE EN XML',
+        BienesTransp: detailMerc?.bienesTransp || 'NO VIENE EN XML',
+        FraccionArancelaria: detailMerc?.fraccionArancelaria || 'NO VIENE EN XML',
+        Tiene_Pedimento: normalizeSiNo(r.trazabilidadInfo?.tienePedimento),
+        Tiene_DODA: normalizeSiNo(r.trazabilidadInfo?.tieneDoda),
+        Tiene_Soporte_Logistico: tieneSoporteLogistico ? 'SI' : 'NO',
+        Tiene_Soporte_Aduanal: tieneSoporteAduanal ? 'SI' : 'NO',
+        Tiene_Soporte_Documental_Suficiente: tieneSoporteSuficiente ? 'SI' : 'NO',
+        Tipo_Operacion_Deducida: esCruceFronterizo === 'SI' ? 'CRUCE FRONTERIZO/INTERNACIONAL' : 'NACIONAL',
+        Base_Esperada_Sugerida: baseEsperadaSugerida,
+        Tasa_Esperada_Sugerida: tasaEsperadaSugerida,
+        IVA_Esperado_Sugerido: ivaEsperadoSugerido,
+        Diferencia_Base: diferenciaBase,
+        Diferencia_IVA: diferenciaIVA,
+        Coincide_Base: coincideBase,
+        Coincide_Tasa: coincideTasa,
+        Coincide_XML_vs_Esperado: coincideXmlVsEsperado,
+        Nivel_Riesgo: nivelRiesgo,
+        Motivo_Diferencia: motivoDiferencia,
+        Accion_Recomendada: accionRecomendada,
+        Tipo_Viaje_Deducido: esCruceFronterizo === 'SI' ? 'CRUCE FRONTERIZO/INTERNACIONAL' : 'NACIONAL',
+        Es_Cruce_Fronterizo: esCruceFronterizo,
+        Distancia_CP: distanciaCp || 'NO VIENE EN XML',
+        Distancia_Atipica: riesgoDistancia !== 'BAJO' && riesgoDistancia !== 'NO APLICA' ? 'SI' : 'NO',
+        Justificacion_Distancia: justificacionDistancia,
+        Riesgo_Distancia: riesgoDistancia,
+      };
+    });
+  });
+};
+
+const applyComparativoSheetDefaults = (ws: any, dataRows: any[]) => {
+  const ref = ws['!ref'];
+  if (!ref) return;
+  const range = (XLSX as any).utils.decode_range(ref);
+
+  // Autofilter on header row (row index 9 = row 10)
+  ws['!autofilter'] = { ref: (XLSX as any).utils.encode_range({ s: { r: 9, c: range.s.c }, e: { r: range.e.r, c: range.e.c } }) };
+  ws['!panes'] = { ySplit: 10, topLeftCell: 'A11', activePane: 'bottomLeft', state: 'frozen' };
+
+  // Compute summary counts
+  let coincidentes = 0, enRevision = 0, incorrectas = 0, baseIncongruente = 0;
+  let tasa0SinSoporte = 0, noObjetoConIva = 0, indeterminados = 0;
+  for (const row of dataRows) {
+    const ct = row.Coincide_Tasa;
+    if (ct === 'SI') coincidentes++;
+    else if (ct === 'REVISAR') enRevision++;
+    else if (ct === 'NO') incorrectas++;
+    else if (ct === 'INDETERMINADO') indeterminados++;
+    if (row.Coincide_Base === 'NO') baseIncongruente++;
+
+    // Tasa 0% sin soporte suficiente:
+    // (Tasa_Facturada_XML = 0% O Tasa_Esperada_Sugerida contiene 0%) Y Tiene_Soporte_Documental_Suficiente = NO
+    const isTasa0OrExpectedTasa0 = row.Tasa_Facturada_XML === '0%' || String(row.Tasa_Esperada_Sugerida).includes('0%');
+    const lacksSufficientSupport = row.Tiene_Soporte_Documental_Suficiente === 'NO';
+    if (isTasa0OrExpectedTasa0 && lacksSufficientSupport) {
+      tasa0SinSoporte++;
+    }
+
+    if (row.ObjetoImp_XML === '01' && typeof row.Importe_IVA_XML === 'number' && row.Importe_IVA_XML > 0) noObjetoConIva++;
+  }
+
+  const summaryBlock = [
+    ['RESUMEN EJECUTIVO: COMPARATIVO BASE Y TASA IVA'],
+    ['Total conceptos analizados', dataRows.length],
+    ['Total con tasa XML coincidente', coincidentes],
+    ['Total con tasa en revisión', enRevision],
+    ['Total con tasa posiblemente incorrecta', incorrectas],
+    ['Total con base incongruente', baseIncongruente],
+    ['Total tasa 0% sin soporte suficiente', tasa0SinSoporte],
+    ['Total no objeto con IVA trasladado', noObjetoConIva],
+    ['Total indeterminados', indeterminados],
+  ];
+  (XLSX as any).utils.sheet_add_aoa(ws, summaryBlock, { origin: 'A1' });
+
+  // Style summary header cell
+  const cellA1 = ws['A1'];
+  if (cellA1) cellA1.s = { font: { bold: true, color: { rgb: '1F4788' }, sz: 12 }, fill: { fgColor: { rgb: 'EBF1FA' } }, alignment: { horizontal: 'left' } };
+
+  // Style data header row (row 10, index 9)
+  const headerCols: string[] = [];
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const cell = ws[(XLSX as any).utils.encode_cell({ r: 9, c })];
+    if (cell) {
+      headerCols.push(String(cell.v || ''));
+      cell.s = { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: '1F4788' } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true } };
+    }
+  }
+  ws['!cols'] = headerCols.map(h => ({ wch: Math.min(Math.max(h.length + 4, 14), 42) }));
+
+  // Color Nivel_Riesgo column
+  let nivelCol = -1;
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const cell = ws[(XLSX as any).utils.encode_cell({ r: 9, c })];
+    if (cell?.v === 'Nivel_Riesgo') { nivelCol = c; break; }
+  }
+  if (nivelCol !== -1) {
+    const riskColors: Record<string, string> = { 'BAJO': 'C6EFCE', 'MEDIO': 'FFEB9C', 'MEDIO-ALTO': 'FFCC00', 'ALTO': 'FF9900', 'CRITICO': 'FF0000' };
+    for (let r = 10; r <= range.e.r; r++) {
+      const cell = ws[(XLSX as any).utils.encode_cell({ r, c: nivelCol })];
+      if (cell && riskColors[cell.v]) cell.s = { fill: { fgColor: { rgb: riskColors[cell.v] } } };
+    }
+  }
+};
+
+// ─── END COMPARATIVO BASE Y TASA IVA ─────────────────────────────────────────
+
 export function exportToExcel(results: ValidationResult[], fileNameOverride?: string) {
   // Detect if batch is predominantly EMITIDOS or RECIBIDOS
   const emisorCounts = new Map<string, number>();
@@ -1234,8 +1735,15 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
   appendJsonSheet(wb, buildQualityRows(results), 'CONTROL CALIDAD XML');
   appendJsonSheet(wb, buildSummaryRows(results, alertasForenses), 'RESUMEN EJECUTIVO');
 
+  // ── Nueva hoja: COMPARATIVO BASE Y TASA IVA ──
+  const dataComparativo = buildComparativoBaseTasaRows(results);
+  const wsComparativo = (XLSX as any).utils.json_to_sheet(dataComparativo, { origin: 'A10' });
+  (XLSX as any).utils.book_append_sheet(wb, wsComparativo, 'COMPARATIVO BASE Y TASA IVA');
+
   wb.SheetNames.forEach((sheetName: string) => {
-    if (sheetName.startsWith('CEDULA IVA')) {
+    if (sheetName === 'COMPARATIVO BASE Y TASA IVA') {
+      applyComparativoSheetDefaults(wb.Sheets[sheetName], dataComparativo);
+    } else if (sheetName.startsWith('CEDULA IVA')) {
       applyIvaSheetDefaults(wb.Sheets[sheetName]);
     } else {
       applySheetDefaults(wb.Sheets[sheetName]);
