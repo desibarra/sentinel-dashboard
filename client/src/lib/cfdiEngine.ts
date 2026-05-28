@@ -9,8 +9,11 @@ export interface ConceptoDesglose {
     objetoImp: string;
     claveProdServ: string;
     descripcion: string;
-    traslados: Array<{ impuesto: string; tasa: string; importe: number; base: number }>;
-    retenciones: Array<{ impuesto: string; tasa: string; importe: number; base: number }>;
+    cantidad?: number;
+    noIdentificacion?: string;
+    valorUnitario?: number;
+    traslados: Array<{ impuesto: string; tasa: string; importe: number; base: number; tipoFactor?: string }>;
+    retenciones: Array<{ impuesto: string; tasa: string; importe: number; base: number; tipoFactor?: string }>;
     subtotalAcumulado: number;
     totalParcial: number;
 }
@@ -85,6 +88,7 @@ export interface ValidationResult {
     totalCalculado: number;
     diferenciaTotales: number;
     desglosePorConcepto: ConceptoDesglose[];
+    desglosePagos?: any[];
     desglose: string;
     esNomina: string;
     versionNomina: string;
@@ -901,6 +905,12 @@ export const extractTaxesByConcepto = (xmlDoc: XMLDocument, version: string) => 
             conceptoNumero++;
             const importe = parseFloat(nodo.getAttribute("Importe") || "0");
             const descuento = parseFloat(nodo.getAttribute("Descuento") || "0");
+            const cantidadRaw = nodo.getAttribute("Cantidad");
+            const cantidad = cantidadRaw !== null && cantidadRaw !== undefined ? parseFloat(cantidadRaw) : 1;
+            const noIdentificacion = nodo.getAttribute("NoIdentificacion") || "";
+            const valorUnitarioRaw = nodo.getAttribute("ValorUnitario");
+            const valorUnitario = valorUnitarioRaw !== null && valorUnitarioRaw !== undefined ? parseFloat(valorUnitarioRaw) : importe;
+
             // ✅ REGLA FISCAL CORRECTA CFDI 4.0:
             // La clasificación depende EXCLUSIVAMENTE de ObjetoImp, NO de la existencia del nodo Impuestos.
             // Valores SAT oficiales:
@@ -920,6 +930,7 @@ export const extractTaxesByConcepto = (xmlDoc: XMLDocument, version: string) => 
                 baseNoObjeto += baseConcepto;
                 desglosePorConcepto.push({
                     numero: conceptoNumero, importe, descuento, objetoImp, claveProdServ, descripcion,
+                    cantidad, noIdentificacion, valorUnitario,
                     traslados: [], retenciones: [],
                     subtotalAcumulado: subtotalCalculado, totalParcial: baseConcepto
                 });
@@ -931,6 +942,7 @@ export const extractTaxesByConcepto = (xmlDoc: XMLDocument, version: string) => 
                 baseObjetoSinDesglose += baseConcepto;
                 desglosePorConcepto.push({
                     numero: conceptoNumero, importe, descuento, objetoImp, claveProdServ, descripcion,
+                    cantidad, noIdentificacion, valorUnitario,
                     traslados: [], retenciones: [],
                     subtotalAcumulado: subtotalCalculado, totalParcial: baseConcepto
                 });
@@ -946,9 +958,9 @@ export const extractTaxesByConcepto = (xmlDoc: XMLDocument, version: string) => 
                 children.forEach((nodoImpuesto: any) => {
                     const tagImpuesto = nodoImpuesto.localName || nodoImpuesto.nodeName;
                     if (tagImpuesto === "Traslado") {
-                        const tasa = nodoImpuesto.getAttribute("TasaOCuota") || "0", base = parseFloat(nodoImpuesto.getAttribute("Base") || "0"), importeTraslado = parseFloat(nodoImpuesto.getAttribute("Importe") || "0"), impuesto = nodoImpuesto.getAttribute("Impuesto") || "002";
+                        const tasa = nodoImpuesto.getAttribute("TasaOCuota") || "0", base = parseFloat(nodoImpuesto.getAttribute("Base") || "0"), importeTraslado = parseFloat(nodoImpuesto.getAttribute("Importe") || "0"), impuesto = nodoImpuesto.getAttribute("Impuesto") || "002", tipoFactor = nodoImpuesto.getAttribute("TipoFactor") || "Tasa";
                         trasladosTotales += importeTraslado;
-                        trasladosConcepto.push({ impuesto, tasa, importe: importeTraslado, base });
+                        trasladosConcepto.push({ impuesto, tasa, importe: importeTraslado, base, tipoFactor });
                         if (impuesto === "002") {
                             if (tasa === "0.16" || tasa === "0.160000") baseIVA16 += base;
                             else if (tasa === "0.08" || tasa === "0.080000") baseIVA8 += base;
@@ -957,9 +969,9 @@ export const extractTaxesByConcepto = (xmlDoc: XMLDocument, version: string) => 
                             ivaTraslado += importeTraslado;
                         } else if (impuesto === "003") iepsTraslado += importeTraslado;
                     } else if (tagImpuesto === "Retencion") {
-                        const impuesto = nodoImpuesto.getAttribute("Impuesto") || "002", importeRetencion = parseFloat(nodoImpuesto.getAttribute("Importe") || "0"), tasa = nodoImpuesto.getAttribute("TasaOCuota") || "0", base = parseFloat(nodoImpuesto.getAttribute("Base") || "0");
+                        const impuesto = nodoImpuesto.getAttribute("Impuesto") || "002", importeRetencion = parseFloat(nodoImpuesto.getAttribute("Importe") || "0"), tasa = nodoImpuesto.getAttribute("TasaOCuota") || "0", base = parseFloat(nodoImpuesto.getAttribute("Base") || "0"), tipoFactor = nodoImpuesto.getAttribute("TipoFactor") || "Tasa";
                         retencionesTotales += importeRetencion;
-                        retencionesConcepto.push({ impuesto, tasa, importe: importeRetencion, base });
+                        retencionesConcepto.push({ impuesto, tasa, importe: importeRetencion, base, tipoFactor });
                         if (impuesto === "002") ivaRetenido += importeRetencion;
                         else if (impuesto === "001") isrRetenido += importeRetencion;
                         else if (impuesto === "003") iepsRetenido += importeRetencion;
@@ -972,7 +984,7 @@ export const extractTaxesByConcepto = (xmlDoc: XMLDocument, version: string) => 
             }
 
             const totalParcial = baseConcepto + trasladosConcepto.reduce((sum, t) => sum + t.importe, 0) - retencionesConcepto.reduce((sum, r) => sum + r.importe, 0);
-            desglosePorConcepto.push({ numero: conceptoNumero, importe, descuento, objetoImp, claveProdServ, descripcion, traslados: trasladosConcepto, retenciones: retencionesConcepto, subtotalAcumulado: subtotalCalculado, totalParcial });
+            desglosePorConcepto.push({ numero: conceptoNumero, importe, descuento, objetoImp, claveProdServ, descripcion, cantidad, noIdentificacion, valorUnitario, traslados: trasladosConcepto, retenciones: retencionesConcepto, subtotalAcumulado: subtotalCalculado, totalParcial });
         }
     }
     const todosNodos = comprobante?.getElementsByTagName("*");

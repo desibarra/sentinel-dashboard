@@ -336,19 +336,32 @@ const extractRawXmlRows = (results: ValidationResult[]) => results.flatMap(r => 
   return rows;
 });
 
-const buildConceptRows = (results: ValidationResult[]) => results.flatMap(r => (r.desglosePorConcepto || []).map((c: any, i: number) => ({
-  Archivo_XML: r.fileName,
-  UUID: r.uuid,
-  Indice_Nodo: i + 1,
-  Nodo_XML: 'Concepto',
-  ClaveProdServ: c.claveProdServ || 'NO VIENE EN XML',
-  Concepto: c.descripcion || 'NO VIENE EN XML',
-  Cantidad: c.cantidad || 'NO VIENE EN XML',
-  ObjetoImp: c.objetoImp || 'NO VIENE EN XML',
-  Importe: c.importe ?? 0,
-  Descuento: c.descuento ?? 0,
-  Observacion: 'Extraído de desglose fiscal del XML',
-})));
+const buildConceptRows = (results: ValidationResult[]) => results.flatMap(r => (r.desglosePorConcepto || []).map((c: any, i: number) => {
+  const cantidad = c.cantidad !== null && c.cantidad !== undefined ? Number(c.cantidad) : 0;
+  const valorUnitario = c.valorUnitario !== null && c.valorUnitario !== undefined ? Number(c.valorUnitario) : 0;
+  const importe = c.importe !== null && c.importe !== undefined ? Number(c.importe) : 0;
+
+  const importeVerificado = Math.round(cantidad * valorUnitario * 100) / 100;
+  const diferencia = Math.round((importe - importeVerificado) * 100) / 100;
+
+  return {
+    Archivo_XML: r.fileName,
+    UUID: r.uuid,
+    Indice_Nodo: i + 1,
+    Nodo_XML: 'Concepto',
+    ClaveProdServ: c.claveProdServ || 'NO VIENE EN XML',
+    Concepto: c.descripcion || 'NO VIENE EN XML',
+    Cantidad: c.cantidad !== null && c.cantidad !== undefined ? c.cantidad : 'NO VIENE EN XML',
+    NoIdentificacion: c.noIdentificacion || 'NO VIENE EN XML',
+    ValorUnitario: c.valorUnitario !== null && c.valorUnitario !== undefined ? c.valorUnitario : 'NO VIENE EN XML',
+    Importe: c.importe ?? 0,
+    Descuento: c.descuento ?? 0,
+    ObjetoImp: c.objetoImp || 'NO VIENE EN XML',
+    Importe_Verificado: c.cantidad !== null && c.valorUnitario !== null && c.cantidad !== undefined && c.valorUnitario !== undefined ? importeVerificado : 'NO VIENE EN XML',
+    Diferencia_Importe_Concepto: c.cantidad !== null && c.valorUnitario !== null && c.cantidad !== undefined && c.valorUnitario !== undefined ? diferencia : 'NO VIENE EN XML',
+    Observacion: 'Extraído de desglose fiscal del XML',
+  };
+}));
 
 const buildTaxRows = (results: ValidationResult[]) => results.flatMap(r => (r.desglosePorConcepto || []).flatMap((c: any, i: number) => {
   const mapTax = (t: any, tipo: 'Traslado' | 'Retencion') => {
@@ -357,15 +370,22 @@ const buildTaxRows = (results: ValidationResult[]) => results.flatMap(r => (r.de
       tasaDetectada = 'NO OBJETO';
     } else {
       const tfUp = String(t.tipoFactor || '').toUpperCase();
-      if (tfUp === 'EXENTO') {
-        tasaDetectada = 'EXENTO';
-      } else {
-        const tNum = Number(t.tasa);
-        if (!isNaN(tNum)) {
-          if (tNum === 0.16) tasaDetectada = '16%';
-          else if (tNum === 0.08) tasaDetectada = '8%';
-          else if (tNum === 0) tasaDetectada = '0%';
-        }
+      const imp = String(t.impuesto || '');
+      const tNum = Number(t.tasa);
+      const isRet = tipo === 'Retencion';
+
+      if (imp === '002' && tfUp === 'TASA' && tNum === 0.16) {
+        tasaDetectada = 'IVA_16%';
+      } else if (imp === '002' && tfUp === 'TASA' && tNum === 0) {
+        tasaDetectada = 'IVA_0%';
+      } else if (imp === '002' && tfUp === 'EXENTO') {
+        tasaDetectada = 'IVA_EXENTO';
+      } else if (imp === '001' && tfUp === 'TASA' && tNum === 0.04 && isRet) {
+        tasaDetectada = 'ISR_RETENIDO_4%_AUTOTRANSPORTE';
+      } else if (imp === '002' && isRet) {
+        tasaDetectada = 'IVA_RETENIDO';
+      } else if (imp === '001' && isRet) {
+        tasaDetectada = 'ISR_RETENIDO';
       }
     }
 
@@ -383,6 +403,7 @@ const buildTaxRows = (results: ValidationResult[]) => results.flatMap(r => (r.de
       TasaOCuota: t.tasa || 'NO VIENE EN XML',
       Importe: t.importe ?? 0,
       Es_IVA: t.impuesto === '002' ? 'SI' : 'NO',
+      Es_ISR: t.impuesto === '001' ? 'SI' : 'NO',
       Tasa_Detectada: tasaDetectada,
       Observacion: tipo === 'Traslado' ? 'Impuesto por concepto' : 'Retención por concepto'
     };
@@ -393,6 +414,151 @@ const buildTaxRows = (results: ValidationResult[]) => results.flatMap(r => (r.de
     ...(c.retenciones || []).map((t: any) => mapTax(t, 'Retencion'))
   ];
 }));
+
+const getMesName = (fecha: string) => {
+  const parts = String(fecha || '').split('-');
+  const m = parts[1];
+  if (!m) return 'INDETERMINADO';
+  const meses: Record<string, string> = {
+    '01': 'Enero', '02': 'Febrero', '03': 'Marzo', '04': 'Abril',
+    '05': 'Mayo', '06': 'Junio', '07': 'Julio', '08': 'Agosto',
+    '09': 'Septiembre', '10': 'Octubre', '11': 'Noviembre', '12': 'Diciembre'
+  };
+  return meses[m] || 'INDETERMINADO';
+};
+
+const buildRetencionesRows = (results: ValidationResult[]) => {
+  const rows: any[] = [];
+  results.forEach(r => {
+    const tieneFleteConcept = (r.desglosePorConcepto || []).some((c: any) => {
+      const cps = String(c.claveProdServ || '');
+      const desc = String(c.descripcion || '').toLowerCase();
+      return cps.startsWith('7810') || desc.includes('flete') || desc.includes('acarreo') || desc.includes('transporte');
+    });
+
+    const hasActualRetenciones = (r.desglosePorConcepto || []).some((c: any) => (c.retenciones || []).length > 0);
+
+    (r.desglosePorConcepto || []).forEach((c: any, i: number) => {
+      (c.retenciones || []).forEach((ret: any) => {
+        const tNum = Number(ret.tasa);
+        let clasif = 'OTRA_RETENCION';
+        if (ret.impuesto === '001' && tNum === 0.04) {
+          clasif = 'ISR_RETENIDO_4%_AUTOTRANSPORTE';
+        } else if (ret.impuesto === '001') {
+          clasif = 'ISR_RETENIDO';
+        } else if (ret.impuesto === '002') {
+          clasif = 'IVA_RETENIDO';
+        } else if (ret.impuesto === '003') {
+          clasif = 'IEPS_RETENIDO';
+        }
+
+        const mes = getMesName(r.fechaEmision);
+
+        rows.push({
+          UUID: r.uuid,
+          Fecha: r.fechaEmision,
+          RFC_Emisor: r.rfcEmisor,
+          RFC_Receptor: r.rfcReceptor,
+          Tipo_CFDI: r.tipoCFDI,
+          Base_Retencion: ret.base ?? 0,
+          Impuesto: ret.impuesto || '001',
+          TipoFactor: ret.tipoFactor || 'Tasa',
+          TasaOCuota: ret.tasa || '0.000000',
+          Importe_Retenido: ret.importe ?? 0,
+          Clasificacion_Retencion: clasif,
+          Mes: mes,
+          Observacion: 'Retención declarada en XML',
+          Accion_Recomendada: 'Ninguna'
+        });
+      });
+    });
+
+    if (r.tipoCFDI === 'I' && tieneFleteConcept && !hasActualRetenciones) {
+      const mes = getMesName(r.fechaEmision);
+      const firstConcept = (r.desglosePorConcepto || []).find((c: any) => {
+        const cps = String(c.claveProdServ || '');
+        const desc = String(c.descripcion || '').toLowerCase();
+        return cps.startsWith('7810') || desc.includes('flete') || desc.includes('acarreo') || desc.includes('transporte');
+      });
+
+      rows.push({
+        UUID: r.uuid,
+        Fecha: r.fechaEmision,
+        RFC_Emisor: r.rfcEmisor,
+        RFC_Receptor: r.rfcReceptor,
+        Tipo_CFDI: r.tipoCFDI,
+        Base_Retencion: firstConcept ? (firstConcept.importe - (firstConcept.descuento || 0)) : r.subtotal,
+        Impuesto: '001',
+        TipoFactor: 'Tasa',
+        TasaOCuota: '0.040000',
+        Importe_Retenido: 0,
+        Clasificacion_Retencion: 'RETENCION_OMITIDA_APARENTE',
+        Mes: mes,
+        Observacion: 'CFDI de transporte/fletes sin retenciones detectadas en XML',
+        Accion_Recomendada: 'Validar si aplica retención de ISR 4% (o IVA 4% según corresponda)'
+      });
+    }
+  });
+
+  return rows.length ? rows : [{ UUID: 'SIN REGISTROS', Fecha: 'NO APLICA', RFC_Emisor: 'NO APLICA', RFC_Receptor: 'NO APLICA', Tipo_CFDI: 'NO APLICA', Base_Retencion: 0, Impuesto: 'NO APLICA', TipoFactor: 'NO APLICA', TasaOCuota: 'NO APLICA', Importe_Retenido: 0, Clasificacion_Retencion: 'SIN REGISTROS', Mes: 'NO APLICA', Observacion: 'Ninguna retención detectada', Accion_Recomendada: 'Ninguna' }];
+};
+
+const applyRetencionesSheetDefaults = (ws: any, dataRows: any[]) => {
+  const ref = ws['!ref'];
+  if (!ref) return;
+  const range = (XLSX as any).utils.decode_range(ref);
+
+  ws['!autofilter'] = { ref: (XLSX as any).utils.encode_range({ s: { r: 9, c: range.s.c }, e: { r: range.e.r, c: range.e.c } }) };
+  ws['!panes'] = { ySplit: 10, topLeftCell: 'A11', activePane: 'bottomLeft', state: 'frozen' };
+
+  let totalIsrRetenido = 0;
+  let totalIvaRetenido = 0;
+  let totalIsr4 = 0;
+  const cfdiWithRet = new Set<string>();
+  const cfdiOmitted = new Set<string>();
+
+  dataRows.forEach(row => {
+    if (row.UUID === 'SIN REGISTROS') return;
+    const importRet = Number(row.Importe_Retenido || 0);
+    if (row.Clasificacion_Retencion === 'RETENCION_OMITIDA_APARENTE') {
+      cfdiOmitted.add(row.UUID);
+    } else {
+      cfdiWithRet.add(row.UUID);
+      if (row.Impuesto === '001') {
+        totalIsrRetenido += importRet;
+        if (row.Clasificacion_Retencion === 'ISR_RETENIDO_4%_AUTOTRANSPORTE') {
+          totalIsr4 += importRet;
+        }
+      } else if (row.Impuesto === '002') {
+        totalIvaRetenido += importRet;
+      }
+    }
+  });
+
+  const summaryBlock = [
+    ['RESUMEN DE RETENCIONES FISCALES'],
+    ['Total ISR retenido', Math.round(totalIsrRetenido * 100) / 100],
+    ['Total IVA retenido', Math.round(totalIvaRetenido * 100) / 100],
+    ['Total retención ISR 4% Autotransporte', Math.round(totalIsr4 * 100) / 100],
+    ['CFDI con retención', cfdiWithRet.size],
+    ['CFDI sin retención (aparentemente aplica)', cfdiOmitted.size],
+  ];
+
+  (XLSX as any).utils.sheet_add_aoa(ws, summaryBlock, { origin: 'A1' });
+
+  const cellA1 = ws['A1'];
+  if (cellA1) cellA1.s = { font: { bold: true, color: { rgb: '1F4788' }, sz: 12 }, fill: { fgColor: { rgb: 'EBF1FA' } }, alignment: { horizontal: 'left' } };
+
+  const headerCols: string[] = [];
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const cell = ws[(XLSX as any).utils.encode_cell({ r: 9, c })];
+    if (cell) {
+      headerCols.push(String(cell.v || ''));
+      cell.s = { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: '1F4788' } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true } };
+    }
+  }
+  ws['!cols'] = headerCols.map(h => ({ wch: Math.min(Math.max(h.length + 4, 14), 42) }));
+};
 
 const buildForensicRows = (results: ValidationResult[]) => results.map(r => {
   const detail = cp(r);
@@ -538,6 +704,9 @@ const buildCartaPorteFiguras = (results: ValidationResult[]) =>
   });
 
 const buildPagosRows = (results: ValidationResult[]) => results.flatMap(r => {
+  if (r.desglosePagos && r.desglosePagos.length > 0) {
+    return r.desglosePagos;
+  }
   const doc = parseXml(r);
   const tienePagos = nodes(doc, 'Pagos').length > 0;
   if (!tienePagos) return [];
@@ -547,7 +716,24 @@ const buildPagosRows = (results: ValidationResult[]) => results.flatMap(r => {
       parent = parent.parentElement;
     }
     const pago = parent;
-    const trasladoP = nodes(pago || dr, 'TrasladoP')[0];
+    
+    const impuestosDR = firstNode(dr, 'ImpuestosDR');
+    const trasladoDR = firstNode(impuestosDR, 'TrasladoDR') || firstNode(dr, 'TrasladoDR') || firstNode(impuestosDR, 'Traslado') || firstNode(dr, 'Traslado');
+    
+    const baseDR = attrRaw(trasladoDR, 'BaseDR') !== 'NO VIENE EN XML' ? attrRaw(trasladoDR, 'BaseDR') : attrRaw(trasladoDR, 'Base');
+    const impuestoDR = attrRaw(trasladoDR, 'ImpuestoDR') !== 'NO VIENE EN XML' ? attrRaw(trasladoDR, 'ImpuestoDR') : attrRaw(trasladoDR, 'Impuesto');
+    const tipoFactorDR = attrRaw(trasladoDR, 'TipoFactorDR') !== 'NO VIENE EN XML' ? attrRaw(trasladoDR, 'TipoFactorDR') : attrRaw(trasladoDR, 'TipoFactor');
+    const tasaOCuotaDR = attrRaw(trasladoDR, 'TasaOCuotaDR') !== 'NO VIENE EN XML' ? attrRaw(trasladoDR, 'TasaOCuotaDR') : attrRaw(trasladoDR, 'TasaOCuota');
+    const importeDR = attrRaw(trasladoDR, 'ImporteDR') !== 'NO VIENE EN XML' ? attrRaw(trasladoDR, 'ImporteDR') : attrRaw(trasladoDR, 'Importe');
+
+    const trasladoP = firstNode(pago, 'TrasladoP') || firstNode(pago, 'Traslado') || firstNode(dr, 'TrasladoP');
+    
+    const baseP = attrRaw(trasladoP, 'BaseP') !== 'NO VIENE EN XML' ? attrRaw(trasladoP, 'BaseP') : attrRaw(trasladoP, 'Base');
+    const impuestoP = attrRaw(trasladoP, 'ImpuestoP') !== 'NO VIENE EN XML' ? attrRaw(trasladoP, 'ImpuestoP') : attrRaw(trasladoP, 'Impuesto');
+    const tipoFactorP = attrRaw(trasladoP, 'TipoFactorP') !== 'NO VIENE EN XML' ? attrRaw(trasladoP, 'TipoFactorP') : attrRaw(trasladoP, 'TipoFactor');
+    const tasaOCuotaP = attrRaw(trasladoP, 'TasaOCuotaP') !== 'NO VIENE EN XML' ? attrRaw(trasladoP, 'TasaOCuotaP') : attrRaw(trasladoP, 'TasaOCuota');
+    const importeP = attrRaw(trasladoP, 'ImporteP') !== 'NO VIENE EN XML' ? attrRaw(trasladoP, 'ImporteP') : attrRaw(trasladoP, 'Importe');
+
     return {
       Archivo_XML: r.fileName,
       UUID: r.uuid,
@@ -556,22 +742,27 @@ const buildPagosRows = (results: ValidationResult[]) => results.flatMap(r => {
       FechaPago: attrRaw(pago, 'FechaPago'),
       FormaDePagoP: attrRaw(pago, 'FormaDePagoP'),
       MonedaP: attrRaw(pago, 'MonedaP'),
+      TipoCambioP: attrRaw(pago, 'TipoCambioP'),
       Monto: attrRaw(pago, 'Monto'),
-      IdDocumento: attrRaw(dr, 'IdDocumento'),
-      Folio: attrRaw(dr, 'Folio'),
-      Serie: attrRaw(dr, 'Serie'),
+      UUID_CFDI_Relacionado: attrRaw(dr, 'IdDocumento'),
+      Serie_Relacionado: attrRaw(dr, 'Serie'),
+      Folio_Relacionado: attrRaw(dr, 'Folio'),
       MonedaDR: attrRaw(dr, 'MonedaDR'),
-      MetodoDePagoDR: attrRaw(dr, 'MetodoDePagoDR'),
       NumParcialidad: attrRaw(dr, 'NumParcialidad'),
       ImpSaldoAnt: attrRaw(dr, 'ImpSaldoAnt'),
       ImpPagado: attrRaw(dr, 'ImpPagado'),
       ImpSaldoInsoluto: attrRaw(dr, 'ImpSaldoInsoluto'),
-      BaseP: attrRaw(trasladoP, 'BaseP'),
-      ImpuestoP: attrRaw(trasladoP, 'ImpuestoP'),
-      TipoFactorP: attrRaw(trasladoP, 'TipoFactorP'),
-      TasaOCuotaP: attrRaw(trasladoP, 'TasaOCuotaP'),
-      ImporteP: attrRaw(trasladoP, 'ImporteP'),
-      Observacion: 'Complemento de pago extraído',
+      BaseDR: baseDR,
+      ImpuestoDR: impuestoDR,
+      TipoFactorDR: tipoFactorDR,
+      TasaOCuotaDR: tasaOCuotaDR,
+      ImporteDR: importeDR,
+      BaseP: baseP,
+      ImpuestoP: impuestoP,
+      TipoFactorP: tipoFactorP,
+      TasaOCuotaP: tasaOCuotaP,
+      ImporteP: importeP,
+      Observacion: 'Complemento de pago extraído'
     };
   });
 });
@@ -1812,6 +2003,11 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
   const wsComparativo = (XLSX as any).utils.json_to_sheet(dataComparativo, { origin: 'A10' });
   (XLSX as any).utils.book_append_sheet(wb, wsComparativo, 'COMPARATIVO BASE Y TASA IVA');
 
+  // ── Nueva hoja: CEDULA RETENCIONES ──
+  const dataRetenciones = buildRetencionesRows(validResults);
+  const wsRetenciones = (XLSX as any).utils.json_to_sheet(dataRetenciones, { origin: 'A10' });
+  (XLSX as any).utils.book_append_sheet(wb, wsRetenciones, 'CEDULA RETENCIONES');
+
   // ── Nueva hoja obligatoria: ERRORES LECTURA XML ──
   const dataErrores = invalidResults.map(r => {
     const xmlStr = String(r.xmlContent || '');
@@ -1912,6 +2108,8 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
   wb.SheetNames.forEach((sheetName: string) => {
     if (sheetName === 'COMPARATIVO BASE Y TASA IVA') {
       applyComparativoSheetDefaults(wb.Sheets[sheetName], dataComparativo);
+    } else if (sheetName === 'CEDULA RETENCIONES') {
+      applyRetencionesSheetDefaults(wb.Sheets[sheetName], dataRetenciones);
     } else if (sheetName.startsWith('CEDULA IVA')) {
       applyIvaSheetDefaults(wb.Sheets[sheetName]);
     } else {
