@@ -110,3 +110,8 @@ data/sentinel.db*
 
 # Local Netlify folder
 .netlify
+
+# Generated heavy reports
+tests/fixtures/*.xlsx
+reports/dev-outputs/*.xlsx
+legacy/**/*.xlsx
