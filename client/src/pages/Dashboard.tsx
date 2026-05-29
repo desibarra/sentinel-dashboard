@@ -150,8 +150,10 @@ export default function Dashboard() {
 
 
 
-  const handleFilesReady = async (files: UploadedFile[]) => {
-
+  const handleFilesReady = async (files: any[]) => {
+    console.log("Dashboard handleFilesReady called! Files length:", files?.length);
+    // Si no hay archivos, no hacer nada
+    if (!files || files.length === 0) return;
     if (!currentCompany) {
 
       toast.error("Selecciona una empresa antes de cargar XMLs");

@@ -1,7 +1,7 @@
 import express, { Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import { getDB } from "./db.js";
-import { generateToken, authMiddleware } from "./auth.js";
+import { generateToken, authMiddleware, requireRole } from "./auth.js";
 import { nanoid } from "nanoid";
 
 import axios from "axios";
@@ -47,19 +47,13 @@ apiRouter.get("/auth/me", authMiddleware, async (req: Request, res: Response) =>
 apiRouter.use(authMiddleware);
 
 // -- USERS ROUTES (ADMIN ONLY) --
-apiRouter.get("/users", async (req: Request, res: Response) => {
-    const userReq = (req as any).user;
-    if (userReq.role !== "admin") return res.status(403).json({ error: "Forbidden" });
-
+apiRouter.get("/users", requireRole('admin'), async (req: Request, res: Response) => {
     const db = await getDB();
     const users = await db.all("SELECT id, username, role, created_at FROM users");
     res.json(users);
 });
 
-apiRouter.post("/users", async (req: Request, res: Response) => {
-    const userReq = (req as any).user;
-    if (userReq.role !== "admin") return res.status(403).json({ error: "Forbidden" });
-
+apiRouter.post("/users", requireRole('admin'), async (req: Request, res: Response) => {
     const { username, password, role } = req.body;
     if (!username || !password) return res.status(400).json({ error: "Missing fields" });
 
@@ -78,10 +72,8 @@ apiRouter.post("/users", async (req: Request, res: Response) => {
     res.json({ success: true, user: { id: newId, username, role: role || "user" } });
 });
 
-apiRouter.delete("/users/:id", async (req: Request, res: Response) => {
+apiRouter.delete("/users/:id", requireRole('admin'), async (req: Request, res: Response) => {
     const userReq = (req as any).user;
-    if (userReq.role !== "admin") return res.status(403).json({ error: "Forbidden" });
-
     const { id } = req.params;
     if (id === userReq.userId) return res.status(400).json({ error: "Cannot delete yourself" });
 
@@ -257,7 +249,7 @@ apiRouter.get("/blacklist/check", async (req: Request, res: Response) => {
     });
 });
 
-apiRouter.post("/blacklist/sync", async (_req: Request, res: Response) => {
+apiRouter.post("/blacklist/sync", requireRole('admin'), async (_req: Request, res: Response) => {
     try {
         const fetchList = async (url: string, tipo: 'EFOS' | '69B') => {
             const response = await fetch(url);

@@ -20,12 +20,17 @@ export const handler = async (event: any) => {
             return { statusCode: 400, body: JSON.stringify({ error: "Token required" }) };
         }
 
+        if (!process.env.NETLIFY_SITE_ID) {
+            console.error("[ValidateToken] Error: NETLIFY_SITE_ID is not set in the environment.");
+            return { statusCode: 500, body: JSON.stringify({ error: "Error de configuración interna del servidor (SITE_ID faltante)." }) };
+        }
+
         let store;
         try {
             store = getStore({
                 name: "sentinel-tokens",
                 consistency: "strong",
-                siteID: process.env.NETLIFY_SITE_ID || "45d68d70-756c-49fd-8162-9efbc826c577",
+                siteID: process.env.NETLIFY_SITE_ID,
                 token: process.env.NETLIFY_API_TOKEN
             });
         } catch (e: any) {

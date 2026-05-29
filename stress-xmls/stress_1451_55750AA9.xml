@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.sat.gob.mx/cfd/4 http://www.sat.gob.mx/sitio_internet/cfd/4/cfdv40.xsd"
+  Version="4.0" Serie="REP" Folio="001"
+  Fecha="2026-04-05T10:00:00" Sello="---"
+  FormaPago="03" NoCertificado="00001000000504465950" Certificado="---"
+  SubTotal="165.11" Moneda="XXX" Total="75.43"
+  TipoDeComprobante="P" Exportacion="01" LugarExpedicion="45000">
+  <cfdi:Emisor Rfc="TME960709LR2" Nombre="TRANSPORTES MEXICANOS ESPECIALIZADOS SA DE CV" RegimenFiscal="601"/>
+  <cfdi:Receptor Rfc="IATD70020G77" Nombre="EMPRESA SA DE CV" DomicilioFiscalReceptor="32310" RegimenFiscalReceptor="603" UsoCFDI="CP01"/>
+  <cfdi:Conceptos>
+    <cfdi:Concepto ClaveProdServ="84111506" NoIdentificacion="N/A" Cantidad="1" ClaveUnidad="ACT" Descripcion="Pago" ValorUnitario="0" Importe="0" ObjetoImp="01"/>
+  </cfdi:Conceptos>
+  <cfdi:Complemento>
+    <tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital"
+      Version="1.1" UUID="55750AA9-3965-69AD-8D07-2B0DAA1A7F75"
+      FechaTimbrado="2026-04-05T10:05:00" RfcProvCertif="SAT970701NN3"
+      SelloCFD="---" NoCertificadoSAT="00001000000504465028" SelloSAT="---"/>
+    <pago20:Pagos xmlns:pago20="http://www.sat.gob.mx/Pagos20" Version="2.0">
+      <pago20:Totales TotalRetencionesIVA="0" TotalTrasladosBaseIVA16="15000" TotalTrasladosImpuestoIVA16="2400"/>
+      <pago20:Pago FechaPago="2026-04-05T09:00:00" FormaDePagoP="03" MonedaP="MXN" TipoCambioP="1" Monto="17400">
+        <pago20:DoctoRelacionado IdDocumento="550E8400-E29B-41D4-A716-446655440002"
+          Serie="DEMO" Folio="001" MonedaDR="MXN" NumParcialidad="1"
+          ImpSaldoAnt="17400" ImpPagado="17400" ImpSaldoInsoluto="0"
+          ObjetoImpDR="02">
+          <pago20:ImpuestosDR>
+            <pago20:TrasladosDR>
+              <pago20:TrasladoDR BaseDR="15000" ImpuestoDR="002" TipoFactorDR="Tasa" TasaOCuotaDR="0.160000" ImporteDR="2400"/>
+            </pago20:TrasladosDR>
+          </pago20:ImpuestosDR>
+        </pago20:DoctoRelacionado>
+        <pago20:ImpuestosP>
+          <pago20:TrasladosP>
+            <pago20:TrasladoP BaseP="15000" ImpuestoP="002" TipoFactorP="Tasa" TasaOCuotaP="0.160000" ImporteP="2400"/>
+          </pago20:TrasladosP>
+        </pago20:ImpuestosP>
+      </pago20:Pago>
+    </pago20:Pagos>
+  </cfdi:Complemento>
+</cfdi:Comprobante>

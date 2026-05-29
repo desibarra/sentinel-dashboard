@@ -11,13 +11,18 @@ export const handler = async (event: any) => {
             return { statusCode: 401, body: JSON.stringify({ error: "No autorizado. Token faltante." }) };
         }
 
+        if (!process.env.NETLIFY_SITE_ID) {
+            console.error("[SAT Proxy] Error: NETLIFY_SITE_ID is not set in the environment.");
+            return { statusCode: 500, body: JSON.stringify({ error: "Error de configuración interna del servidor (SITE_ID faltante)." }) };
+        }
+
         // Conectar a Blobs
         let store;
         try {
             store = getStore({
                 name: "sentinel-tokens",
                 consistency: "strong",
-                siteID: process.env.NETLIFY_SITE_ID || "45d68d70-756c-49fd-8162-9efbc826c577",
+                siteID: process.env.NETLIFY_SITE_ID,
                 token: process.env.NETLIFY_API_TOKEN
             });
         } catch (e: any) {

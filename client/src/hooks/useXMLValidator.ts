@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState as reactUseState } from "react";
+const useState = typeof window === 'undefined' ? (init: any) => [init, () => {}] : reactUseState;
 import { UploadedFile } from "@/components/UploadZone";
 import { checkCFDIStatusSAT } from "@/utils/satStatusValidator";
 import { checkRFCBlacklist, BlacklistValidation } from "@/utils/blacklistValidator"; // Nuevo
@@ -302,8 +303,10 @@ export function useXMLValidator() {
         }
       }
 
-      // ESTATUS SAT (simulado)
-      const estatusSAT = "Vigente";
+      // ESTATUS SAT - diferenciado por tipo de CFDI
+      // ✅ AUDIT FIX: REP (tipo P) no se consulta al SAT (Total=0), marcar como "No verificado (REP)"
+      // hardcodear "Vigente" en REPs genera datos falsos en el Excel exportado
+      const estatusSAT = tipoCFDI === "P" ? "No verificado (REP)" : "No verificado";
       const fechaCancelacion = "NO APLICA";
       const cfdiSustituido = "NO";
       const uuidSustitucion = "NO APLICA";
@@ -476,6 +479,12 @@ export function useXMLValidator() {
       // Total del XML
       const totalXML = parseFloat(comprobante?.getAttribute("Total") || "0");
 
+      // ✅ FASE 2 - AUDIT FIX (Hallazgo #5, #9, #10): Extraer campos del Comprobante
+      // descuentoGlobal: Atributo Descuento a nivel Comprobante (puede diferir de Σ descuentos por concepto)
+      // condicionesDePago: Campo opcional SAT (CondicionesDePago) en el nodo Comprobante
+      const descuentoGlobal = parseFloat(comprobante?.getAttribute("Descuento") || "0");
+      const condicionesDePago = comprobante?.getAttribute("CondicionesDePago") || "NO VIENE EN XML";
+
       // Validar totales según tipo de CFDI
       const validation = esNomina
         ? validateNominaTotals(
@@ -484,7 +493,7 @@ export function useXMLValidator() {
           nominaInfo.totalOtrosPagos,
           totalXML
         )
-        : validateTotals(taxesByConcepto, totalXML);
+        : validateTotals(taxesByConcepto, totalXML, descuentoGlobal);  // ✅ FASE 2: pasar descuentoGlobal
 
       // FORMA Y MÉTODO DE PAGO
       const formaPago = comprobante?.getAttribute("FormaPago") || "NO DISPONIBLE";
@@ -731,7 +740,10 @@ export function useXMLValidator() {
         observacionesContador: "",
         resultadoMotor,
         comentarioMotor,
-        ultimoRefrescoSAT
+        ultimoRefrescoSAT,
+        // ✅ FASE 2 - AUDIT FIX (Hallazgos #5, #9, #10): Campos fiscales del Comprobante
+        descuentoGlobal,
+        condicionesDePago,
       };
 
       const trazabilidadInfo = evaluarTrazabilidad(xmlDoc, xmlContent, objVal);
@@ -936,7 +948,10 @@ export function useXMLValidator() {
         totalOtrosPagos: 0,
         isrRetenidoNomina: 0,
         totalCalculadoNomina: total,
-        observacionesContador: ""
+        observacionesContador: "",
+        // ✅ FASE 2: campos requeridos por interfaz ValidationResult
+        descuentoGlobal: 0,
+        condicionesDePago: "NO VIENE EN XML",
       };
     }
 
@@ -1022,7 +1037,10 @@ export function useXMLValidator() {
       isrRetenidoNomina: 0,
       totalCalculadoNomina: 0,
       observacionesContador: "",
-      xmlContent: xmlContent
+      xmlContent: xmlContent,
+      // ✅ FASE 2: campos requeridos por interfaz ValidationResult
+      descuentoGlobal: 0,
+      condicionesDePago: "NO VIENE EN XML",
     };
   };
 

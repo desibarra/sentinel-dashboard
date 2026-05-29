@@ -71,7 +71,6 @@ function Router() {
           <Route path="/login" component={Login} />
           <Route path="/acceso" component={TokenValidation} />
           <Route path="/token-expired" component={TokenExpired} />
-          <Route path="/admin-tokens" component={AdminTokens} />
           <Route path="/registro" component={() => <LeadCapture onComplete={() => {}} />} />
 
           {user ? (
@@ -84,6 +83,8 @@ function Router() {
               <Route path="/manual" component={HelpCenter} />
               <Route path="/users" component={UserManagement} />
               <Route path="/pricing" component={Pricing} />
+              {/* ✅ AUDIT FIX: /admin-tokens movido al bloque autenticado - era accesible sin login */}
+              <Route path="/admin-tokens" component={AdminTokens} />
               <Route path="/404" component={NotFound} />
               <Route component={NotFound} />
             </Switch>

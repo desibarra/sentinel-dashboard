@@ -42,6 +42,24 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
         }
 
         const fileId = `${file.name}-${Date.now()}-${i}`;
+
+        newFiles.push({
+          id: fileId,
+          name: file.name,
+          size: file.size,
+          status: "pending",
+        });
+      }
+
+      setFiles((prev) => [...prev, ...newFiles]);
+
+      for (let i = 0; i < fileList.length; i++) {
+        const file = fileList[i];
+        if (!file.name.endsWith(".xml")) continue;
+        
+        const fileId = newFiles.find(nf => nf.name === file.name)?.id;
+        if (!fileId) continue;
+
         const reader = new FileReader();
 
         reader.onload = (e) => {
@@ -63,17 +81,8 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
           );
         };
 
-        newFiles.push({
-          id: fileId,
-          name: file.name,
-          size: file.size,
-          status: "pending",
-        });
-
         reader.readAsText(file);
       }
-
-      setFiles((prev) => [...prev, ...newFiles]);
     },
     []
   );
@@ -107,6 +116,7 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
 
   const handleValidate = () => {
     const pendingFiles = files.filter((f) => f.content && f.status === "pending");
+    console.log("UploadZone handleValidate called! pendingFiles length:", pendingFiles.length);
     if (pendingFiles.length > 0) {
       onFilesReady(pendingFiles as UploadedFile[]);
       // ✅ PRODUCCIÓN: Limpiar archivos después de enviarlos para liberar memoria

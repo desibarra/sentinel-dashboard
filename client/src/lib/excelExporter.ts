@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx';
 import { ValidationResult } from '@/lib/cfdiEngine';
 
 const SAT_RETRY_ACTION = 'Reintentar validación SAT';
-const SAT_FAILURE_PATTERN = /(error|conexión|timeout|failed|network|sat\s+no\s+respondió|no\s+respondió|cors|no\s+confirmado)/i;
+const SAT_FAILURE_PATTERN = /(error|conexión|timeout|failed|network|sat\s+no\s+respondió|no\s+respondió|cors|no\s+confirmado|no\s+verificado)/i;
 
 const normalizeSiNo = (value: unknown): 'SI' | 'NO' => {
   if (value === true) return 'SI';
@@ -586,13 +586,15 @@ const buildForensicRows = (results: ValidationResult[]) => results.map(r => {
     Uso_CFDI: r.usoCFDI,
     CP_Receptor: r.cpReceptor,
     SubTotal: r.subtotal,
-    Descuento: (r.desglosePorConcepto || []).reduce((sum: number, c: any) => sum + Number(c.descuento || 0), 0),
+    Descuento_Conceptos: (r.desglosePorConcepto || []).reduce((sum: number, c: any) => sum + Number(c.descuento || 0), 0),
+    Descuento_Global: r.descuentoGlobal ?? 0,
+    Diferencia_Descuento: Math.round(Math.abs((r.descuentoGlobal ?? 0) - (r.desglosePorConcepto || []).reduce((sum: number, c: any) => sum + Number(c.descuento || 0), 0)) * 100) / 100,
     Total: r.total,
     Moneda: r.moneda,
     TipoCambio: r.tipoCambio,
     MetodoPago: r.metodoPago,
     FormaPago: r.formaPago,
-    CondicionesDePago: 'NO VIENE EN XML',
+    CondicionesDePago: r.condicionesDePago || 'NO VIENE EN XML',
     Base_IVA_16: r.baseIVA16,
     Base_IVA_0: r.baseIVA0,
     Base_IVA_Exento: r.baseIVAExento,
@@ -703,69 +705,110 @@ const buildCartaPorteFiguras = (results: ValidationResult[]) =>
     }));
   });
 
-const buildPagosRows = (results: ValidationResult[]) => results.flatMap(r => {
-  if (r.desglosePagos && r.desglosePagos.length > 0) {
-    return r.desglosePagos;
-  }
-  const doc = parseXml(r);
-  const tienePagos = nodes(doc, 'Pagos').length > 0;
-  if (!tienePagos) return [];
-  return nodes(doc, 'DoctoRelacionado').map((dr, index) => {
-    let parent = dr.parentElement;
-    while (parent && nodeName(parent) !== 'Pago') {
-      parent = parent.parentElement;
+// ── Construye índice de UUIDs cubiertos por REPs del lote (para vinculación) ──
+const buildRepCoverageIndex = (results: ValidationResult[]): Set<string> => {
+  const covered = new Set<string>();
+  results.forEach(r => {
+    if (r.tipoCFDI !== 'P') return;
+    // Leer desde desglosePagos pre-cargado
+    if (r.desglosePagos && r.desglosePagos.length > 0) {
+      r.desglosePagos.forEach((row: any) => {
+        const uid = String(row.UUID_CFDI_Relacionado || row.IdDocumento || '').trim().toUpperCase();
+        if (uid && uid !== 'NO VIENE EN XML') covered.add(uid);
+      });
+      return;
     }
-    const pago = parent;
-    
-    const impuestosDR = firstNode(dr, 'ImpuestosDR');
-    const trasladoDR = firstNode(impuestosDR, 'TrasladoDR') || firstNode(dr, 'TrasladoDR') || firstNode(impuestosDR, 'Traslado') || firstNode(dr, 'Traslado');
-    
-    const baseDR = attrRaw(trasladoDR, 'BaseDR') !== 'NO VIENE EN XML' ? attrRaw(trasladoDR, 'BaseDR') : attrRaw(trasladoDR, 'Base');
-    const impuestoDR = attrRaw(trasladoDR, 'ImpuestoDR') !== 'NO VIENE EN XML' ? attrRaw(trasladoDR, 'ImpuestoDR') : attrRaw(trasladoDR, 'Impuesto');
-    const tipoFactorDR = attrRaw(trasladoDR, 'TipoFactorDR') !== 'NO VIENE EN XML' ? attrRaw(trasladoDR, 'TipoFactorDR') : attrRaw(trasladoDR, 'TipoFactor');
-    const tasaOCuotaDR = attrRaw(trasladoDR, 'TasaOCuotaDR') !== 'NO VIENE EN XML' ? attrRaw(trasladoDR, 'TasaOCuotaDR') : attrRaw(trasladoDR, 'TasaOCuota');
-    const importeDR = attrRaw(trasladoDR, 'ImporteDR') !== 'NO VIENE EN XML' ? attrRaw(trasladoDR, 'ImporteDR') : attrRaw(trasladoDR, 'Importe');
-
-    const trasladoP = firstNode(pago, 'TrasladoP') || firstNode(pago, 'Traslado') || firstNode(dr, 'TrasladoP');
-    
-    const baseP = attrRaw(trasladoP, 'BaseP') !== 'NO VIENE EN XML' ? attrRaw(trasladoP, 'BaseP') : attrRaw(trasladoP, 'Base');
-    const impuestoP = attrRaw(trasladoP, 'ImpuestoP') !== 'NO VIENE EN XML' ? attrRaw(trasladoP, 'ImpuestoP') : attrRaw(trasladoP, 'Impuesto');
-    const tipoFactorP = attrRaw(trasladoP, 'TipoFactorP') !== 'NO VIENE EN XML' ? attrRaw(trasladoP, 'TipoFactorP') : attrRaw(trasladoP, 'TipoFactor');
-    const tasaOCuotaP = attrRaw(trasladoP, 'TasaOCuotaP') !== 'NO VIENE EN XML' ? attrRaw(trasladoP, 'TasaOCuotaP') : attrRaw(trasladoP, 'TasaOCuota');
-    const importeP = attrRaw(trasladoP, 'ImporteP') !== 'NO VIENE EN XML' ? attrRaw(trasladoP, 'ImporteP') : attrRaw(trasladoP, 'Importe');
-
-    return {
-      Archivo_XML: r.fileName,
-      UUID: r.uuid,
-      Indice_Nodo: index + 1,
-      Nodo_XML: 'DoctoRelacionado',
-      FechaPago: attrRaw(pago, 'FechaPago'),
-      FormaDePagoP: attrRaw(pago, 'FormaDePagoP'),
-      MonedaP: attrRaw(pago, 'MonedaP'),
-      TipoCambioP: attrRaw(pago, 'TipoCambioP'),
-      Monto: attrRaw(pago, 'Monto'),
-      UUID_CFDI_Relacionado: attrRaw(dr, 'IdDocumento'),
-      Serie_Relacionado: attrRaw(dr, 'Serie'),
-      Folio_Relacionado: attrRaw(dr, 'Folio'),
-      MonedaDR: attrRaw(dr, 'MonedaDR'),
-      NumParcialidad: attrRaw(dr, 'NumParcialidad'),
-      ImpSaldoAnt: attrRaw(dr, 'ImpSaldoAnt'),
-      ImpPagado: attrRaw(dr, 'ImpPagado'),
-      ImpSaldoInsoluto: attrRaw(dr, 'ImpSaldoInsoluto'),
-      BaseDR: baseDR,
-      ImpuestoDR: impuestoDR,
-      TipoFactorDR: tipoFactorDR,
-      TasaOCuotaDR: tasaOCuotaDR,
-      ImporteDR: importeDR,
-      BaseP: baseP,
-      ImpuestoP: impuestoP,
-      TipoFactorP: tipoFactorP,
-      TasaOCuotaP: tasaOCuotaP,
-      ImporteP: importeP,
-      Observacion: 'Complemento de pago extraído'
-    };
+    // Leer desde XML vivo
+    const doc = parseXml(r);
+    nodes(doc, 'DoctoRelacionado').forEach(dr => {
+      const uid = String(dr.getAttribute('IdDocumento') || '').trim().toUpperCase();
+      if (uid) covered.add(uid);
+    });
   });
-});
+  return covered;
+};
+
+const buildPagosRows = (results: ValidationResult[]) => {
+  // Índice de UUIDs de CFDIs de ingreso en el lote (para marcar REP vinculado vs sin origen)
+  const loteUuids = new Set(results.filter(r => r.tipoCFDI !== 'P').map(r => String(r.uuid || '').toUpperCase()));
+
+  return results.flatMap(r => {
+    if (r.desglosePagos && r.desglosePagos.length > 0) {
+      // Enriquecer filas pre-cargadas con campo de vinculación
+      return r.desglosePagos.map((row: any) => {
+        const uuidRel = String(row.UUID_CFDI_Relacionado || row.IdDocumento || '').trim().toUpperCase();
+        const localizado = loteUuids.has(uuidRel) ? 'SI' : (uuidRel && uuidRel !== 'NO VIENE EN XML' ? 'REP SIN CFDI ORIGEN EN LOTE' : 'NO APLICA');
+        return { ...row, ObjetoImpDR: row.ObjetoImpDR || 'NO VIENE EN XML', Complemento_Pago_Localizado: localizado };
+      });
+    }
+    const doc = parseXml(r);
+    const tienePagos = nodes(doc, 'Pagos').length > 0;
+    if (!tienePagos) return [];
+    return nodes(doc, 'DoctoRelacionado').map((dr, index) => {
+      let parent = dr.parentElement;
+      while (parent && nodeName(parent) !== 'Pago') {
+        parent = parent.parentElement;
+      }
+      const pago = parent;
+
+      const impuestosDR = firstNode(dr, 'ImpuestosDR');
+      const trasladoDR = firstNode(impuestosDR, 'TrasladoDR') || firstNode(dr, 'TrasladoDR') || firstNode(impuestosDR, 'Traslado') || firstNode(dr, 'Traslado');
+
+      const baseDR = attrRaw(trasladoDR, 'BaseDR') !== 'NO VIENE EN XML' ? attrRaw(trasladoDR, 'BaseDR') : attrRaw(trasladoDR, 'Base');
+      const impuestoDR = attrRaw(trasladoDR, 'ImpuestoDR') !== 'NO VIENE EN XML' ? attrRaw(trasladoDR, 'ImpuestoDR') : attrRaw(trasladoDR, 'Impuesto');
+      const tipoFactorDR = attrRaw(trasladoDR, 'TipoFactorDR') !== 'NO VIENE EN XML' ? attrRaw(trasladoDR, 'TipoFactorDR') : attrRaw(trasladoDR, 'TipoFactor');
+      const tasaOCuotaDR = attrRaw(trasladoDR, 'TasaOCuotaDR') !== 'NO VIENE EN XML' ? attrRaw(trasladoDR, 'TasaOCuotaDR') : attrRaw(trasladoDR, 'TasaOCuota');
+      const importeDR = attrRaw(trasladoDR, 'ImporteDR') !== 'NO VIENE EN XML' ? attrRaw(trasladoDR, 'ImporteDR') : attrRaw(trasladoDR, 'Importe');
+
+      const trasladoP = firstNode(pago, 'TrasladoP') || firstNode(pago, 'Traslado') || firstNode(dr, 'TrasladoP');
+      const baseP = attrRaw(trasladoP, 'BaseP') !== 'NO VIENE EN XML' ? attrRaw(trasladoP, 'BaseP') : attrRaw(trasladoP, 'Base');
+      const impuestoP = attrRaw(trasladoP, 'ImpuestoP') !== 'NO VIENE EN XML' ? attrRaw(trasladoP, 'ImpuestoP') : attrRaw(trasladoP, 'Impuesto');
+      const tipoFactorP = attrRaw(trasladoP, 'TipoFactorP') !== 'NO VIENE EN XML' ? attrRaw(trasladoP, 'TipoFactorP') : attrRaw(trasladoP, 'TipoFactor');
+      const tasaOCuotaP = attrRaw(trasladoP, 'TasaOCuotaP') !== 'NO VIENE EN XML' ? attrRaw(trasladoP, 'TasaOCuotaP') : attrRaw(trasladoP, 'TasaOCuota');
+      const importeP = attrRaw(trasladoP, 'ImporteP') !== 'NO VIENE EN XML' ? attrRaw(trasladoP, 'ImporteP') : attrRaw(trasladoP, 'Importe');
+
+      // ObjetoImpDR: atributo SAT 4.0 en DoctoRelacionado
+      const objetoImpDR = attrRaw(dr, 'ObjetoImpDR');
+
+      // Vinculación: ¿el UUID del CFDI origen está en el lote?
+      const uuidRel = String(dr.getAttribute('IdDocumento') || '').trim().toUpperCase();
+      const localizado = loteUuids.has(uuidRel) ? 'SI' : (uuidRel ? 'REP SIN CFDI ORIGEN EN LOTE' : 'NO APLICA');
+
+      return {
+        Archivo_XML: r.fileName,
+        UUID: r.uuid,
+        Indice_Nodo: index + 1,
+        Nodo_XML: 'DoctoRelacionado',
+        FechaPago: attrRaw(pago, 'FechaPago'),
+        FormaDePagoP: attrRaw(pago, 'FormaDePagoP'),
+        MonedaP: attrRaw(pago, 'MonedaP'),
+        TipoCambioP: attrRaw(pago, 'TipoCambioP'),
+        Monto: attrRaw(pago, 'Monto'),
+        UUID_CFDI_Relacionado: attrRaw(dr, 'IdDocumento'),
+        Serie_Relacionado: attrRaw(dr, 'Serie'),
+        Folio_Relacionado: attrRaw(dr, 'Folio'),
+        MonedaDR: attrRaw(dr, 'MonedaDR'),
+        NumParcialidad: attrRaw(dr, 'NumParcialidad'),
+        ImpSaldoAnt: attrRaw(dr, 'ImpSaldoAnt'),
+        ImpPagado: attrRaw(dr, 'ImpPagado'),
+        ImpSaldoInsoluto: attrRaw(dr, 'ImpSaldoInsoluto'),
+        ObjetoImpDR: objetoImpDR,
+        BaseDR: baseDR,
+        ImpuestoDR: impuestoDR,
+        TipoFactorDR: tipoFactorDR,
+        TasaOCuotaDR: tasaOCuotaDR,
+        ImporteDR: importeDR,
+        BaseP: baseP,
+        ImpuestoP: impuestoP,
+        TipoFactorP: tipoFactorP,
+        TasaOCuotaP: tasaOCuotaP,
+        ImporteP: importeP,
+        Complemento_Pago_Localizado: localizado,
+        Observacion: 'Complemento de pago extraído'
+      };
+    });
+  });
+};
 
 const addAlert = (alerts: any[], r: ValidationResult, tipo: string, regla: string, riesgo: string, descripcion: string, evidencia: string, recomendacion: string) => {
   alerts.push({
@@ -786,6 +829,11 @@ const buildAlerts = (results: ValidationResult[]) => {
   const alerts: any[] = [];
   const seen = new Map<string, number>();
   results.forEach(r => seen.set(r.uuid, (seen.get(r.uuid) || 0) + 1));
+
+  // ── Índice: UUIDs de CFDIs cubiertos por REPs del lote ─────────────────────
+  // Sirve para suprimir PAGO-01 cuando el REP sí existe en el mismo lote.
+  const repCoverage = buildRepCoverageIndex(results);
+
   results.forEach(r => {
     const detail = cp(r);
     const transporte = String(detail?.transporteInternacional || '').toLowerCase();
@@ -808,7 +856,10 @@ const buildAlerts = (results: ValidationResult[]) => {
     if (isSatTechnicalFailure(r.estatusSAT) || isSatTechnicalFailure(r.trazabilidadInfo?.observacionSAT)) addAlert(alerts, r, 'MATERIALIDAD', 'MAT-01', 'NARANJA', 'Estatus SAT no confirmado.', r.estatusSAT, 'Validar manualmente antes de usar en devolución/acreditamiento.');
     if (/cancelado/i.test(r.estatusSAT)) addAlert(alerts, r, 'MATERIALIDAD', 'MAT-02', 'ROJO', 'CFDI cancelado.', r.estatusSAT, 'No usar para acreditamiento/deducción sin revisión.');
     if ((seen.get(r.uuid) || 0) > 1) addAlert(alerts, r, 'MATERIALIDAD', 'MAT-03', 'ROJO', 'UUID duplicado en lote.', r.uuid, 'Depurar duplicados.');
-    if (r.metodoPago === 'PPD' && normalizeSiNo(r.pagosPresente) !== 'SI') addAlert(alerts, r, 'PAGO', 'PAGO-01', 'NARANJA', 'MetodoPago PPD sin complemento de pago detectado en el lote.', r.metodoPago, 'Integrar complemento de pago para acreditar IVA efectivamente pagado.');
+    // PAGO-01: solo aplica si el UUID del CFDI PPD NO está cubierto por ningún REP del lote
+    if (r.metodoPago === 'PPD' && r.tipoCFDI !== 'P' && !repCoverage.has(String(r.uuid || '').toUpperCase())) {
+      addAlert(alerts, r, 'PAGO', 'PAGO-01', 'NARANJA', 'MetodoPago PPD sin complemento de pago detectado en el lote.', r.metodoPago, 'Integrar complemento de pago para acreditar IVA efectivamente pagado.');
+    }
   });
   return alerts;
 };

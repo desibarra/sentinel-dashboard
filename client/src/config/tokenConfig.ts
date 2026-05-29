@@ -32,14 +32,14 @@ export const DEMO_TOKENS: DemoToken[] = [
     {
         token: "DEMO2026",
         label: "Demo General 2026",
-        expiresAt: "2026-04-30",
+        expiresAt: "2026-12-31", // ✅ AUDIT FIX: Fecha actualizada (estaba vencida: 2026-04-30)
         demoCompanyRFC: "AAA010101AAA",
         demoCompanyName: "Empresa Demo Mentores Estratégicos SA de CV",
     },
     {
         token: "CLIENTE01",
         label: "Prueba Cliente Prospecto 1",
-        expiresAt: "2026-03-31",
+        expiresAt: "2026-12-31", // ✅ AUDIT FIX: Fecha actualizada (estaba vencida: 2026-03-31)
         demoCompanyRFC: "BBB020202BBB",
         demoCompanyName: "Corporativo Ejemplo Norte SA de CV",
     },

@@ -105,6 +105,9 @@ export interface ValidationResult {
     deleted?: boolean;
     deletedAt?: string;
     trazabilidadInfo?: TrazabilidadFiscalInfo;
+    // ✅ FASE 2 - AUDIT FIX: Campos fiscales complementarios extraídos directamente del Comprobante
+    descuentoGlobal: number;    // Atributo Descuento del Comprobante (puede diferir de Σ descuentos por concepto en edge cases)
+    condicionesDePago: string;  // Atributo CondicionesDePago del Comprobante (campo opcional SAT)
 }
 
 export interface UbicacionCP {
@@ -771,8 +774,20 @@ export const evaluarTrazabilidad = (xmlDoc: XMLDocument, xmlContent: string, r: 
 };
 
 export const detectCFDIVersion = (xmlContent: string): string => {
-    const versionMatch = xmlContent.match(/Version="([^"]+)"/);
-    return versionMatch ? versionMatch[1] : "DESCONOCIDA";
+    // ✅ AUDIT FIX: Usar DOM como fuente primaria para evitar falsos positivos con comentarios XML
+    try {
+        const doc = new DOMParser().parseFromString(xmlContent, "text/xml");
+        if (doc.getElementsByTagName("parsererror").length === 0) {
+            const comp = doc.documentElement;
+            if (comp && (comp.localName === "Comprobante" || comp.nodeName.includes("Comprobante"))) {
+                const v = comp.getAttribute("Version") || comp.getAttribute("version");
+                if (v) return v;
+            }
+        }
+    } catch {}
+    // Fallback regex — buscar Version SOLO dentro del elemento Comprobante
+    const m = xmlContent.match(/Comprobante[^>]*Version="([^"]+)"/);
+    return m ? m[1] : "DESCONOCIDA";
 };
 
 export const parseXMLDate = (dateStr: string): { fecha: string; hora: string } => {
@@ -918,7 +933,10 @@ export const extractTaxesByConcepto = (xmlDoc: XMLDocument, version: string) => 
             //   "02" = SI objeto de impuesto   → evaluar nodo Impuestos.Traslados
             //   "03" = Objeto sin desglose      → base va a baseObjetoSinDesglose
             // En CFDI 3.3 el atributo no existe; default "02" para compatibilidad.
-            const objetoImp = nodo.getAttribute("ObjetoImp") || (version === "4.0" ? "01" : "02");
+            // ✅ AUDIT FIX: El default SIEMPRE es "02" (objeto de impuesto).
+            // En CFDI 4.0 ObjetoImp es REQUERIDO según Anexo 20 SAT; si falta es error del PAC.
+            // Asumir "01" (no objeto) causaba falsos NO USABLE al ignorar el IVA real del concepto.
+            const objetoImp = nodo.getAttribute("ObjetoImp") || "02";
             const claveProdServ = nodo.getAttribute("ClaveProdServ") || "";
             const descripcion = nodo.getAttribute("Descripcion") || "";
             const baseConcepto = importe - descuento;
@@ -1048,11 +1066,43 @@ export const extractTaxesByConcepto = (xmlDoc: XMLDocument, version: string) => 
     };
 };
 
-export const validateTotals = (taxesByConcepto: any, totalXML: number) => {
-    const totalCalculado = taxesByConcepto.subtotal + taxesByConcepto.trasladosTotales - taxesByConcepto.retencionesTotales + taxesByConcepto.impuestosLocalesTrasladados - taxesByConcepto.impuestosLocalesRetenidos;
+/**
+ * ✅ FASE 2 - AUDIT FIX (Hallazgo #5):
+ * validateTotals ahora acepta descuentoGlobal como parámetro explícito.
+ *
+ * Fórmula SAT Anexo 20 (oficial):
+ *   Total = SubTotal − Descuento + TotalImpuestosTrasladados − TotalImpuestosRetenidos
+ *
+ * El Descuento a nivel Comprobante puede diferir de Σ(descuentos por concepto) en CFDIs
+ * donde el descuento se aplica globalmente (ej. descuento por pronto pago, bonificación global).
+ * Si no se consideraba, la diferencia podía superar 0.01 → falso NO USABLE.
+ *
+ * COMPATIBILIDAD:
+ * - CFDI 3.3: Descuento era opcional y puede no existir → fallback a 0 (sin cambio de comportamiento)
+ * - CFDI 4.0: Descuento es opcional pero frecuente → se usa el valor real del atributo
+ * - Si descuentoGlobal === 0 (valor por defecto), el cálculo es idéntico al anterior
+ */
+export const validateTotals = (taxesByConcepto: any, totalXML: number, descuentoGlobal: number = 0) => {
+    // subtotal en taxesByConcepto = Σ(importe - descuento por concepto)
+    // Si hay descuento global que ya no está en los conceptos individuales, hay que restarlo del subtotal calculado
+    // Para evitar doble descuento: si Σ descuentos concepto ≈ descuentoGlobal → no hay diferencia.
+    // Si descuentoGlobal > 0 pero los conceptos no tienen descuento → necesitamos restarlo.
+    const sumDescuentosConcepto = taxesByConcepto.desglosePorConcepto
+        ? (taxesByConcepto.desglosePorConcepto as any[]).reduce((sum: number, c: any) => sum + (c.descuento || 0), 0)
+        : 0;
+    // Solo aplicar corrección si el descuento global difiere significativamente de la suma de conceptos
+    const descuentoAjuste = Math.abs(descuentoGlobal - sumDescuentosConcepto) > 0.01
+        ? (descuentoGlobal - sumDescuentosConcepto)
+        : 0;
+    const totalCalculado = taxesByConcepto.subtotal
+        - descuentoAjuste
+        + taxesByConcepto.trasladosTotales
+        - taxesByConcepto.retencionesTotales
+        + taxesByConcepto.impuestosLocalesTrasladados
+        - taxesByConcepto.impuestosLocalesRetenidos;
     const diferencia = Math.abs(totalCalculado - totalXML);
     const tolerancia = 0.01;
-    return { isValid: diferencia <= tolerancia, calculado: Math.round(totalCalculado * 100) / 100, diferencia: Math.round(diferencia * 100) / 100, explicacion: "" };
+    return { isValid: diferencia <= tolerancia, calculado: Math.round(totalCalculado * 100) / 100, diferencia: Math.round(diferencia * 100) / 100, explicacion: descuentoAjuste !== 0 ? `Ajuste por descuento global: ${descuentoAjuste.toFixed(2)}` : "" };
 };
 
 export const generateDesglose = (result: any): string => {
@@ -1109,7 +1159,14 @@ export const extractCartaPorteInfo = (xmlContent: string, version: string) => {
 export const extractPagosInfo = (xmlContent: string, tipoCFDI: string, version: string, añoFiscal: number, requiere: boolean, vEsperada: string) => {
     if (tipoCFDI !== "P") return { presente: "NO APLICA", versionPagos: "NO APLICA", valido: "NO APLICA", errorMsg: "" };
     if (!requiere) return { presente: "NO APLICA", versionPagos: "NO APLICA", valido: "NO APLICA", errorMsg: `Complemento Pagos no existía en ${añoFiscal}` };
-    const tieneP10 = xmlContent.includes("pago10:Pagos"), tieneP20 = xmlContent.includes("pago20:Pagos");
+    // ✅ AUDIT FIX: Regex tolerante a prefijos alternativos (pago10, pago20, p10, p20, Pagos sin prefijo)
+    // PACs como Tralix, Edicom, ContPAQi usan prefijos distintos al estándar
+    const tieneP20 = /(?:pago20|p20):Pagos[\s>]/i.test(xmlContent) || 
+                     (xmlContent.includes("Pagos") && /Version="2\.0"/i.test(xmlContent));
+    const tieneP10 = !tieneP20 && (
+        /(?:pago10|p10):Pagos[\s>]/i.test(xmlContent) || 
+        (xmlContent.includes("Pagos") && /Version="1\.0"/i.test(xmlContent))
+    );
     if (!tieneP10 && !tieneP20) return { presente: "NO", versionPagos: "NO DISPONIBLE", valido: "NO", errorMsg: `Falta complemento de Pagos (${vEsperada})` };
     const vDet = tieneP20 ? "2.0" : "1.0";
     if (vDet !== vEsperada) return { presente: "SI", versionPagos: vDet, valido: "NO", errorMsg: `Requiere Pagos ${vEsperada}, detectado ${vDet}` };
@@ -1130,7 +1187,9 @@ export const calcularScoreInformativo = (resultado: string, isValid: boolean, di
     return isValid && dif === 0 ? 100 : 95;
 };
 
-export const detectarNomina = (xmlContent: string, tipoCFDI: string) => tipoCFDI === "N" && (xmlContent.includes("nomina11:Nomina") || xmlContent.includes("nomina12:Nomina"));
+// ✅ AUDIT FIX: Regex tolerante a prefijos alternativos de Nómina (nomina11, nomina12, nom11, nom12, sin prefijo)
+export const detectarNomina = (xmlContent: string, tipoCFDI: string) => 
+    tipoCFDI === "N" && /(?:nomina11|nomina12|nom11|nom12)?:?Nomina[\s>"]/i.test(xmlContent);
 
 export const extractNominaInfo = (xmlDoc: XMLDocument, xmlContent: string) => {
     const nodes = Array.from(xmlDoc.documentElement?.getElementsByTagName("*") || []);
@@ -1362,6 +1421,12 @@ export const classifyCFDI = (
         // Caso Base Sano - Facturas/REP
         resultado = "🟢 USABLE";
         comentarioFiscal = "CFDI válido. Total correcto calculado por concepto considerando impuestos y retenciones. Sin inconsistencias relevantes detectadas.";
+    }
+
+    // ALERTA MAT-06: Egreso sin relacionados
+    if (tipoCFDI === "E" && !xmlContent.includes("CfdiRelacionados") && resultado !== "🔴 NO USABLE") {
+        resultado = "🟡 ALERTA";
+        comentarioFiscal += (comentarioFiscal ? " " : "") + "[MAT-06] CFDI de Egreso sin CfdiRelacionados. Revisar soporte documental y confirmar si corresponde a nota de crédito, devolución, bonificación o egreso autónomo válido.";
     }
 
     // C. Clasificación de IVA (Exento vs Riesgo) — no aplica a nómina

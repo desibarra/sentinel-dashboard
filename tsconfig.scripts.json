@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "noEmit": false,
+    "allowImportingTsExtensions": false,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "outDir": "./dist-scripts"
+  },
+  "include": ["scripts/**/*", "client/src/lib/**/*", "shared/**/*"],
+  "exclude": ["node_modules", "dist", "build"]
+}

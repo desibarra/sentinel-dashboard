@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.sat.gob.mx/cfd/4 http://www.sat.gob.mx/sitio_internet/cfd/4/cfdv40.xsd"
+  Version="4.0" Serie="REP" Folio="001"
+  Fecha="2026-04-05T10:00:00" Sello="---"
+  FormaPago="03" NoCertificado="00001000000504465950" Certificado="---"
+  SubTotal="56.80" Moneda="XXX" Total="88.97"
+  TipoDeComprobante="P" Exportacion="01" LugarExpedicion="45000">
+  <cfdi:Emisor Rfc="TME960709LR2" Nombre="TRANSPORTES MEXICANOS ESPECIALIZADOS SA DE CV" RegimenFiscal="601"/>
+  <cfdi:Receptor Rfc="IATD70020G77" Nombre="EMPRESA SA DE CV" DomicilioFiscalReceptor="32310" RegimenFiscalReceptor="603" UsoCFDI="CP01"/>
+  <cfdi:Conceptos>
+    <cfdi:Concepto ClaveProdServ="84111506" NoIdentificacion="N/A" Cantidad="1" ClaveUnidad="ACT" Descripcion="Pago" ValorUnitario="0" Importe="0" ObjetoImp="01"/>
+  </cfdi:Conceptos>
+  <cfdi:Complemento>
+    <tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital"
+      Version="1.1" UUID="9EAE9012-5D0C-E0ED-79E4-F621E114E95A"
+      FechaTimbrado="2026-04-05T10:05:00" RfcProvCertif="SAT970701NN3"
+      SelloCFD="

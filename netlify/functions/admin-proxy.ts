@@ -25,10 +25,16 @@ export const handler = async (event: any) => {
 
         const apiTokenExists = !!process.env.NETLIFY_API_TOKEN;
         const siteIdExists = !!process.env.NETLIFY_SITE_ID;
-        const usedSiteId = process.env.NETLIFY_SITE_ID || "45d68d70-756c-49fd-8162-9efbc826c577";
         
         console.log(`[AdminProxy] NETLIFY_API_TOKEN existe: ${apiTokenExists}`);
         console.log(`[AdminProxy] NETLIFY_SITE_ID existe: ${siteIdExists}`);
+
+        if (!siteIdExists) {
+            console.error("[AdminProxy] Error: NETLIFY_SITE_ID is not set in the environment.");
+            return { statusCode: 500, body: JSON.stringify({ error: "Error de configuración interna del servidor (SITE_ID faltante)." }) };
+        }
+        
+        const usedSiteId = process.env.NETLIFY_SITE_ID;
         console.log(`[AdminProxy] siteID usado: ${usedSiteId}`);
         console.log(`[AdminProxy] store name usado: sentinel-tokens`);
 
