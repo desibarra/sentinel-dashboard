@@ -69,12 +69,13 @@ describe('Sentinel Express - Motor Fiscal (Audit Tests)', () => {
         const taxes = engine.extractTaxesByConcepto(xmlDoc, '4.0');
         const validation = engine.validateTotals(taxes, 116.00);
 
-        // El test debería pasar si el motor ignora el TipoCambio (comportamiento actual)
-        // y valida contra el total en la misma moneda del subtotal.
+        // El motor valida los importes en la moneda declarada del CFDI (USD).
+        // No convierte automáticamente a MXN usando TipoCambio.
+        // La conversión a MXN, si se requiere para reportes contables, debe ser
+        // una capa separada, no parte de la validación aritmética del XML.
         expect(taxes.subtotal).toBe(100);
-        expect(taxes.ivaTraslado).toBe(0);
-        expect(validation.isValid).toBe(false);
-        // NOTA: Se confirma que el motor actual NO convierte a MXN, validando solo la aritmética interna.
+        expect(taxes.ivaTraslado).toBe(16);
+        expect(validation.isValid).toBe(true);
     });
 
     it('Test-C-02: IEPS de cuota fija', () => {
