@@ -115,3 +115,4 @@ data/sentinel.db*
 tests/fixtures/*.xlsx
 reports/dev-outputs/*.xlsx
 legacy/**/*.xlsx
+reports/certificacion/*.xlsx
