@@ -1,0 +1,58 @@
+{
+  "file": "test-cfdi-ejemplo.xml",
+  "version": "4.0",
+  "tipoCFDI": "I",
+  "total": 270.5,
+  "receptor": {
+    "rfc": "BBB020202BBB",
+    "nombre": "CLIENTE EJEMPLO SA DE CV",
+    "regimenFiscal": "601",
+    "usoCFDI": "G03"
+  },
+  "taxes": {
+    "subtotal": 233.18,
+    "baseIVA16": 233.18,
+    "baseIVA8": 0,
+    "baseIVA0": 0,
+    "baseIVAExento": 0,
+    "baseNoObjeto": 0,
+    "baseObjetoSinDesglose": 0,
+    "clasificacionFiscal": "GRAVADO",
+    "ivaTraslado": 37.32,
+    "ivaRetenido": 0,
+    "isrRetenido": 0,
+    "iepsTraslado": 0,
+    "iepsRetenido": 0,
+    "impuestosLocalesTrasladados": 0,
+    "impuestosLocalesRetenidos": 0,
+    "trasladosTotales": 37.32,
+    "retencionesTotales": 0,
+    "desglosePorConcepto": [
+      {
+        "numero": 1,
+        "importe": 233.18,
+        "descuento": 0,
+        "objetoImp": "02",
+        "claveProdServ": "01010101",
+        "descripcion": "Servicio de ejemplo",
+        "cantidad": 1,
+        "noIdentificacion": "PROD001",
+        "valorUnitario": 233.18,
+        "traslados": [
+          {
+            "impuesto": "002",
+            "tasa": "0.160000",
+            "importe": 37.32,
+            "base": 233.18,
+            "tipoFactor": "Tasa"
+          }
+        ],
+        "retenciones": [],
+        "subtotalAcumulado": 233.18,
+        "totalParcial": 270.5
+      }
+    ]
+  },
+  "isValid": true,
+  "diferencia": 0
+}

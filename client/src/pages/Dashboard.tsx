@@ -10,6 +10,7 @@ import UploadZone, { UploadedFile } from "@/components/UploadZone";
 import { useXMLValidator } from "@/hooks/useXMLValidator";
 import { ValidationResult } from "@/lib/cfdiEngine";
 import { exportToExcel } from "@/lib/excelExporter";
+import { clasificarPorRFCBase, detectarRFCFrecuente, ValidationResultExtended } from "@/lib/classificationEngine";
 import { toast } from "sonner";
 import { useTheme } from "@/contexts/ThemeContext";
 import { Link } from "wouter";
@@ -42,6 +43,11 @@ export default function Dashboard() {
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [currentPage, setCurrentPage] = useState(1);
   const ITEMS_PER_PAGE = 50;
+
+  // ── Módulo 2A: RFC Base y Clasificación ──
+  const [rfcBaseConfirmado, setRfcBaseConfirmado] = useState<string>("");
+  const [rfcBaseInput, setRfcBaseInput] = useState<string>("");
+  const [rfcSugerido, setRfcSugerido] = useState<string>("");
 
   // ── Contador de XMLs procesados (informativo, sin límite visible) ──
   const [xmlCount, setXmlCount] = useState<number>(getXMLCount());
@@ -103,10 +109,11 @@ export default function Dashboard() {
     if (cached && cached.results.length > 0) {
 
       setResults(cached.results);
-
       setHasValidatedResults(true);
-
       setXmlCount(cached.results.length);
+      const sug = detectarRFCFrecuente(cached.results);
+      setRfcSugerido(sug);
+      if (sug && !rfcBaseConfirmado) setRfcBaseInput(sug);
 
       const age = getCacheAge();
 
@@ -216,6 +223,10 @@ export default function Dashboard() {
       const newResults = [...results, ...uniqueNewResults];
       setResults(newResults);
       setHasValidatedResults(true);
+      
+      const sug = detectarRFCFrecuente(newResults);
+      setRfcSugerido(sug);
+      if (sug && !rfcBaseConfirmado) setRfcBaseInput(sug);
 
       // Actualizar contador informativo solo con los nuevos reales
       const newCount = incrementXMLCount(uniqueNewResults.length);
@@ -306,17 +317,16 @@ export default function Dashboard() {
   // sincroniza el contador de XML y muestra confirmación al usuario
 
   const handleLoadHistory = (history: ValidationHistory) => {
-
     setResults(history.results || []);
-
     setHasValidatedResults(true);
-
     setXmlCount(history.xmlCount);   // FIX 3: sincroniza contador del header
-
     setCurrentPage(1);               // regresa a la primera página de la tabla
+    
+    const sug = detectarRFCFrecuente(history.results || []);
+    setRfcSugerido(sug);
+    if (sug && !rfcBaseConfirmado) setRfcBaseInput(sug);
 
     toast.success(`Proceso restaurado: ${(history.xmlCount || 0).toLocaleString()} CFDI · ${history.fileName}`, { duration: 4000 });
-
   };
 
 
@@ -334,13 +344,10 @@ export default function Dashboard() {
 
 
   const handleExportToExcel = () => {
-
     try {
-
-      exportToExcel(results);
-
+      // Exportamos los clasificados en lugar de los crudos
+      exportToExcel(clasificados);
       toast.success("Diagnóstico exportado exitosamente");
-
     } catch (error) {
 
       toast.error("Error al exportar el diagnóstico");
@@ -362,6 +369,9 @@ export default function Dashboard() {
       setSortDirection(null);
       setCurrentPage(1);
       setXmlCount(0);
+      setRfcBaseConfirmado("");
+      setRfcBaseInput("");
+      setRfcSugerido("");
 
       // 2. Limpiar almacenamiento local
       clearSessionCache();
@@ -387,6 +397,20 @@ export default function Dashboard() {
 
   // Filtrar XML eliminados (Soft delete)
   const visibleResults = results.filter(r => !r.deleted);
+
+  // Clasificación por RFC Base (Módulo 2A)
+  const clasificados = React.useMemo(() => {
+    return clasificarPorRFCBase(visibleResults, rfcBaseConfirmado);
+  }, [visibleResults, rfcBaseConfirmado]);
+
+  const clasificacionStats = React.useMemo(() => {
+    return {
+      emitidos: clasificados.filter(r => r.clasificacion === 'EMITIDO').length,
+      recibidos: clasificados.filter(r => r.clasificacion === 'RECIBIDO').length,
+      ajenos: clasificados.filter(r => r.clasificacion === 'AJENO').length,
+      ambiguos: clasificados.filter(r => r.clasificacion === 'AMBIGUO').length,
+    };
+  }, [clasificados]);
 
   // Calcular estadísticas
 
@@ -569,7 +593,7 @@ export default function Dashboard() {
 
   // Aplicar ordenamiento a los resultados
 
-  const sortedResults = [...visibleResults].sort((a, b) => {
+  const sortedResults = [...clasificados].sort((a, b) => {
 
     if (!sortField || !sortDirection) return 0;
 
@@ -1610,7 +1634,78 @@ export default function Dashboard() {
 
         )}
 
+        {/* ── Módulo 2A: Panel de Clasificación por RFC Base ── */}
+        {stats.total > 0 && (
+          <Card className="border-0 shadow-sm dark:bg-slate-800 dark:border-slate-700 mb-8">
+            <CardHeader className="pb-4">
+              <CardTitle className="text-lg dark:text-slate-100 flex items-center gap-2">
+                <FileText className="w-5 h-5" /> Configuración de Contribuyente Base
+              </CardTitle>
+              <CardDescription className="dark:text-slate-400">
+                Confirma el RFC para clasificar los CFDI como Emitidos o Recibidos.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-col md:flex-row gap-6 items-start md:items-center justify-between">
+                <div className="flex-1 w-full flex items-end gap-3">
+                  <div className="flex-1 max-w-xs">
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1.5 block">
+                      RFC Base {rfcBaseConfirmado ? "(Confirmado)" : "(Requerido)"}
+                    </label>
+                    <Input 
+                      placeholder="Ej. XAXX010101000" 
+                      value={rfcBaseInput}
+                      onChange={(e) => setRfcBaseInput(e.target.value.toUpperCase())}
+                      className={rfcBaseConfirmado === rfcBaseInput && rfcBaseConfirmado !== "" ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-900/10" : ""}
+                    />
+                  </div>
+                  <Button 
+                    onClick={() => {
+                      if (rfcBaseInput.length >= 12) {
+                        setRfcBaseConfirmado(rfcBaseInput);
+                        toast.success(`Clasificación actualizada para RFC Base: ${rfcBaseInput}`);
+                      } else {
+                        toast.error("El RFC debe tener al menos 12 caracteres");
+                      }
+                    }}
+                    className={rfcBaseConfirmado === rfcBaseInput && rfcBaseConfirmado !== "" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-primary"}
+                  >
+                    Confirmar RFC
+                  </Button>
+                  
+                  {rfcSugerido && rfcSugerido !== rfcBaseConfirmado && (
+                    <Button 
+                      variant="outline" 
+                      onClick={() => setRfcBaseInput(rfcSugerido)}
+                      className="text-xs border-dashed"
+                    >
+                      Sugerencia: {rfcSugerido}
+                    </Button>
+                  )}
+                </div>
 
+                <div className="flex gap-4">
+                  <div className="bg-slate-50 dark:bg-slate-900/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700 text-center min-w-[80px]">
+                    <p className="text-[10px] font-black uppercase text-slate-500 mb-1">Emitidos</p>
+                    <p className="text-2xl font-black text-slate-800 dark:text-slate-200">{clasificacionStats.emitidos}</p>
+                  </div>
+                  <div className="bg-slate-50 dark:bg-slate-900/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700 text-center min-w-[80px]">
+                    <p className="text-[10px] font-black uppercase text-slate-500 mb-1">Recibidos</p>
+                    <p className="text-2xl font-black text-slate-800 dark:text-slate-200">{clasificacionStats.recibidos}</p>
+                  </div>
+                  <div className="bg-slate-50 dark:bg-slate-900/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700 text-center min-w-[80px]">
+                    <p className="text-[10px] font-black uppercase text-slate-500 mb-1">Ajenos</p>
+                    <p className="text-2xl font-black text-slate-800 dark:text-slate-200">{clasificacionStats.ajenos}</p>
+                  </div>
+                  <div className="bg-slate-50 dark:bg-slate-900/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700 text-center min-w-[80px]">
+                    <p className="text-[10px] font-black uppercase text-slate-500 mb-1">Ambiguos</p>
+                    <p className="text-2xl font-black text-slate-800 dark:text-slate-200">{clasificacionStats.ambiguos}</p>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Detailed Table */}
 
@@ -1725,6 +1820,9 @@ export default function Dashboard() {
 
                       </th>
 
+                      <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400 border-b border-slate-200 dark:border-slate-800 bg-inherit">
+                        Clasificación
+                      </th>
                       <th className="text-left py-4 px-4 font-black text-[10px] uppercase tracking-widest text-slate-400 border-b border-slate-200 dark:border-slate-800 bg-inherit">
 
                         <button
@@ -1936,6 +2034,22 @@ export default function Dashboard() {
 
                           </td>
 
+                          <td className="py-4 px-4 whitespace-nowrap">
+                            {(() => {
+                              const clsValue = (result as ValidationResultExtended).clasificacion || "AMBIGUO";
+                              const colorMap = {
+                                'EMITIDO': 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/40 dark:text-blue-300',
+                                'RECIBIDO': 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/40 dark:text-emerald-300',
+                                'AJENO': 'bg-rose-100 text-rose-800 border-rose-200 dark:bg-rose-900/40 dark:text-rose-300',
+                                'AMBIGUO': 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400',
+                              };
+                              return (
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest border ${colorMap[clsValue]}`}>
+                                  {clsValue}
+                                </span>
+                              );
+                            })()}
+                          </td>
                           <td className="py-4 px-4 text-slate-600 dark:text-slate-300 whitespace-nowrap font-medium">{formatDate(result.fechaEmision)}</td>
 
                           <td className="py-4 px-4 text-slate-600 dark:text-slate-400 font-mono text-xs font-bold bg-slate-50/50 dark:bg-slate-900/50 rounded-lg">{result.rfcEmisor}</td>

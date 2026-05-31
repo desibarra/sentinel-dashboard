@@ -569,6 +569,11 @@ const buildForensicRows = (results: ValidationResult[]) => results.map(r => {
   return {
     Archivo_XML: r.fileName,
     UUID: r.uuid,
+    Clasificacion_M2A: (r as any).clasificacion || 'AMBIGUO',
+    RFC_Base_M2A: (r as any).rfcBase || 'NO DEFINIDO',
+    RFC_Contraparte_M2A: (r as any).rfcContraparte || 'NO APLICA',
+    Rol_Contraparte_M2A: (r as any).rolContraparte || 'NO APLICA',
+    Tipo_Financiero_M2A: (r as any).tipoFinanciero || 'DESCONOCIDO',
     Version_CFDI: r.versionCFDI,
     Tipo_CFDI: r.tipoCFDI,
     Serie: r.serie,

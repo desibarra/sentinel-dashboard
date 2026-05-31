@@ -1,0 +1,408 @@
+[
+  {
+    "file": "01_FACTURA_CORRECTA.xml",
+    "version": "4.0",
+    "tipoCFDI": "I",
+    "total": 1160,
+    "receptor": {
+      "rfc": "IATD70020G77",
+      "nombre": "EMPRESA SA DE CV",
+      "regimenFiscal": "603",
+      "usoCFDI": "G03"
+    },
+    "taxes": {
+      "subtotal": 1000,
+      "baseIVA16": 1000,
+      "baseIVA8": 0,
+      "baseIVA0": 0,
+      "baseIVAExento": 0,
+      "baseNoObjeto": 0,
+      "baseObjetoSinDesglose": 0,
+      "clasificacionFiscal": "GRAVADO",
+      "ivaTraslado": 160,
+      "ivaRetenido": 0,
+      "isrRetenido": 0,
+      "iepsTraslado": 0,
+      "iepsRetenido": 0,
+      "impuestosLocalesTrasladados": 0,
+      "impuestosLocalesRetenidos": 0,
+      "trasladosTotales": 160,
+      "retencionesTotales": 0,
+      "desglosePorConcepto": [
+        {
+          "numero": 1,
+          "importe": 1000,
+          "descuento": 0,
+          "objetoImp": "02",
+          "claveProdServ": "78181500",
+          "descripcion": "MANTENIMIENTO PREVENTIVO DE FLOTA SEPTIEMBRE",
+          "cantidad": 1,
+          "noIdentificacion": "7501030034",
+          "valorUnitario": 1000,
+          "traslados": [
+            {
+              "impuesto": "002",
+              "tasa": "0.160000",
+              "importe": 160,
+              "base": 1000,
+              "tipoFactor": "Tasa"
+            }
+          ],
+          "retenciones": [],
+          "subtotalAcumulado": 1000,
+          "totalParcial": 1160
+        }
+      ]
+    },
+    "isValid": true,
+    "diferencia": 0,
+    "cartaPorte": {
+      "presente": "NO",
+      "completa": "NO APLICA",
+      "version": "NO APLICA"
+    },
+    "pagos": {
+      "presente": "NO APLICA",
+      "versionPagos": "NO APLICA",
+      "valido": "NO APLICA",
+      "errorMsg": ""
+    }
+  },
+  {
+    "file": "02_ALERTA_EFOS_LISTA_NEGRA.xml",
+    "version": "4.0",
+    "tipoCFDI": "I",
+    "total": 58000,
+    "receptor": {
+      "rfc": "IATD70020G77",
+      "nombre": "EMPRESA SA DE CV",
+      "regimenFiscal": "603",
+      "usoCFDI": "G03"
+    },
+    "taxes": {
+      "subtotal": 50000,
+      "baseIVA16": 50000,
+      "baseIVA8": 0,
+      "baseIVA0": 0,
+      "baseIVAExento": 0,
+      "baseNoObjeto": 0,
+      "baseObjetoSinDesglose": 0,
+      "clasificacionFiscal": "GRAVADO",
+      "ivaTraslado": 8000,
+      "ivaRetenido": 0,
+      "isrRetenido": 0,
+      "iepsTraslado": 0,
+      "iepsRetenido": 0,
+      "impuestosLocalesTrasladados": 0,
+      "impuestosLocalesRetenidos": 0,
+      "trasladosTotales": 8000,
+      "retencionesTotales": 0,
+      "desglosePorConcepto": [
+        {
+          "numero": 1,
+          "importe": 50000,
+          "descuento": 0,
+          "objetoImp": "02",
+          "claveProdServ": "80101500",
+          "descripcion": "CONSULTORIA ESTRATEGICA EMPRESARIAL",
+          "cantidad": 1,
+          "noIdentificacion": "7501030034",
+          "valorUnitario": 50000,
+          "traslados": [
+            {
+              "impuesto": "002",
+              "tasa": "0.160000",
+              "importe": 8000,
+              "base": 50000,
+              "tipoFactor": "Tasa"
+            }
+          ],
+          "retenciones": [],
+          "subtotalAcumulado": 50000,
+          "totalParcial": 58000
+        }
+      ]
+    },
+    "isValid": true,
+    "diferencia": 0,
+    "cartaPorte": {
+      "presente": "NO",
+      "completa": "NO APLICA",
+      "version": "NO APLICA"
+    },
+    "pagos": {
+      "presente": "NO APLICA",
+      "versionPagos": "NO APLICA",
+      "valido": "NO APLICA",
+      "errorMsg": ""
+    }
+  },
+  {
+    "file": "03_ALERTA_FALTA_CARTA_PORTE.xml",
+    "version": "4.0",
+    "tipoCFDI": "I",
+    "total": 13920,
+    "receptor": {
+      "rfc": "IATD70020G77",
+      "nombre": "EMPRESA SA DE CV",
+      "regimenFiscal": "603",
+      "usoCFDI": "G03"
+    },
+    "taxes": {
+      "subtotal": 12000,
+      "baseIVA16": 12000,
+      "baseIVA8": 0,
+      "baseIVA0": 0,
+      "baseIVAExento": 0,
+      "baseNoObjeto": 0,
+      "baseObjetoSinDesglose": 0,
+      "clasificacionFiscal": "GRAVADO",
+      "ivaTraslado": 1920,
+      "ivaRetenido": 0,
+      "isrRetenido": 0,
+      "iepsTraslado": 0,
+      "iepsRetenido": 0,
+      "impuestosLocalesTrasladados": 0,
+      "impuestosLocalesRetenidos": 0,
+      "trasladosTotales": 1920,
+      "retencionesTotales": 0,
+      "desglosePorConcepto": [
+        {
+          "numero": 1,
+          "importe": 12000,
+          "descuento": 0,
+          "objetoImp": "02",
+          "claveProdServ": "78101802",
+          "descripcion": "FLETE DE MERCANCIA RUTA CDMX - GUADALAJARA 450KM",
+          "cantidad": 1,
+          "noIdentificacion": "7501030034",
+          "valorUnitario": 12000,
+          "traslados": [
+            {
+              "impuesto": "002",
+              "tasa": "0.160000",
+              "importe": 1920,
+              "base": 12000,
+              "tipoFactor": "Tasa"
+            }
+          ],
+          "retenciones": [],
+          "subtotalAcumulado": 12000,
+          "totalParcial": 13920
+        }
+      ]
+    },
+    "isValid": true,
+    "diferencia": 0,
+    "cartaPorte": {
+      "presente": "NO",
+      "completa": "NO APLICA",
+      "version": "NO APLICA"
+    },
+    "pagos": {
+      "presente": "NO APLICA",
+      "versionPagos": "NO APLICA",
+      "valido": "NO APLICA",
+      "errorMsg": ""
+    }
+  },
+  {
+    "file": "04_FACTURA_CON_CARTA_PORTE_OK.xml",
+    "version": "4.0",
+    "tipoCFDI": "I",
+    "total": 17400,
+    "receptor": {
+      "rfc": "IATD70020G77",
+      "nombre": "EMPRESA SA DE CV",
+      "regimenFiscal": "603",
+      "usoCFDI": "G03"
+    },
+    "taxes": {
+      "subtotal": 15000,
+      "baseIVA16": 15000,
+      "baseIVA8": 0,
+      "baseIVA0": 0,
+      "baseIVAExento": 0,
+      "baseNoObjeto": 0,
+      "baseObjetoSinDesglose": 0,
+      "clasificacionFiscal": "GRAVADO",
+      "ivaTraslado": 2400,
+      "ivaRetenido": 0,
+      "isrRetenido": 0,
+      "iepsTraslado": 0,
+      "iepsRetenido": 0,
+      "impuestosLocalesTrasladados": 0,
+      "impuestosLocalesRetenidos": 0,
+      "trasladosTotales": 2400,
+      "retencionesTotales": 0,
+      "desglosePorConcepto": [
+        {
+          "numero": 1,
+          "importe": 15000,
+          "descuento": 0,
+          "objetoImp": "02",
+          "claveProdServ": "78101802",
+          "descripcion": "SERVICIO DE TRANSPORTE DE CARGA TERCERIZADO",
+          "cantidad": 1,
+          "noIdentificacion": "7501030034",
+          "valorUnitario": 15000,
+          "traslados": [
+            {
+              "impuesto": "002",
+              "tasa": "0.160000",
+              "importe": 2400,
+              "base": 15000,
+              "tipoFactor": "Tasa"
+            }
+          ],
+          "retenciones": [],
+          "subtotalAcumulado": 15000,
+          "totalParcial": 17400
+        }
+      ]
+    },
+    "isValid": true,
+    "diferencia": 0,
+    "cartaPorte": {
+      "presente": "SI",
+      "completa": "SI",
+      "version": "3.1"
+    },
+    "pagos": {
+      "presente": "NO APLICA",
+      "versionPagos": "NO APLICA",
+      "valido": "NO APLICA",
+      "errorMsg": ""
+    }
+  },
+  {
+    "file": "05_ERROR_TOTALES_DESCUADRE.xml",
+    "version": "4.0",
+    "tipoCFDI": "I",
+    "total": 1500,
+    "receptor": {
+      "rfc": "IATD70020G77",
+      "nombre": "EMPRESA SA DE CV",
+      "regimenFiscal": "603",
+      "usoCFDI": "G03"
+    },
+    "taxes": {
+      "subtotal": 1000,
+      "baseIVA16": 1000,
+      "baseIVA8": 0,
+      "baseIVA0": 0,
+      "baseIVAExento": 0,
+      "baseNoObjeto": 0,
+      "baseObjetoSinDesglose": 0,
+      "clasificacionFiscal": "GRAVADO",
+      "ivaTraslado": 160,
+      "ivaRetenido": 0,
+      "isrRetenido": 0,
+      "iepsTraslado": 0,
+      "iepsRetenido": 0,
+      "impuestosLocalesTrasladados": 0,
+      "impuestosLocalesRetenidos": 0,
+      "trasladosTotales": 160,
+      "retencionesTotales": 0,
+      "desglosePorConcepto": [
+        {
+          "numero": 1,
+          "importe": 1000,
+          "descuento": 0,
+          "objetoImp": "02",
+          "claveProdServ": "44121708",
+          "descripcion": "ARTICULOS DE OFICINA VARIOS",
+          "cantidad": 1,
+          "noIdentificacion": "7501030034",
+          "valorUnitario": 1000,
+          "traslados": [
+            {
+              "impuesto": "002",
+              "tasa": "0.160000",
+              "importe": 160,
+              "base": 1000,
+              "tipoFactor": "Tasa"
+            }
+          ],
+          "retenciones": [],
+          "subtotalAcumulado": 1000,
+          "totalParcial": 1160
+        }
+      ]
+    },
+    "isValid": false,
+    "diferencia": 340,
+    "cartaPorte": {
+      "presente": "NO",
+      "completa": "NO APLICA",
+      "version": "NO APLICA"
+    },
+    "pagos": {
+      "presente": "NO APLICA",
+      "versionPagos": "NO APLICA",
+      "valido": "NO APLICA",
+      "errorMsg": ""
+    }
+  },
+  {
+    "file": "06_COMPLEMENTO_PAGO_REP.xml",
+    "version": "4.0",
+    "tipoCFDI": "P",
+    "total": 0,
+    "receptor": {
+      "rfc": "IATD70020G77",
+      "nombre": "EMPRESA SA DE CV",
+      "regimenFiscal": "603",
+      "usoCFDI": "CP01"
+    },
+    "taxes": {
+      "subtotal": 0,
+      "baseIVA16": 0,
+      "baseIVA8": 0,
+      "baseIVA0": 0,
+      "baseIVAExento": 0,
+      "baseNoObjeto": 0,
+      "baseObjetoSinDesglose": 0,
+      "clasificacionFiscal": "SIN_IMPUESTOS",
+      "ivaTraslado": 0,
+      "ivaRetenido": 0,
+      "isrRetenido": 0,
+      "iepsTraslado": 0,
+      "iepsRetenido": 0,
+      "impuestosLocalesTrasladados": 0,
+      "impuestosLocalesRetenidos": 0,
+      "trasladosTotales": 0,
+      "retencionesTotales": 0,
+      "desglosePorConcepto": [
+        {
+          "numero": 1,
+          "importe": 0,
+          "descuento": 0,
+          "objetoImp": "01",
+          "claveProdServ": "84111506",
+          "descripcion": "Pago",
+          "cantidad": 1,
+          "noIdentificacion": "N/A",
+          "valorUnitario": 0,
+          "traslados": [],
+          "retenciones": [],
+          "subtotalAcumulado": 0,
+          "totalParcial": 0
+        }
+      ]
+    },
+    "isValid": true,
+    "diferencia": 0,
+    "cartaPorte": {
+      "presente": "NO",
+      "completa": "NO APLICA",
+      "version": "NO APLICA"
+    },
+    "pagos": {
+      "presente": "NO APLICA",
+      "versionPagos": "NO APLICA",
+      "valido": "NO APLICA",
+      "errorMsg": "Complemento Pagos no existía en 2024"
+    }
+  }
+]
