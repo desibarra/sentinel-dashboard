@@ -1,5 +1,5 @@
 import { useState as reactUseState } from "react";
-const useState = typeof window === 'undefined' ? (init: any) => [init, () => {}] : reactUseState;
+const useState = (typeof window === 'undefined' ? (init: any) => [init, () => {}] : reactUseState) as any;
 import { UploadedFile } from "@/components/UploadZone";
 import { checkCFDIStatusSAT } from "@/utils/satStatusValidator";
 import { checkRFCBlacklist, BlacklistValidation } from "@/utils/blacklistValidator"; // Nuevo
@@ -32,7 +32,7 @@ import {
 
 export function useXMLValidator() {
   const [isValidating, setIsValidating] = useState(false);
-  const [validationResults, setValidationResults] = useState<ValidationResult[]>([]);
+  const [validationResults, setValidationResults] = useState([]);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
 
   // ✅ PRODUCCIÓN: Procesamiento por LOTES para evitar congelamiento
@@ -91,7 +91,7 @@ export function useXMLValidator() {
       }
 
       // Actualizar resultados incrementalmente para feedback visual
-      setValidationResults((prev) => [...prev, ...validResults]);
+      setValidationResults((prev: any) => [...prev, ...validResults]);
 
       // Delay entre lotes para permitir que el navegador respire
       if (i + BATCH_SIZE < files.length) {
@@ -398,6 +398,8 @@ export function useXMLValidator() {
             totalCalculado: 0,
             diferenciaTotales: 0,
             desglosePorConcepto: [],
+            descuentoGlobal: 0,
+            condicionesDePago: "NO DISPONIBLE",
             desglose: "",
             esNomina: "SÍ",
             versionNomina: nominaInfo.versionNomina,
