@@ -1495,7 +1495,7 @@ const applyComparativoSheetDefaults = (ws: any, dataRows: any[]) => {
 
 // ─── END COMPARATIVO BASE Y TASA IVA ─────────────────────────────────────────
 
-export function exportToExcel(results: ValidationResult[], fileNameOverride?: string, oneFactureData?: string[]) {
+export function exportToExcel(results: ValidationResult[], fileNameOverride?: string, externalData?: string[]) {
   // 1. Separar resultados válidos e inválidos
   const isValidUUID = (uuid: string | undefined): boolean => {
     if (!uuid) return false;
@@ -2237,33 +2237,33 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
   const wsResumenHomologado = (XLSX as any).utils.json_to_sheet(dataResumenHomologado);
   (XLSX as any).utils.book_append_sheet(wb, wsResumenHomologado, 'Resumen_Carta_Porte_Homologado');
 
-  // --- NUEVA HOJA: Homologacion_OneFacture ---
-  let ofLeidos = 0;
-  let ofUnicos = 0;
-  let ofPrincipal = 0;
-  let ofRelacionado = 0;
-  let ofNoLocalizado = 0;
+  // --- NUEVA HOJA: Homologacion_Externa ---
+  let extLeidos = 0;
+  let extUnicos = 0;
+  let extPrincipal = 0;
+  let extRelacionado = 0;
+  let extNoLocalizado = 0;
   let ofDiferencia = 0;
   let ofCoincidencia = 0;
   let ofManual = 0;
 
-  if (oneFactureData && oneFactureData.length > 0) {
-    const dataHomologacionOneFacture: any[] = [];
-    ofLeidos = oneFactureData.length;
+  if (externalData && externalData.length > 0) {
+    const dataHomologacionExterna: any[] = [];
+    extLeidos = externalData.length;
     
-    // Normalizar y deduplicar UUIDs provistos por OneFacture
+    // Normalizar y deduplicar UUIDs provistos por Externa
     const uniqueOFSet = new Set<string>();
-    oneFactureData.forEach(uuidRaw => {
+    externalData.forEach(uuidRaw => {
       if (uuidRaw) {
         const normalized = uuidRaw.replace(/[{}]/g, '').trim().toUpperCase();
         if (normalized) uniqueOFSet.add(normalized);
       }
     });
     const uniqueOF = Array.from(uniqueOFSet);
-    ofUnicos = uniqueOF.length;
+    extUnicos = uniqueOF.length;
 
-    uniqueOF.forEach(ofUuid => {
-      const sNode = uuidMap.get(ofUuid);
+    uniqueOF.forEach(extUuid => {
+      const sNode = uuidMap.get(extUuid);
       let encontrado = sNode ? 'SI' : 'NO';
       let aparecePrin = sNode?.isPrincipal ? 'SI' : 'NO';
       let apareceRel = sNode?.isRelated ? 'SI' : 'NO';
@@ -2278,7 +2278,7 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
       let conclusion = '';
 
       if (!sNode) {
-        ofNoLocalizado++;
+        extNoLocalizado++;
         criterio = 'UUID_NO_LOCALIZADO_EN_SENTINEL';
         diferencia = 'REVISION';
         conclusion = 'El UUID no fue localizado ni como principal ni como relacionado; requiere revision manual.';
@@ -2295,19 +2295,19 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
             diferencia = 'DIFERENCIA';
             conclusion = 'El CFDI es tipo E/P, por lo que no debe evaluarse igual que un CFDI tipo I con Complemento Carta Porte.';
             ofDiferencia++;
-            ofPrincipal++;
+            extPrincipal++;
           } else if (sNode.tieneCPPrincipal) {
             criterio = 'MISMO_CRITERIO';
             diferencia = 'EXACTA';
             conclusion = 'Ambos sistemas coinciden: el XML principal contiene Complemento Carta Porte.';
             ofCoincidencia++;
-            ofPrincipal++;
+            extPrincipal++;
           } else {
             criterio = 'SENTINEL_REPORTA_XML_PRINCIPAL';
             diferencia = 'DIFERENCIA';
-            conclusion = 'OneFacture lo marca como Cumple, pero Sentinel evaluó el XML principal y no contiene Complemento Carta Porte.';
+            conclusion = 'Externa lo marca como Cumple, pero Sentinel evaluó el XML principal y no contiene Complemento Carta Porte.';
             ofDiferencia++;
-            ofPrincipal++;
+            extPrincipal++;
           }
         } else if (sNode.isRelated) {
           // Es un UUID relacionado.
@@ -2319,17 +2319,17 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
           tieneCPPrin = pRef?.parentTieneCP ? 'SI' : 'NO';
           tieneCPRel = pRef?.parentTieneCP ? 'SI' : (pRef?.parentTipoCFDI === 'E' || pRef?.parentTipoCFDI === 'P' ? 'NO APLICA POR TIPO CFDI PRINCIPAL' : 'NO');
           
-          criterio = 'ONEFACTURE_REPORTA_UUID_RELACIONADO';
+          criterio = 'EXTERNA_REPORTA_UUID_RELACIONADO';
           diferencia = 'DIFERENCIA';
-          conclusion = 'El UUID reportado por OneFacture no corresponde al XML principal cargado en Sentinel; aparece como UUID relacionado dentro de un CFDI principal ' + (pRef?.parentTieneCP ? 'con Complemento Carta Porte.' : 'sin Complemento Carta Porte.');
-          ofRelacionado++;
+          conclusion = 'El UUID reportado por Externa no corresponde al XML principal cargado en Sentinel; aparece como UUID relacionado dentro de un CFDI principal ' + (pRef?.parentTieneCP ? 'con Complemento Carta Porte.' : 'sin Complemento Carta Porte.');
+          extRelacionado++;
           ofDiferencia++;
         }
       }
 
-      dataHomologacionOneFacture.push({
-        'UUID_OneFacture': ofUuid,
-        'UUID_Normalizado': ofUuid,
+      dataHomologacionExterna.push({
+        'UUID_Externa': extUuid,
+        'UUID_Normalizado': extUuid,
         'Encontrado_en_Sentinel': encontrado,
         'Aparece_como_CFDI_Principal': aparecePrin,
         'Aparece_como_UUID_Relacionado': apareceRel,
@@ -2339,15 +2339,15 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
         'Tiene_Complemento_Carta_Porte_Principal': tieneCPPrin,
         'Tiene_Complemento_Carta_Porte_Relacionado': tieneCPRel,
         'Estatus_Sentinel': estatusSentinel,
-        'Estatus_OneFacture': 'PRESENTE EN ONEFACTURE',
+        'Estatus_Externa': 'PRESENTE EN EXTERNA',
         'Criterio_Homologado': criterio,
         'Diferencia_de_Criterio': diferencia,
         'Conclusion_Tecnica': conclusion
       });
     });
 
-    const wsHomologacionOF = (XLSX as any).utils.json_to_sheet(dataHomologacionOneFacture);
-    (XLSX as any).utils.book_append_sheet(wb, wsHomologacionOF, 'Homologacion_OneFacture');
+    const wsHomologacionOF = (XLSX as any).utils.json_to_sheet(dataHomologacionExterna);
+    (XLSX as any).utils.book_append_sheet(wb, wsHomologacionOF, 'Homologacion_Externa');
   }
 
   // --- NUEVA HOJA: VALIDACION_TECNICA_SENTINEL ---
@@ -2406,13 +2406,13 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
   dataValidacionTecnica.push({ Parametro: 'Alerta CFDI I sin CP', Resultado: alertasTipoI > 0 ? `${alertasTipoI} marcados como REVISAR` : 'OK' });
   dataValidacionTecnica.push({ Parametro: 'Alerta CFDI E/P sin CP', Resultado: alertasTipoEP > 0 ? `${alertasTipoEP} marcados como NO APLICA` : 'OK' });
 
-  dataValidacionTecnica.push({ Parametro: '--- VALIDACION ONEFACTURE ---', Resultado: '' });
-  dataValidacionTecnica.push({ Parametro: 'Archivo OneFacture cargado', Resultado: (oneFactureData && oneFactureData.length > 0) ? 'SI' : 'NO' });
-  dataValidacionTecnica.push({ Parametro: 'Total UUID OneFacture leidos', Resultado: ofLeidos });
-  dataValidacionTecnica.push({ Parametro: 'Total UUID OneFacture unicos', Resultado: ofUnicos });
-  dataValidacionTecnica.push({ Parametro: 'Total UUID OneFacture encontrados como CFDI principal', Resultado: ofPrincipal });
-  dataValidacionTecnica.push({ Parametro: 'Total UUID OneFacture encontrados como UUID relacionado', Resultado: ofRelacionado });
-  dataValidacionTecnica.push({ Parametro: 'Total UUID OneFacture no localizados', Resultado: ofNoLocalizado });
+  dataValidacionTecnica.push({ Parametro: '--- VALIDACION EXTERNA ---', Resultado: '' });
+  dataValidacionTecnica.push({ Parametro: 'Archivo Externa cargado', Resultado: (externalData && externalData.length > 0) ? 'SI' : 'NO' });
+  dataValidacionTecnica.push({ Parametro: 'Total UUID Externa leidos', Resultado: extLeidos });
+  dataValidacionTecnica.push({ Parametro: 'Total UUID Externa unicos', Resultado: extUnicos });
+  dataValidacionTecnica.push({ Parametro: 'Total UUID Externa encontrados como CFDI principal', Resultado: extPrincipal });
+  dataValidacionTecnica.push({ Parametro: 'Total UUID Externa encontrados como UUID relacionado', Resultado: extRelacionado });
+  dataValidacionTecnica.push({ Parametro: 'Total UUID Externa no localizados', Resultado: extNoLocalizado });
   dataValidacionTecnica.push({ Parametro: 'Total diferencias de criterio', Resultado: ofDiferencia });
   dataValidacionTecnica.push({ Parametro: 'Total coincidencias exactas', Resultado: ofCoincidencia });
   dataValidacionTecnica.push({ Parametro: 'Total casos para revision manual', Resultado: ofManual });

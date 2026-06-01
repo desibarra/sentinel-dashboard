@@ -37,8 +37,8 @@ export default function Dashboard() {
   const { currentCompany } = useCompany();
   const { demoTokenData } = useAuth();
   const [isProcessing, setIsProcessing] = useState(false);
-  const [oneFactureData, setOneFactureData] = useState<string[]>([]);
-  const [oneFactureFileName, setOneFactureFileName] = useState<string>('');
+  const [externalData, setExternaData] = useState<string[]>([]);
+  const [externaFileName, setExternaFileName] = useState<string>('');
   const [filterType, setFilterType] = useState<"ALL" | "I" | "E" | "P" | "N">("ALL");
   const [results, setResults] = useState<ValidationResult[]>([]);
   const [loading, setLoading] = useState(true);
@@ -348,11 +348,11 @@ export default function Dashboard() {
 
 
 
-  const handleOneFactureUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleExternaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setOneFactureFileName(file.name);
+    setExternaFileName(file.name);
     try {
       const arrayBuffer = await file.arrayBuffer();
       const wb = XLSX.read(arrayBuffer, { type: 'array' });
@@ -360,7 +360,7 @@ export default function Dashboard() {
       const json: any[] = XLSX.utils.sheet_to_json(ws);
       
       if (json.length === 0) {
-        toast.error("El archivo de OneFacture está vacío.");
+        toast.error("El archivo de Externa está vacío.");
         return;
       }
 
@@ -377,7 +377,7 @@ export default function Dashboard() {
       }
 
       if (!uuidKey) {
-        toast.error("No se encontró la columna UUID en el archivo OneFacture.");
+        toast.error("No se encontró la columna UUID en el archivo Externa.");
         return;
       }
 
@@ -388,18 +388,18 @@ export default function Dashboard() {
         }
       });
 
-      setOneFactureData(extractedUUIDs);
-      toast.success(`Excel OneFacture cargado: ${extractedUUIDs.length} filas procesadas.`);
+      setExternaData(extractedUUIDs);
+      toast.success(`Excel Externa cargado: ${extractedUUIDs.length} filas procesadas.`);
     } catch (error) {
       console.error(error);
-      toast.error("Error leyendo el archivo OneFacture.");
+      toast.error("Error leyendo el archivo Externa.");
     }
   };
 
   const handleExportToExcel = () => {
     try {
       // Exportamos los clasificados en lugar de los crudos
-      exportToExcel(clasificados, undefined, oneFactureData);
+      exportToExcel(clasificados, undefined, externalData);
       toast.success("Diagnóstico exportado exitosamente");
     } catch (error) {
 
@@ -1782,19 +1782,19 @@ export default function Dashboard() {
                     type="file"
                     accept=".xlsx, .xls, .csv"
                     className="hidden"
-                    id="onefacture-upload"
-                    onChange={handleOneFactureUpload}
+                    id="externa-upload"
+                    onChange={handleExternaUpload}
                   />
                   <label
-                    htmlFor="onefacture-upload"
+                    htmlFor="externa-upload"
                     className="cursor-pointer inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-9 px-3 rounded-md"
                   >
                     <Download className="mr-2 h-4 w-4" />
-                    Cargar OneFacture
+                    Cargar Externa
                   </label>
-                  {oneFactureFileName && (
-                    <span className="text-xs text-muted-foreground truncate max-w-[150px]" title={oneFactureFileName}>
-                      {oneFactureFileName}
+                  {externaFileName && (
+                    <span className="text-xs text-muted-foreground truncate max-w-[150px]" title={externaFileName}>
+                      {externaFileName}
                     </span>
                   )}
                 </div>

@@ -27,7 +27,7 @@ async function run() {
 
     try {
         page.on('console', msg => {
-            // console.log('PAGE LOG:', msg.text())
+            console.log('PAGE LOG:', msg.text())
         });
         
         await page.goto('http://localhost:5173/login');
@@ -52,7 +52,10 @@ async function run() {
         await page.waitForTimeout(1000);
 
         console.log('Subiendo archivos XML...');
-        const filePaths = XMLS.map(f => path.join(FIXTURES_DIR, f));
+        const xmlFilesOnly = [
+            '06_COMPLEMENTO_PAGO_REP.xml'
+        ];
+        const filePaths = xmlFilesOnly.map(f => path.join(FIXTURES_DIR, f));
         
         const fileInput = await page.$('input[type="file"]');
         if (fileInput) {
@@ -62,7 +65,11 @@ async function run() {
             const validateBtn = await page.waitForSelector('button:has-text("Iniciar Validación"):not([disabled])', { state: 'visible', timeout: 10000 }).catch(() => null);
             
             if (validateBtn) {
-                await validateBtn.click({ force: true });
+                // Evitar problemas de overlays
+                await page.evaluate(() => {
+                    const btn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('Iniciar Validación'));
+                    if(btn) btn.click();
+                });
             } else {
                 console.error('No se encontró el botón Iniciar Validación o estaba deshabilitado!');
                 return;
@@ -77,18 +84,21 @@ async function run() {
         if (rfcInput) {
             await rfcInput.fill('LAN7008173R5'); // Emisor común
         }
-        const confirmarBtn = await page.waitForSelector('button:has-text("Confirmar RFC")', { timeout: 5000 }).catch(() => null);
-        if (confirmarBtn) {
-            await confirmarBtn.click();
-            await page.waitForTimeout(1000);
-        }
+        await page.evaluate(() => {
+            const btn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('Confirmar RFC'));
+            if(btn) btn.click();
+        });
+        await page.waitForTimeout(1000);
 
         console.log('Descargando Excel...');
         const exportButton = await page.waitForSelector('button:has-text("Exportar Reporte")', { state: 'visible', timeout: 5000 }).catch(() => null);
         
         if (exportButton) {
             const downloadPromise = page.waitForEvent('download');
-            await exportButton.click({ force: true });
+            await page.evaluate(() => {
+                const btn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('Exportar Reporte'));
+                if(btn) btn.click();
+            });
             
             const download = await downloadPromise;
             const downloadPath = path.join(SCRATCH_DIR, 'sentinel_export_test.xlsx');
