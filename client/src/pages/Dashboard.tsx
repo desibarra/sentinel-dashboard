@@ -1,5 +1,5 @@
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { CFDISATStatus } from "@/components/CFDISATStatus";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import UploadZone, { UploadedFile } from "@/components/UploadZone";
 import { useXMLValidator } from "@/hooks/useXMLValidator";
 import { ValidationResult } from "@/lib/cfdiEngine";
+import * as XLSX from 'xlsx';
 import { exportToExcel } from "@/lib/excelExporter";
 import { clasificarPorRFCBase, detectarRFCFrecuente, ValidationResultExtended } from "@/lib/classificationEngine";
 import { toast } from "sonner";
@@ -35,6 +36,10 @@ export default function Dashboard() {
   const { theme, toggleTheme } = useTheme();
   const { currentCompany } = useCompany();
   const { demoTokenData } = useAuth();
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [oneFactureData, setOneFactureData] = useState<string[]>([]);
+  const [oneFactureFileName, setOneFactureFileName] = useState<string>('');
+  const [filterType, setFilterType] = useState<"ALL" | "I" | "E" | "P" | "N">("ALL");
   const [results, setResults] = useState<ValidationResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [hasValidatedResults, setHasValidatedResults] = useState(false);
@@ -343,10 +348,58 @@ export default function Dashboard() {
 
 
 
+  const handleOneFactureUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setOneFactureFileName(file.name);
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const wb = XLSX.read(arrayBuffer, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const json: any[] = XLSX.utils.sheet_to_json(ws);
+      
+      if (json.length === 0) {
+        toast.error("El archivo de OneFacture está vacío.");
+        return;
+      }
+
+      const keys = Object.keys(json[0]);
+      let uuidKey = '';
+      const targetHeaders = ['UUID', 'FOLIO FISCAL', 'FOLIOFISCAL', 'UUID CFDI', 'UUID_CFDI', 'TIMBRE UUID'];
+      
+      for (const k of keys) {
+        const normK = k.replace(/[{}]/g, '').trim().toUpperCase();
+        if (targetHeaders.includes(normK)) {
+          uuidKey = k;
+          break;
+        }
+      }
+
+      if (!uuidKey) {
+        toast.error("No se encontró la columna UUID en el archivo OneFacture.");
+        return;
+      }
+
+      const extractedUUIDs: string[] = [];
+      json.forEach(row => {
+        if (row[uuidKey]) {
+          extractedUUIDs.push(String(row[uuidKey]));
+        }
+      });
+
+      setOneFactureData(extractedUUIDs);
+      toast.success(`Excel OneFacture cargado: ${extractedUUIDs.length} filas procesadas.`);
+    } catch (error) {
+      console.error(error);
+      toast.error("Error leyendo el archivo OneFacture.");
+    }
+  };
+
   const handleExportToExcel = () => {
     try {
       // Exportamos los clasificados en lugar de los crudos
-      exportToExcel(clasificados);
+      exportToExcel(clasificados, undefined, oneFactureData);
       toast.success("Diagnóstico exportado exitosamente");
     } catch (error) {
 
@@ -399,11 +452,11 @@ export default function Dashboard() {
   const visibleResults = results.filter(r => !r.deleted);
 
   // Clasificación por RFC Base (Módulo 2A)
-  const clasificados = React.useMemo(() => {
+  const clasificados = useMemo(() => {
     return clasificarPorRFCBase(visibleResults, rfcBaseConfirmado);
   }, [visibleResults, rfcBaseConfirmado]);
 
-  const clasificacionStats = React.useMemo(() => {
+  const clasificacionStats = useMemo(() => {
     return {
       emitidos: clasificados.filter(r => r.clasificacion === 'EMITIDO').length,
       recibidos: clasificados.filter(r => r.clasificacion === 'RECIBIDO').length,
@@ -1723,6 +1776,28 @@ export default function Dashboard() {
 
               </div>
 
+              <div className="flex flex-col sm:flex-row gap-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="file"
+                    accept=".xlsx, .xls, .csv"
+                    className="hidden"
+                    id="onefacture-upload"
+                    onChange={handleOneFactureUpload}
+                  />
+                  <label
+                    htmlFor="onefacture-upload"
+                    className="cursor-pointer inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-9 px-3 rounded-md"
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    Cargar OneFacture
+                  </label>
+                  {oneFactureFileName && (
+                    <span className="text-xs text-muted-foreground truncate max-w-[150px]" title={oneFactureFileName}>
+                      {oneFactureFileName}
+                    </span>
+                  )}
+                </div>
               <Button
                 onClick={handleExportToExcel}
                 className="bg-primary hover:bg-primary/90 text-white font-black shadow-lg shadow-primary/20 gap-2 rounded-xl"
@@ -1741,6 +1816,7 @@ export default function Dashboard() {
                 <Trash2 className="w-4 h-4" />
                 Limpiar análisis
               </Button>
+              </div>
 
             </CardHeader>
 

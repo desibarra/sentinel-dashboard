@@ -1495,7 +1495,7 @@ const applyComparativoSheetDefaults = (ws: any, dataRows: any[]) => {
 
 // ─── END COMPARATIVO BASE Y TASA IVA ─────────────────────────────────────────
 
-export function exportToExcel(results: ValidationResult[], fileNameOverride?: string) {
+export function exportToExcel(results: ValidationResult[], fileNameOverride?: string, oneFactureData?: string[]) {
   // 1. Separar resultados válidos e inválidos
   const isValidUUID = (uuid: string | undefined): boolean => {
     if (!uuid) return false;
@@ -1628,7 +1628,16 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
         }
       }
     } else {
-      node.estatusCP = 'CP_XML_RELACIONADO';
+      const parentHasCP = node.parentRefs.some((p: any) => p.parentTieneCP);
+      const parentIsEP = node.parentRefs.some((p: any) => p.parentTipoCFDI === 'E' || p.parentTipoCFDI === 'P');
+      
+      if (parentHasCP) {
+        node.estatusCP = 'UUID_RELACIONADO_EN_CFDI_CON_COMPLEMENTO_CP';
+      } else if (parentIsEP) {
+        node.estatusCP = 'UUID_RELACIONADO_EN_CFDI_NO_APLICA_POR_TIPO_CFDI';
+      } else {
+        node.estatusCP = 'UUID_RELACIONADO_EN_CFDI_SIN_COMPLEMENTO_CP';
+      }
     }
   });
   // --- FIN LÓGICA DE HOMOLOGACIÓN CARTA PORTE ---
@@ -1664,13 +1673,13 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
       Es_Nomina: r.esNomina,
       Version_Nomina: r.versionNomina,
       Rol_del_UUID_en_el_lote: uuidMap.get(r.uuid)?.rolUUID || 'NO_ENCONTRADO',
-      Estatus_Carta_Porte_Homologado: uuidMap.get(r.uuid)?.estatusCP || 'CP_NO_DETECTADA_REVISAR',
+      Estatus_Complemento_Carta_Porte_Homologado: uuidMap.get(r.uuid)?.estatusCP || 'CP_NO_DETECTADA_REVISAR',
       Tipo_Relacion_CFDI: r.tipoRelacion || 'NO APLICA',
-      Version_Carta_Porte_Homologado: uuidMap.get(r.uuid)?.versionCP || 'NO_DETECTADA',
-      Requiere_Carta_Porte: r.requiereCartaPorte,
-      Carta_Porte_Presente: getCartaPortePresente(r),
-      Carta_Porte_Completa: r.cartaPorteCompleta,
-      Version_Carta_Porte: detail?.version || r.versionCartaPorte,
+      Version_Complemento_Carta_Porte_Homologado: uuidMap.get(r.uuid)?.versionCP || 'NO_DETECTADA',
+      Requiere_Complemento_Carta_Porte: r.requiereCartaPorte,
+      Complemento_Carta_Porte_Presente: getCartaPortePresente(r),
+      Complemento_Carta_Porte_Completo: r.cartaPorteCompleta,
+      Version_Complemento_Carta_Porte: detail?.version || r.versionCartaPorte,
       Transporte_Internacional: detail?.transporteInternacional || 'NO VIENE EN XML',
       Entrada_Salida_Mercancia: detail?.entradaSalidaMercancia || 'NO VIENE EN XML',
       Pais_Origen_Destino: detail?.paisOrigenDestino || 'NO VIENE EN XML',
@@ -2075,7 +2084,7 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
       Tiene_Entry: r.trazabilidadInfo?.tieneEntryNumber || 'NO',
       Tiene_Identificacion_Bancaria: r.trazabilidadInfo?.identificadorBancario || 'REQUIERE IMPORTACION',
       Datos_Faltantes: getDatosFaltantes(r),
-      Fuente_Externa_Requerida: r.trazabilidadInfo?.fuenteExternaRequerida || (isSatTechnicalFailure(r.estatusSAT) ? 'SAT externo/acuse' : 'NO'),
+      Fuente_Externa_Requerida: r.trazabilidadInfo?.fuenteExternaRequerida || (isSatTechnicalFailure(r.estatusSAT) ? 'SI' : 'NO'),
       Diagnostico: r.trazabilidadInfo?.diagnosticoDatosFaltantes || `Expediente ${getDatosFaltantes(r) === 'Sin faltantes críticos' ? 'sin faltantes criticos' : `incompleto: falta ${getDatosFaltantes(r)}`}`,
       Accion_Recomendada: r.trazabilidadInfo?.accionRecomendadaDatosFaltantes || 'Integrar documentos faltantes y relacionarlos por UUID antes de usar el expediente',
       Se_Puede_Auditar_Con_Este_XML_Solamente: r.trazabilidadInfo?.auditableSoloConXML || 'NO'
@@ -2155,12 +2164,12 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
         'Aparece como': node.rolUUID,
         'UUID principal donde aparece': 'MISMO (ES PRINCIPAL)',
         'Tipo CFDI principal': node.tipoCFDI,
-        'Tipo relación CFDI': 'NO APLICA',
-        'Tiene Carta Porte principal': node.tieneCPPrincipal ? 'SÍ' : 'NO',
-        'Versión Carta Porte principal': node.versionCP,
-        'Tiene Carta Porte relacionada': 'NO APLICA',
-        'Estatus Carta Porte Homologado': node.estatusCP,
-        'Observación técnica': 'Es CFDI principal sin referencias.'
+        'Tipo relacion': 'NO APLICA',
+        'Tiene Complemento Carta Porte principal': node.tieneCPPrincipal ? 'SI' : 'NO',
+        'Version Carta Porte': node.versionCP,
+        'Tiene Complemento Carta Porte relacionado': 'NO APLICA',
+        'Estatus Complemento Carta Porte Homologado': node.estatusCP,
+        'Observacion tecnica': 'Es CFDI principal sin referencias.'
       });
     } else if (node.isRelated) {
       node.parentRefs.forEach((pref: any) => {
@@ -2169,12 +2178,12 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
           'Aparece como': node.rolUUID,
           'UUID principal donde aparece': pref.parentUuid,
           'Tipo CFDI principal': pref.parentTipoCFDI,
-          'Tipo relación CFDI': pref.tipoRelacion,
-          'Tiene Carta Porte principal': pref.parentTieneCP ? 'SÍ' : 'NO',
-          'Versión Carta Porte principal': pref.parentVersionCP,
-          'Tiene Carta Porte relacionada': node.isPrincipal ? (node.tieneCPPrincipal ? 'SÍ' : 'NO') : 'NO APLICA',
-          'Estatus Carta Porte Homologado': node.estatusCP,
-          'Observación técnica': node.isPrincipal ? 'CFDI principal referenciado por otro XML.' : 'Solo existe como nodo relacionado dentro del CFDI principal.'
+          'Tipo relacion': pref.tipoRelacion,
+          'Tiene Complemento Carta Porte principal': pref.parentTieneCP ? 'SI' : 'NO',
+          'Version Carta Porte': pref.parentVersionCP,
+          'Tiene Complemento Carta Porte relacionado': node.isPrincipal ? (node.tieneCPPrincipal ? 'SI' : 'NO') : (pref.parentTieneCP ? 'SI' : (pref.parentTipoCFDI === 'E' || pref.parentTipoCFDI === 'P' ? 'NO APLICA POR TIPO CFDI PRINCIPAL' : 'NO')),
+          'Estatus Complemento Carta Porte Homologado': node.estatusCP,
+          'Observacion tecnica': node.isPrincipal ? 'CFDI principal referenciado por otro XML.' : 'Solo existe como nodo relacionado dentro del CFDI principal.'
         });
       });
     }
@@ -2215,10 +2224,10 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
 
   const dataResumenHomologado = [
     { Indicador: 'Total XML cargados', Valor: totalXML },
-    { Indicador: 'Total CFDI principales con Carta Porte', Valor: cpPresente },
-    { Indicador: 'Total CFDI principales sin Carta Porte', Valor: cpSinCP },
+    { Indicador: 'Total CFDI principales con Complemento Carta Porte', Valor: cpPresente },
+    { Indicador: 'Total CFDI principales sin Complemento Carta Porte', Valor: cpSinCP },
     { Indicador: 'Total UUID relacionados detectados (puros)', Valor: uuidRelTotal },
-    { Indicador: 'Total UUID relacionados que apuntan a CFDI con Carta Porte', Valor: uuidRelApuntaCP },
+    { Indicador: 'Total UUID relacionados que apuntan a CFDI con Complemento Carta Porte', Valor: uuidRelApuntaCP },
     { Indicador: 'Total CFDI tipo E/P marcados como NO APLICA', Valor: cfdiEP },
     { Indicador: 'Total CFDI con relación tipo 04 sustitución', Valor: rel04 },
     { Indicador: 'Total CFDI con relación tipo 01 nota de crédito', Valor: rel01 },
@@ -2226,7 +2235,190 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
   ];
 
   const wsResumenHomologado = (XLSX as any).utils.json_to_sheet(dataResumenHomologado);
-  (XLSX as any).utils.book_append_sheet(wb, wsResumenHomologado, 'Resumen_CP_Homologado');
+  (XLSX as any).utils.book_append_sheet(wb, wsResumenHomologado, 'Resumen_Carta_Porte_Homologado');
+
+  // --- NUEVA HOJA: Homologacion_OneFacture ---
+  let ofLeidos = 0;
+  let ofUnicos = 0;
+  let ofPrincipal = 0;
+  let ofRelacionado = 0;
+  let ofNoLocalizado = 0;
+  let ofDiferencia = 0;
+  let ofCoincidencia = 0;
+  let ofManual = 0;
+
+  if (oneFactureData && oneFactureData.length > 0) {
+    const dataHomologacionOneFacture: any[] = [];
+    ofLeidos = oneFactureData.length;
+    
+    // Normalizar y deduplicar UUIDs provistos por OneFacture
+    const uniqueOFSet = new Set<string>();
+    oneFactureData.forEach(uuidRaw => {
+      if (uuidRaw) {
+        const normalized = uuidRaw.replace(/[{}]/g, '').trim().toUpperCase();
+        if (normalized) uniqueOFSet.add(normalized);
+      }
+    });
+    const uniqueOF = Array.from(uniqueOFSet);
+    ofUnicos = uniqueOF.length;
+
+    uniqueOF.forEach(ofUuid => {
+      const sNode = uuidMap.get(ofUuid);
+      let encontrado = sNode ? 'SI' : 'NO';
+      let aparecePrin = sNode?.isPrincipal ? 'SI' : 'NO';
+      let apareceRel = sNode?.isRelated ? 'SI' : 'NO';
+      let uuidPrinDonde = 'NO APLICA';
+      let tipoCFDIPrin = 'NO APLICA';
+      let tipoRel = 'NO APLICA';
+      let tieneCPPrin = 'NO APLICA';
+      let tieneCPRel = 'NO APLICA';
+      let estatusSentinel = sNode?.estatusCP || 'NO ENCONTRADO EN SENTINEL';
+      let criterio = '';
+      let diferencia = '';
+      let conclusion = '';
+
+      if (!sNode) {
+        ofNoLocalizado++;
+        criterio = 'UUID_NO_LOCALIZADO_EN_SENTINEL';
+        diferencia = 'REVISION';
+        conclusion = 'El UUID no fue localizado ni como principal ni como relacionado; requiere revision manual.';
+        ofManual++;
+      } else {
+        if (sNode.isPrincipal) {
+          uuidPrinDonde = 'MISMO (ES PRINCIPAL)';
+          tipoCFDIPrin = sNode.tipoCFDI || '';
+          tieneCPPrin = sNode.tieneCPPrincipal ? 'SI' : 'NO';
+          tieneCPRel = 'NO APLICA';
+
+          if (sNode.tipoCFDI === 'E' || sNode.tipoCFDI === 'P') {
+            criterio = 'DIFERENCIA_POR_TIPO_CFDI';
+            diferencia = 'DIFERENCIA';
+            conclusion = 'El CFDI es tipo E/P, por lo que no debe evaluarse igual que un CFDI tipo I con Complemento Carta Porte.';
+            ofDiferencia++;
+            ofPrincipal++;
+          } else if (sNode.tieneCPPrincipal) {
+            criterio = 'MISMO_CRITERIO';
+            diferencia = 'EXACTA';
+            conclusion = 'Ambos sistemas coinciden: el XML principal contiene Complemento Carta Porte.';
+            ofCoincidencia++;
+            ofPrincipal++;
+          } else {
+            criterio = 'SENTINEL_REPORTA_XML_PRINCIPAL';
+            diferencia = 'DIFERENCIA';
+            conclusion = 'OneFacture lo marca como Cumple, pero Sentinel evaluó el XML principal y no contiene Complemento Carta Porte.';
+            ofDiferencia++;
+            ofPrincipal++;
+          }
+        } else if (sNode.isRelated) {
+          // Es un UUID relacionado.
+          // Si tiene múltiples padres, tomamos el primero (simplificación para el reporte plano)
+          const pRef = sNode.parentRefs[0];
+          uuidPrinDonde = pRef?.parentUuid || 'NO APLICA';
+          tipoCFDIPrin = pRef?.parentTipoCFDI || 'NO APLICA';
+          tipoRel = pRef?.tipoRelacion || 'NO APLICA';
+          tieneCPPrin = pRef?.parentTieneCP ? 'SI' : 'NO';
+          tieneCPRel = pRef?.parentTieneCP ? 'SI' : (pRef?.parentTipoCFDI === 'E' || pRef?.parentTipoCFDI === 'P' ? 'NO APLICA POR TIPO CFDI PRINCIPAL' : 'NO');
+          
+          criterio = 'ONEFACTURE_REPORTA_UUID_RELACIONADO';
+          diferencia = 'DIFERENCIA';
+          conclusion = 'El UUID reportado por OneFacture no corresponde al XML principal cargado en Sentinel; aparece como UUID relacionado dentro de un CFDI principal ' + (pRef?.parentTieneCP ? 'con Complemento Carta Porte.' : 'sin Complemento Carta Porte.');
+          ofRelacionado++;
+          ofDiferencia++;
+        }
+      }
+
+      dataHomologacionOneFacture.push({
+        'UUID_OneFacture': ofUuid,
+        'UUID_Normalizado': ofUuid,
+        'Encontrado_en_Sentinel': encontrado,
+        'Aparece_como_CFDI_Principal': aparecePrin,
+        'Aparece_como_UUID_Relacionado': apareceRel,
+        'UUID_Principal_donde_aparece': uuidPrinDonde,
+        'Tipo_CFDI_Principal': tipoCFDIPrin,
+        'Tipo_Relacion': tipoRel,
+        'Tiene_Complemento_Carta_Porte_Principal': tieneCPPrin,
+        'Tiene_Complemento_Carta_Porte_Relacionado': tieneCPRel,
+        'Estatus_Sentinel': estatusSentinel,
+        'Estatus_OneFacture': 'PRESENTE EN ONEFACTURE',
+        'Criterio_Homologado': criterio,
+        'Diferencia_de_Criterio': diferencia,
+        'Conclusion_Tecnica': conclusion
+      });
+    });
+
+    const wsHomologacionOF = (XLSX as any).utils.json_to_sheet(dataHomologacionOneFacture);
+    (XLSX as any).utils.book_append_sheet(wb, wsHomologacionOF, 'Homologacion_OneFacture');
+  }
+
+  // --- NUEVA HOJA: VALIDACION_TECNICA_SENTINEL ---
+  const dataValidacionTecnica: any[] = [];
+  
+  // Metricas base
+  dataValidacionTecnica.push({ Parametro: 'Total XML procesados', Resultado: totalXML });
+  dataValidacionTecnica.push({ Parametro: 'Total CFDI principales', Resultado: validResults.length });
+  dataValidacionTecnica.push({ Parametro: 'Total UUID relacionados detectados', Resultado: uuidRelTotal });
+  dataValidacionTecnica.push({ Parametro: 'Total CFDI con Complemento Carta Porte', Resultado: cpPresente });
+  dataValidacionTecnica.push({ Parametro: 'Total CFDI sin Complemento Carta Porte', Resultado: cpSinCP });
+  dataValidacionTecnica.push({ Parametro: 'Total CFDI tipo E/P clasificados como NO APLICA', Resultado: cfdiEP });
+  dataValidacionTecnica.push({ Parametro: 'Total UUID relacionados dentro de CFDI con Complemento Carta Porte', Resultado: uuidRelApuntaCP });
+  dataValidacionTecnica.push({ Parametro: 'Total registros con posible inconsistencia', Resultado: aRevisar });
+  
+  // Validacion de Estructura de Hojas
+  const hojasGeneradas = wb.SheetNames;
+  const hojasCriticas = ['Diagnostico_CFDI', 'Trazabilidad_UUID', 'Resumen_Carta_Porte_Homologado'];
+  const hojasOk = hojasCriticas.every((h: string) => hojasGeneradas.includes(h));
+  dataValidacionTecnica.push({ Parametro: 'Estructura de Hojas OK', Resultado: hojasOk ? 'SI' : 'NO' });
+  
+  // Validacion de Columnas Criticas
+  const columnasCriticas = [
+    'UUID buscado', 'Aparece como', 'UUID principal donde aparece', 
+    'Tipo CFDI principal', 'Tipo relacion', 'Tiene Complemento Carta Porte principal', 
+    'Tiene Complemento Carta Porte relacionado', 'Version Carta Porte', 'Observacion tecnica'
+  ];
+  let columnasOk = true;
+  if (dataTrazabilidadUUID.length > 0) {
+    const keys = Object.keys(dataTrazabilidadUUID[0]);
+    columnasOk = columnasCriticas.every(c => keys.includes(c));
+  }
+  dataValidacionTecnica.push({ Parametro: 'Columnas Trazabilidad OK', Resultado: columnasOk ? 'SI' : 'NO' });
+  
+  // Alertas
+  dataValidacionTecnica.push({ Parametro: '--- ALERTAS ---', Resultado: '' });
+  
+  if (!hojasOk) {
+    dataValidacionTecnica.push({ Parametro: 'Alerta Hojas', Resultado: 'ERROR_ESTRUCTURA_EXCEL' });
+  }
+  if (!columnasOk) {
+    dataValidacionTecnica.push({ Parametro: 'Alerta Columnas', Resultado: 'ERROR_COLUMNAS_TRAZABILIDAD' });
+  }
+  
+  let alertasUUIDRel = 0;
+  let alertasTipoI = 0;
+  let alertasTipoEP = 0;
+  
+  uuidMap.forEach(node => {
+    if (node.isRelated && !node.isPrincipal) alertasUUIDRel++;
+    if (node.isPrincipal && node.tipoCFDI === 'I' && node.estatusCP === 'CP_NO_DETECTADA_REVISAR') alertasTipoI++;
+    if (node.isPrincipal && (node.tipoCFDI === 'E' || node.tipoCFDI === 'P') && node.estatusCP === 'CP_NO_APLICA_POR_TIPO_CFDI') alertasTipoEP++;
+  });
+  
+  dataValidacionTecnica.push({ Parametro: 'Alerta UUID relacionado puro', Resultado: alertasUUIDRel > 0 ? `${alertasUUIDRel} marcados como UUID_RELACIONADO` : 'OK' });
+  dataValidacionTecnica.push({ Parametro: 'Alerta CFDI I sin CP', Resultado: alertasTipoI > 0 ? `${alertasTipoI} marcados como REVISAR` : 'OK' });
+  dataValidacionTecnica.push({ Parametro: 'Alerta CFDI E/P sin CP', Resultado: alertasTipoEP > 0 ? `${alertasTipoEP} marcados como NO APLICA` : 'OK' });
+
+  dataValidacionTecnica.push({ Parametro: '--- VALIDACION ONEFACTURE ---', Resultado: '' });
+  dataValidacionTecnica.push({ Parametro: 'Archivo OneFacture cargado', Resultado: (oneFactureData && oneFactureData.length > 0) ? 'SI' : 'NO' });
+  dataValidacionTecnica.push({ Parametro: 'Total UUID OneFacture leidos', Resultado: ofLeidos });
+  dataValidacionTecnica.push({ Parametro: 'Total UUID OneFacture unicos', Resultado: ofUnicos });
+  dataValidacionTecnica.push({ Parametro: 'Total UUID OneFacture encontrados como CFDI principal', Resultado: ofPrincipal });
+  dataValidacionTecnica.push({ Parametro: 'Total UUID OneFacture encontrados como UUID relacionado', Resultado: ofRelacionado });
+  dataValidacionTecnica.push({ Parametro: 'Total UUID OneFacture no localizados', Resultado: ofNoLocalizado });
+  dataValidacionTecnica.push({ Parametro: 'Total diferencias de criterio', Resultado: ofDiferencia });
+  dataValidacionTecnica.push({ Parametro: 'Total coincidencias exactas', Resultado: ofCoincidencia });
+  dataValidacionTecnica.push({ Parametro: 'Total casos para revision manual', Resultado: ofManual });
+
+  const wsValidacionTecnica = (XLSX as any).utils.json_to_sheet(dataValidacionTecnica);
+  (XLSX as any).utils.book_append_sheet(wb, wsValidacionTecnica, 'VALIDACION_TECNICA_SENTINEL');
 
   // ── Nueva hoja obligatoria: ERRORES LECTURA XML ──
   const dataErrores = invalidResults.map(r => {
