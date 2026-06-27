@@ -1682,6 +1682,11 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
       Nivel_Trazabilidad: r.trazabilidadInfo?.nivelExpediente || 'NO APLICA',
       Requiere_Soporte_Externo: r.trazabilidadInfo?.fuenteExternaRequerida || 'NO',
       Accion_Recomendada: r.trazabilidadInfo?.accionRecomendadaMatriz || 'NO APLICA',
+        Fiscal_Risk_Level: r.fiscalRiskLevel || 'VERDE',
+        Fiscal_Risk_Reason: r.fiscalRiskReason || 'SIN HALLAZGOS FISCALES',
+        Fiscal_Rule_Applied: r.fiscalRuleApplied || 'NINGUNA',
+        Payment_Complement_Status: r.paymentComplementStatus || 'NO APLICA',
+        IVA_Creditability_Status: r.ivaCreditabilityStatus || 'POR_DETERMINAR',
     };
   });
 
@@ -1760,6 +1765,11 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
     { wch: 25 }, // BN: Nivel_Trazabilidad
     { wch: 20 }, // BO: Requiere_Soporte_Externo
     { wch: 30 }, // BP: Accion_Recomendada
+    { wch: 14 }, // BQ: Fiscal_Risk_Level
+    { wch: 40 }, // BR: Fiscal_Risk_Reason
+    { wch: 30 }, // BS: Fiscal_Rule_Applied
+    { wch: 24 }, // BT: Payment_Complement_Status
+    { wch: 24 }, // BU: IVA_Creditability_Status
   ];
 
   (ws as any)['!cols'] = colWidths;
