@@ -901,6 +901,18 @@ const buildQualityRows = (results: ValidationResult[]) => results.map(r => {
 
 const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
   const total = results.length;
+
+  // Resumen Operativo (cuadra con Dashboard)
+  const usables = results.filter(r => r.resultado?.includes("🟢")).length;
+  const alertas = results.filter(r => r.resultado?.includes("🟡")).length;
+  const noUsables = results.filter(r => r.resultado?.includes("🔴")).length;
+  const totalMonto = results.reduce((sum, r) => sum + (r.total || 0), 0);
+  const montoRiesgo = results
+    .filter(r => r.resultado?.includes("🔴") || r.resultado?.includes("🟡"))
+    .reduce((sum, r) => sum + (r.total || 0), 0);
+  const cancelados = results.filter(r => /cancelado/i.test(r.estatusSAT || '')).length;
+
+  // Semáforo Fiscal Preventivo
   const verdes = results.filter(r => r.fiscalRiskLevel === 'VERDE').length;
   const amarillos = results.filter(r => r.fiscalRiskLevel === 'AMARILLO').length;
   const rojos = results.filter(r => r.fiscalRiskLevel === 'ROJO').length;
@@ -910,7 +922,7 @@ const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
   const pueRevisarCobro = results.filter(r => r.paymentMethodStatus === 'PUE_REVISAR_COBRO').length;
   const compFueraPeriodo = results.filter(r => r.paymentComplementStatus === 'COMPLEMENTO_FUERA_DE_PERIODO').length;
   const uuidRelNoEncontrado = results.filter(r => r.paymentComplementStatus === 'UUID_RELACIONADO_NO_ENCONTRADO').length;
-  
+
   const ivaNoAcreditable = results.filter(r => r.ivaCreditabilityStatus === 'NO_ACREDITABLE');
   const ivaPotencialmenteNoAcreditableVal = ivaNoAcreditable.reduce((sum, r) => sum + (r.ivaTraslado || 0), 0);
 
@@ -919,23 +931,29 @@ const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
 
   const ivaEnRevisionRows = results.filter(r => r.ivaCreditabilityStatus === 'POR_DETERMINAR' || r.fiscalRiskLevel === 'AMARILLO');
   const ivaEnRevisionVal = ivaEnRevisionRows.reduce((sum, r) => sum + (r.ivaTraslado || 0), 0);
-
-  const cancelados = results.filter(r => /cancelado/i.test(r.estatusSAT || '')).length;
-
   return [
+    { Metrica: '=== 1. RESUMEN OPERATIVO ===', Valor: '' },
     { Metrica: 'CFDI procesados', Valor: total },
-    { Metrica: 'CFDI verdes', Valor: verdes },
-    { Metrica: 'CFDI amarillos', Valor: amarillos },
-    { Metrica: 'CFDI rojos', Valor: rojos },
-    { Metrica: 'CFDI sin nivel de riesgo', Valor: sinRiesgo },
+    { Metrica: 'Usables', Valor: usables },
+    { Metrica: 'Alertas', Valor: alertas },
+    { Metrica: 'No usables', Valor: noUsables },
+    { Metrica: 'Monto total', Valor: Math.round(totalMonto * 100) / 100 },
+    { Metrica: 'Monto en riesgo', Valor: Math.round(montoRiesgo * 100) / 100 },
+    { Metrica: 'Cancelados', Valor: cancelados },
+    { Metrica: '', Valor: '' },
+    { Metrica: '=== 2. REVISIÓN FISCAL PREVENTIVA ===', Valor: '' },
+    { Metrica: 'CFDI sin riesgo fiscal preventivo', Valor: verdes },
+    { Metrica: 'CFDI con revisión fiscal preventiva', Valor: amarillos },
+    { Metrica: 'CFDI con riesgo fiscal preventivo', Valor: rojos },
     { Metrica: 'PPD sin complemento', Valor: ppdSinComp },
     { Metrica: 'PUE revisar cobro', Valor: pueRevisarCobro },
     { Metrica: 'Complementos fuera de periodo', Valor: compFueraPeriodo },
     { Metrica: 'UUID relacionado no encontrado', Valor: uuidRelNoEncontrado },
-    { Metrica: 'IVA potencialmente no acreditable', Valor: Math.round(ivaPotencialmenteNoAcreditableVal * 100) / 100 },
     { Metrica: 'IVA acreditable', Valor: Math.round(ivaAcreditableVal * 100) / 100 },
     { Metrica: 'IVA en revisión', Valor: Math.round(ivaEnRevisionVal * 100) / 100 },
-    { Metrica: 'CFDI cancelados', Valor: cancelados },
+    { Metrica: 'IVA potencialmente no acreditable', Valor: Math.round(ivaPotencialmenteNoAcreditableVal * 100) / 100 },
+    { Metrica: '', Valor: '' },
+    { Metrica: 'NOTA EXPLICATIVA', Valor: 'El resumen operativo mide usabilidad del CFDI. La revisión fiscal preventiva mide posibles puntos de revisión por método de pago, complementos, UUID relacionados e IVA. Un CFDI puede ser usable operativamente y aun así requerir revisión preventiva.' }
   ];
 };
 
@@ -1591,6 +1609,12 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
 
   // Hoja Resumen como primera hoja del Excel
   appendJsonSheet(wb, buildExecutiveSummaryRows(validResults), 'Resumen');
+  if (wb.Sheets['Resumen']) {
+    wb.Sheets['Resumen']['!cols'] = [
+      { wch: 45 }, // Metrica
+      { wch: 80 }  // Valor (so the long note is fully readable)
+    ];
+  }
 
   // Preparar datos en el orden exacto de columnas
   const data = validResults.map((r) => {

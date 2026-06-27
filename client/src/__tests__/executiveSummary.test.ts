@@ -20,6 +20,8 @@ describe('Executive Summary (Hoja Resumen)', () => {
         paymentMethodStatus: 'PUE_VALIDO',
         paymentComplementStatus: 'NO APLICA',
         ivaCreditabilityStatus: 'ACREDITABLE',
+        resultado: '🟢 OK',
+        total: 1000,
       } as unknown as ValidationResult,
       // Amarillo / PUE Revisar Cobro / Acreditable
       {
@@ -34,6 +36,8 @@ describe('Executive Summary (Hoja Resumen)', () => {
         paymentMethodStatus: 'PUE_REVISAR_COBRO',
         paymentComplementStatus: 'NO APLICA',
         ivaCreditabilityStatus: 'ACREDITABLE',
+        resultado: '🟡 ALERTA',
+        total: 2000,
       } as unknown as ValidationResult,
       // Rojo / PPD sin complemento / No Acreditable
       {
@@ -49,6 +53,8 @@ describe('Executive Summary (Hoja Resumen)', () => {
         paymentMethodStatus: 'PPD_SIN_COMPLEMENTO',
         paymentComplementStatus: 'SIN_COMPLEMENTO',
         ivaCreditabilityStatus: 'NO_ACREDITABLE',
+        resultado: '🔴 NO USABLE',
+        total: 3000,
       } as unknown as ValidationResult,
       // Rojo / PPD con complemento fuera de periodo / Acreditable
       {
@@ -62,6 +68,8 @@ describe('Executive Summary (Hoja Resumen)', () => {
         paymentMethodStatus: 'PPD_CON_COMPLEMENTO',
         paymentComplementStatus: 'COMPLEMENTO_FUERA_DE_PERIODO',
         ivaCreditabilityStatus: 'ACREDITABLE',
+        resultado: '🔴 NO USABLE',
+        total: 4000,
       } as unknown as ValidationResult,
       // CFDI cancelado
       {
@@ -75,6 +83,8 @@ describe('Executive Summary (Hoja Resumen)', () => {
         paymentMethodStatus: 'PUE_VALIDO',
         paymentComplementStatus: 'NO APLICA',
         ivaCreditabilityStatus: 'POR_DETERMINAR',
+        resultado: '🔴 NO DISPONIBLE (CANCELADO)',
+        total: 500,
       } as unknown as ValidationResult,
       // CFDI sin nivel de riesgo (para probar conteo)
       {
@@ -87,6 +97,8 @@ describe('Executive Summary (Hoja Resumen)', () => {
         paymentMethodStatus: 'PUE_VALIDO',
         paymentComplementStatus: 'NO APLICA',
         ivaCreditabilityStatus: 'POR_DETERMINAR',
+        resultado: '🟢 OK',
+        total: 1000,
       } as unknown as ValidationResult,
     ];
 
@@ -117,11 +129,19 @@ describe('Executive Summary (Hoja Resumen)', () => {
       return match ? match.Valor : undefined;
     };
 
+    // 1. Resumen Operativo
     expect(getVal('CFDI procesados')).toBe(6);
-    expect(getVal('CFDI verdes')).toBe(2);
-    expect(getVal('CFDI amarillos')).toBe(1);
-    expect(getVal('CFDI rojos')).toBe(2);
-    expect(getVal('CFDI sin nivel de riesgo')).toBe(1);
+    expect(getVal('Usables')).toBe(2); // Verde: UUID-VERDE-PUE and UUID-SIN-RIESGO
+    expect(getVal('Alertas')).toBe(1);  // Amarillo: UUID-AMARILLO-PUE
+    expect(getVal('No usables')).toBe(3); // Rojo: PPD-SIN, PPD-FUERA, CANCELADO
+    expect(getVal('Monto total')).toBe(11500);
+    expect(getVal('Monto en riesgo')).toBe(9500); // 2000 (Amarillo) + 3000 (Rojo) + 4000 (Rojo) + 500 (Rojo - Cancelado)
+    expect(getVal('Cancelados')).toBe(1);
+
+    // 2. Semáforo Fiscal Preventivo
+    expect(getVal('CFDI sin riesgo fiscal preventivo')).toBe(2);
+    expect(getVal('CFDI con revisión fiscal preventiva')).toBe(1);
+    expect(getVal('CFDI con riesgo fiscal preventivo')).toBe(2);
     expect(getVal('PPD sin complemento')).toBe(1);
     expect(getVal('PUE revisar cobro')).toBe(1);
     expect(getVal('Complementos fuera de periodo')).toBe(1);
@@ -129,7 +149,6 @@ describe('Executive Summary (Hoja Resumen)', () => {
     expect(getVal('IVA potencialmente no acreditable')).toBe(300);
     expect(getVal('IVA acreditable')).toBe(700);
     expect(getVal('IVA en revisión')).toBe(250);
-    expect(getVal('CFDI cancelados')).toBe(1);
 
     // Limpieza
     fs.unlinkSync(outputPath);
