@@ -108,6 +108,12 @@ export interface ValidationResult {
     // ✅ FASE 2 - AUDIT FIX: Campos fiscales complementarios extraídos directamente del Comprobante
     descuentoGlobal: number;    // Atributo Descuento del Comprobante (puede diferir de Σ descuentos por concepto en edge cases)
     condicionesDePago: string;  // Atributo CondicionesDePago del Comprobante (campo opcional SAT)
+    // Campos para auditoría preventiva IVA (opcional para compatibilidad)
+    fiscalRiskLevel?: 'VERDE' | 'AMARILLO' | 'ROJO';
+    fiscalRiskReason?: string;
+    fiscalRuleApplied?: string;
+    paymentComplementStatus?: 'COMPLETO' | 'SIN_COMPLEMENTO' | 'COMPLEMENTO_FUERA_DE_PERIODO' | 'UUID_RELACIONADO_NO_ENCONTRADO' | 'PUE_VALIDO' | 'PUE_REVISAR_COBRO' | 'PPD_CON_COMPLEMENTO' | 'PPD_SIN_COMPLEMENTO' | string;
+    ivaCreditabilityStatus?: 'ACREDITABLE' | 'NO_ACREDITABLE' | 'POR_DETERMINAR' | string;
 }
 
 export interface UbicacionCP {

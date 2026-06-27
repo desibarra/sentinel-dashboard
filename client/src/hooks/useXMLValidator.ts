@@ -28,6 +28,7 @@ import {
   extractReceptorInfo,
   evaluarTrazabilidad
 } from "@/lib/cfdiEngine";
+import { applyFiscalRules, reconcilePaymentComplements } from '@/lib/fiscalRules';
 
 
 export function useXMLValidator() {
@@ -99,9 +100,12 @@ export function useXMLValidator() {
       }
     }
 
+    // Ejecutar conciliación de complementos en lote antes de retornar
+    const reconciled = reconcilePaymentComplements(allResults);
+
     setIsValidating(false);
     setProgress({ current: 0, total: 0 });
-    return allResults;
+    return reconciled;
   };
 
 
@@ -750,10 +754,15 @@ export function useXMLValidator() {
 
       const trazabilidadInfo = evaluarTrazabilidad(xmlDoc, xmlContent, objVal);
 
-      return {
-          ...objVal,
-          trazabilidadInfo
-      };
+      const withTraz = {
+        ...objVal,
+        trazabilidadInfo
+      } as ValidationResult;
+
+      // Aplicar reglas fiscales iniciales (no IA)
+      const finalResult = applyFiscalRules(withTraz);
+
+      return finalResult;
     } catch (error) {
       console.error(error);
       return createErrorResult(

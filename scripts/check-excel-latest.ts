@@ -1,8 +1,6 @@
-import path from 'path';
-import * as xlsxImport from 'xlsx';
-const xlsx = xlsxImport.default || xlsxImport;
+import * as xlsx from 'xlsx';
 
-const excelPath = 'C:\\Users\\desib\\Downloads\\SentinelExpress_Diagnostico_20260601 (4).xlsx';
+const excelPath = 'scripts/e2e-output/sentinel_export_test.xlsx';
 
 console.log(`Leyendo Excel: ${excelPath}`);
 const workbook = xlsx.readFile(excelPath, { sheetRows: 15 }); // Read only first 15 rows to check headers
