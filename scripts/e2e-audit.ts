@@ -9,7 +9,8 @@ const XMLS = [
     '03_ALERTA_FALTA_CARTA_PORTE.xml',
     '04_FACTURA_CON_CARTA_PORTE_OK.xml',
     '05_ERROR_TOTALES_DESCUADRE.xml',
-    '06_COMPLEMENTO_PAGO_REP.xml'
+    '06_COMPLEMENTO_PAGO_REP.xml',
+    '07_FACTURA_PPD_SIN_COMPLEMENTO.xml'
 ];
 
 const FIXTURES_DIR = 'c:/Users/desib/Documents/sentinel-express/tests/fixtures/demo-xmls';
@@ -71,7 +72,7 @@ async function run() {
             const validateBtn = await page.waitForSelector('button:has-text("Iniciar Validación"):not([disabled])', { state: 'visible', timeout: 10000 }).catch(() => null);
             
             if (validateBtn) {
-                await validateBtn.click();
+                await validateBtn.click({ force: true });
                 console.log('Botón Iniciar Validación clickeado.');
             } else {
                 console.error('No se encontró el botón Iniciar Validación o estaba deshabilitado!');
