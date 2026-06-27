@@ -1,0 +1,197 @@
+export const CATALOGO_USOS_CFDI: Record<string, string> = {
+  G01: 'Adquisición de mercancías',
+  G02: 'Devoluciones, descuentos o bonificaciones',
+  G03: 'Gastos en general',
+  I01: 'Adquisición de mercancías',
+  D01: 'Honorarios médicos, dentales y gastos hospitalarios',
+  D02: 'Gastos médicos por incapacidad o discapacidad',
+  D08: 'Donativos',
+  P01: 'Por definir pago',
+  P02: 'Por definir pago parcial o anticipo',
+  CP01: 'Pago en parcialidades o diferido',
+  S01: 'Sin efectos fiscales',
+};
+
+export type UsoCFDIValidacion = {
+  valido: boolean;
+  nivel: 'ok' | 'alerta' | 'critico';
+  usoCFDIDetectado: string;
+  descripcionUsoCFDI: string;
+  mensaje: string;
+  fundamento: string;
+};
+
+const FUNDAMENTO = 'Art. 29-A CFF, tercer párrafo';
+
+const normalizeText = (text: string): string =>
+  text
+    .normalize('NFD')
+    .replace(/[--]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+
+export function validarUsoCFDI(params: {
+  usoCFDI: string;
+  regimenReceptor: string;
+  montoTotal: number;
+  conceptoDescripcion: string;
+  claveProdServ: string;
+}): UsoCFDIValidacion {
+  const usoCFDI = params.usoCFDI?.trim().toUpperCase() || '';
+  const regimenReceptor = params.regimenReceptor?.trim() || '';
+  const montoTotal = Number(params.montoTotal || 0);
+  const conceptoDescripcion = normalizeText(params.conceptoDescripcion || '');
+  const claveProdServ = params.claveProdServ?.trim() || '';
+
+  const descripcionUsoCFDI =
+    CATALOGO_USOS_CFDI[usoCFDI] ||
+    (usoCFDI === '' ? 'No especificado' : 'Uso CFDI desconocido');
+
+  if (!usoCFDI) {
+    return {
+      valido: false,
+      nivel: 'critico',
+      usoCFDIDetectado: usoCFDI,
+      descripcionUsoCFDI,
+      mensaje:
+        'El Uso de CFDI no está especificado en el receptor del documento. Sin esta información no es posible validar el destino fiscal correcto del comprobante.',
+      fundamento: FUNDAMENTO,
+    };
+  }
+
+  if (!CATALOGO_USOS_CFDI[usoCFDI]) {
+    return {
+      valido: false,
+      nivel: 'alerta',
+      usoCFDIDetectado: usoCFDI,
+      descripcionUsoCFDI,
+      mensaje:
+        'El código de Uso de CFDI no pertenece al catálogo conocido. Revise que el CFDI use un valor válido de UsoCFDI según las reglas del SAT.',
+      fundamento: FUNDAMENTO,
+    };
+  }
+
+  const esDonativo = /donativo|donacion|donación/.test(conceptoDescripcion);
+  const esPago = /pago|pagado|anticipo|parcialidad|cuota|abonado|diferido/.test(
+    conceptoDescripcion
+  );
+  const esServicio = /servicio|honorario|consultoria|consultoría|asesoria|asesoría|profesional/.test(
+    conceptoDescripcion
+  );
+  const esMercancia = /mercanc|producto|bien|material|articulo|artículo/.test(
+    conceptoDescripcion
+  );
+  const esDevolucion = /devolucion|devolución|descuento|bonificacion|bonificación/.test(
+    conceptoDescripcion
+  );
+  const esGastoMedico = /medico|médico|hospitalario|hospitalaria|odontologico|odontológico/.test(
+    conceptoDescripcion
+  );
+  const esAnticipo = /anticipo|adelanto|parcialidad|diferido/.test(conceptoDescripcion);
+
+  if (usoCFDI === 'D08' && !esDonativo) {
+    return {
+      valido: false,
+      nivel: 'alerta',
+      usoCFDIDetectado: usoCFDI,
+      descripcionUsoCFDI,
+      mensaje:
+        'El Uso CFDI es D08 (Donativos) pero el concepto no indica un donativo. Verifique si el CFDI debe usar otro uso más apropiado.',
+      fundamento: FUNDAMENTO,
+    };
+  }
+
+  if ((usoCFDI === 'P01' || usoCFDI === 'P02') && !esPago) {
+    return {
+      valido: false,
+      nivel: 'alerta',
+      usoCFDIDetectado: usoCFDI,
+      descripcionUsoCFDI,
+      mensaje:
+        'El Uso CFDI es P01/P02, que se asocia a pagos o anticipos. El concepto no parece describir un pago, por lo que la clasificación puede ser incorrecta.',
+      fundamento: FUNDAMENTO,
+    };
+  }
+
+  if (usoCFDI === 'I01' && esServicio) {
+    return {
+      valido: false,
+      nivel: 'alerta',
+      usoCFDIDetectado: usoCFDI,
+      descripcionUsoCFDI,
+      mensaje:
+        'El Uso CFDI es I01 (Adquisición de mercancías) pero el concepto parece corresponder a un servicio. Verifique si debería utilizar G03 o un uso diferente.',
+      fundamento: FUNDAMENTO,
+    };
+  }
+
+  if (usoCFDI === 'CP01' && !esAnticipo) {
+    return {
+      valido: false,
+      nivel: 'alerta',
+      usoCFDIDetectado: usoCFDI,
+      descripcionUsoCFDI,
+      mensaje:
+        'El Uso CFDI es CP01 (Pago en parcialidades o diferido) pero el concepto no describe un anticipo o pago diferido. Revise la razón de uso del CFDI.',
+      fundamento: FUNDAMENTO,
+    };
+  }
+
+  if (usoCFDI === 'S01' && (esServicio || esMercancia)) {
+    return {
+      valido: false,
+      nivel: 'alerta',
+      usoCFDIDetectado: usoCFDI,
+      descripcionUsoCFDI,
+      mensaje:
+        'El Uso CFDI es S01 (Sin efectos fiscales) pero el concepto indica un servicio o mercancía que puede ser deducible. Valide si el uso es correcto.',
+      fundamento: FUNDAMENTO,
+    };
+  }
+
+  if (usoCFDI === 'G02' && !esDevolucion) {
+    return {
+      valido: false,
+      nivel: 'alerta',
+      usoCFDIDetectado: usoCFDI,
+      descripcionUsoCFDI,
+      mensaje:
+        'El Uso CFDI es G02 (Devoluciones, descuentos o bonificaciones) pero el concepto no describe una devolución o descuento.',
+      fundamento: FUNDAMENTO,
+    };
+  }
+
+  if (usoCFDI === 'D01' && !esGastoMedico && !esServicio) {
+    return {
+      valido: false,
+      nivel: 'alerta',
+      usoCFDIDetectado: usoCFDI,
+      descripcionUsoCFDI,
+      mensaje:
+        'El Uso CFDI es D01 (Honorarios médicos, dentales y gastos hospitalarios) pero el concepto no parece médico ni de honorarios profesionales.',
+      fundamento: FUNDAMENTO,
+    };
+  }
+
+  if (usoCFDI === 'G03' && regimenReceptor === '606' && montoTotal > 1000000) {
+    return {
+      valido: false,
+      nivel: 'alerta',
+      usoCFDIDetectado: usoCFDI,
+      descripcionUsoCFDI,
+      mensaje:
+        'El Uso CFDI es G03 y el receptor está en régimen 606 con un monto mayor a $1,000,000 MXN. Esto puede indicar un uso de CFDI que requiere revisión adicional.',
+      fundamento: FUNDAMENTO,
+    };
+  }
+
+  return {
+    valido: true,
+    nivel: 'ok',
+    usoCFDIDetectado: usoCFDI,
+    descripcionUsoCFDI,
+    mensaje: 'El Uso de CFDI parece consistente con el concepto y la información del receptor.',
+    fundamento: FUNDAMENTO,
+  };
+}
