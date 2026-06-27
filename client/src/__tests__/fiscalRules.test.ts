@@ -14,7 +14,8 @@ describe('applyFiscalRules', () => {
     } as unknown as ValidationResult;
 
     const out = applyFiscalRules(r);
-    expect(out.paymentComplementStatus).toBe('PPD_SIN_COMPLEMENTO');
+    expect(out.paymentMethodStatus).toBe('PPD_SIN_COMPLEMENTO');
+    expect(out.paymentComplementStatus).toBe('SIN_COMPLEMENTO');
     expect(out.ivaCreditabilityStatus).toBe('NO_ACREDITABLE');
     expect(out.fiscalRiskLevel).toBe('ROJO');
   });
@@ -29,7 +30,8 @@ describe('applyFiscalRules', () => {
     } as unknown as ValidationResult;
 
     const out = applyFiscalRules(r);
-    expect(out.paymentComplementStatus).toBe('PUE_REVISAR_COBRO');
+    expect(out.paymentMethodStatus).toBe('PUE_REVISAR_COBRO');
+    expect(out.paymentComplementStatus).toBe('NO APLICA');
     expect(out.fiscalRiskLevel).toBe('AMARILLO');
   });
 });

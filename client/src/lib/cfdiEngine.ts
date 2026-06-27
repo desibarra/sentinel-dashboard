@@ -112,7 +112,8 @@ export interface ValidationResult {
     fiscalRiskLevel?: 'VERDE' | 'AMARILLO' | 'ROJO';
     fiscalRiskReason?: string;
     fiscalRuleApplied?: string;
-    paymentComplementStatus?: 'COMPLETO' | 'SIN_COMPLEMENTO' | 'COMPLEMENTO_FUERA_DE_PERIODO' | 'UUID_RELACIONADO_NO_ENCONTRADO' | 'PUE_VALIDO' | 'PUE_REVISAR_COBRO' | 'PPD_CON_COMPLEMENTO' | 'PPD_SIN_COMPLEMENTO' | string;
+    paymentMethodStatus?: 'PUE_VALIDO' | 'PUE_REVISAR_COBRO' | 'PPD_CON_COMPLEMENTO' | 'PPD_SIN_COMPLEMENTO' | 'PPD_REVISAR_COMPLEMENTO' | string;
+    paymentComplementStatus?: 'COMPLETO' | 'SIN_COMPLEMENTO' | 'COMPLEMENTO_FUERA_DE_PERIODO' | 'UUID_RELACIONADO_NO_ENCONTRADO' | 'REVISAR_FECHA' | string;
     ivaCreditabilityStatus?: 'ACREDITABLE' | 'NO_ACREDITABLE' | 'POR_DETERMINAR' | string;
 }
 
