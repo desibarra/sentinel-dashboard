@@ -17,7 +17,7 @@ describe('Conciliación Complementos de Pago (Tipo P)', () => {
   });
 
   it('marca SIN_COMPLEMENTO cuando no hay REP relacionado', () => {
-    const origin: ValidationResult = { uuid: 'BBB-222', tipoCFDI: 'I', fechaEmision: '2026-06-01', fileName: 'o2.xml' } as unknown as ValidationResult;
+    const origin: ValidationResult = { uuid: 'BBB-222', tipoCFDI: 'I', metodoPago: 'PPD', fechaEmision: '2026-06-01', fileName: 'o2.xml' } as unknown as ValidationResult;
     const out = reconcilePaymentComplements([origin]);
     expect(out[0].paymentComplementStatus).toBe('SIN_COMPLEMENTO');
   });

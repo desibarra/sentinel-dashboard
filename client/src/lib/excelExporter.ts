@@ -899,6 +899,46 @@ const buildQualityRows = (results: ValidationResult[]) => results.map(r => {
   };
 });
 
+const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
+  const total = results.length;
+  const verdes = results.filter(r => r.fiscalRiskLevel === 'VERDE').length;
+  const amarillos = results.filter(r => r.fiscalRiskLevel === 'AMARILLO').length;
+  const rojos = results.filter(r => r.fiscalRiskLevel === 'ROJO').length;
+  const sinRiesgo = results.filter(r => !r.fiscalRiskLevel).length;
+
+  const ppdSinComp = results.filter(r => r.paymentMethodStatus === 'PPD_SIN_COMPLEMENTO').length;
+  const pueRevisarCobro = results.filter(r => r.paymentMethodStatus === 'PUE_REVISAR_COBRO').length;
+  const compFueraPeriodo = results.filter(r => r.paymentComplementStatus === 'COMPLEMENTO_FUERA_DE_PERIODO').length;
+  const uuidRelNoEncontrado = results.filter(r => r.paymentComplementStatus === 'UUID_RELACIONADO_NO_ENCONTRADO').length;
+  
+  const ivaNoAcreditable = results.filter(r => r.ivaCreditabilityStatus === 'NO_ACREDITABLE');
+  const ivaPotencialmenteNoAcreditableVal = ivaNoAcreditable.reduce((sum, r) => sum + (r.ivaTraslado || 0), 0);
+
+  const ivaAcreditableRows = results.filter(r => r.ivaCreditabilityStatus === 'ACREDITABLE');
+  const ivaAcreditableVal = ivaAcreditableRows.reduce((sum, r) => sum + (r.ivaTraslado || 0), 0);
+
+  const ivaEnRevisionRows = results.filter(r => r.ivaCreditabilityStatus === 'POR_DETERMINAR' || r.fiscalRiskLevel === 'AMARILLO');
+  const ivaEnRevisionVal = ivaEnRevisionRows.reduce((sum, r) => sum + (r.ivaTraslado || 0), 0);
+
+  const cancelados = results.filter(r => /cancelado/i.test(r.estatusSAT || '')).length;
+
+  return [
+    { Metrica: 'CFDI procesados', Valor: total },
+    { Metrica: 'CFDI verdes', Valor: verdes },
+    { Metrica: 'CFDI amarillos', Valor: amarillos },
+    { Metrica: 'CFDI rojos', Valor: rojos },
+    { Metrica: 'CFDI sin nivel de riesgo', Valor: sinRiesgo },
+    { Metrica: 'PPD sin complemento', Valor: ppdSinComp },
+    { Metrica: 'PUE revisar cobro', Valor: pueRevisarCobro },
+    { Metrica: 'Complementos fuera de periodo', Valor: compFueraPeriodo },
+    { Metrica: 'UUID relacionado no encontrado', Valor: uuidRelNoEncontrado },
+    { Metrica: 'IVA potencialmente no acreditable', Valor: Math.round(ivaPotencialmenteNoAcreditableVal * 100) / 100 },
+    { Metrica: 'IVA acreditable', Valor: Math.round(ivaAcreditableVal * 100) / 100 },
+    { Metrica: 'IVA en revisión', Valor: Math.round(ivaEnRevisionVal * 100) / 100 },
+    { Metrica: 'CFDI cancelados', Valor: cancelados },
+  ];
+};
+
 const buildSummaryRows = (results: ValidationResult[], alerts: any[]) => {
   const total = results.length;
   const satNo = results.filter(r => getSatExportFields(r).Estatus_SAT === 'ESTATUS SAT NO CONFIRMADO').length;
@@ -1549,6 +1589,9 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
   // Crear workbook
   const wb = (XLSX as any).utils.book_new();
 
+  // Hoja Resumen como primera hoja del Excel
+  appendJsonSheet(wb, buildExecutiveSummaryRows(validResults), 'Resumen');
+
   // Preparar datos en el orden exacto de columnas
   const data = validResults.map((r) => {
     const detail = cp(r);
@@ -1682,11 +1725,12 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
       Nivel_Trazabilidad: r.trazabilidadInfo?.nivelExpediente || 'NO APLICA',
       Requiere_Soporte_Externo: r.trazabilidadInfo?.fuenteExternaRequerida || 'NO',
       Accion_Recomendada: r.trazabilidadInfo?.accionRecomendadaMatriz || 'NO APLICA',
-        Fiscal_Risk_Level: r.fiscalRiskLevel || 'VERDE',
-        Fiscal_Risk_Reason: r.fiscalRiskReason || 'SIN HALLAZGOS FISCALES',
-        Fiscal_Rule_Applied: r.fiscalRuleApplied || 'NINGUNA',
-        Payment_Complement_Status: r.paymentComplementStatus || 'NO APLICA',
-        IVA_Creditability_Status: r.ivaCreditabilityStatus || 'POR_DETERMINAR',
+      Fiscal_Risk_Level: r.fiscalRiskLevel || 'VERDE',
+      Fiscal_Risk_Reason: r.fiscalRiskReason || 'SIN HALLAZGOS FISCALES',
+      Fiscal_Rule_Applied: r.fiscalRuleApplied || 'NINGUNA',
+      Payment_Complement_Status: r.paymentComplementStatus || 'NO APLICA',
+      IVA_Creditability_Status: r.ivaCreditabilityStatus || 'POR_DETERMINAR',
+      Payment_Method_Status: r.paymentMethodStatus || 'NO APLICA',
     };
   });
 
@@ -1770,6 +1814,7 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
     { wch: 30 }, // BS: Fiscal_Rule_Applied
     { wch: 24 }, // BT: Payment_Complement_Status
     { wch: 24 }, // BU: IVA_Creditability_Status
+    { wch: 24 }, // BV: Payment_Method_Status
   ];
 
   (ws as any)['!cols'] = colWidths;
@@ -1799,8 +1844,9 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
   // Altura de fila de encabezado
   (ws as any)['!rows'] = [{ hpx: 30 }];
 
-  // Activar filtros
-  (ws as any)['!autofilter'] = { ref: `A1:BP1` };
+  // Activar filtros dinámicamente para todas las columnas
+  const lastColRef = (XLSX as any).utils.encode_col(headers.length - 1);
+  (ws as any)['!autofilter'] = { ref: `A1:${lastColRef}1` };
 
   // Congelar fila 1
   (ws as any)['!panes'] = { ySplit: 1, topLeftCell: 'A2', activePane: 'bottomLeft', state: 'frozen' };

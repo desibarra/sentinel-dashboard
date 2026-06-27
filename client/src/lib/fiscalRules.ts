@@ -33,20 +33,27 @@ export function applyFiscalRules(r: ValidationResult): ValidationResult {
   const reasons: string[] = [];
   const rulesApplied: string[] = [];
 
+  // Initialize defaults
+  res.paymentMethodStatus = 'NO APLICA';
+  res.paymentComplementStatus = 'NO APLICA';
+
   // MetodoPago rules
   const metodo = String(res.metodoPago || '').toUpperCase();
   if (metodo === 'PPD') {
     const pagosPresente = String(res.pagosPresente || '').toUpperCase();
     const pagosValido = String(res.pagosValido || '').toUpperCase();
     if (pagosPresente === 'SI' && pagosValido === 'SI') {
-      res.paymentComplementStatus = 'PPD_CON_COMPLEMENTO';
+      res.paymentMethodStatus = 'PPD_CON_COMPLEMENTO';
+      res.paymentComplementStatus = 'COMPLETO';
       rulesApplied.push('PPD_CON_COMPLEMENTO');
     } else if (pagosPresente === 'SI' && pagosValido !== 'SI') {
-      res.paymentComplementStatus = 'PPD_REVISAR_COMPLEMENTO';
+      res.paymentMethodStatus = 'PPD_REVISAR_COMPLEMENTO';
+      res.paymentComplementStatus = 'SIN_COMPLEMENTO';
       reasons.push('PPD con complemento presente pero inválido');
       rulesApplied.push('PPD_REVISAR_COMPLEMENTO');
     } else {
-      res.paymentComplementStatus = 'PPD_SIN_COMPLEMENTO';
+      res.paymentMethodStatus = 'PPD_SIN_COMPLEMENTO';
+      res.paymentComplementStatus = 'SIN_COMPLEMENTO';
       reasons.push('PPD sin complemento detectado');
       rulesApplied.push('PPD_SIN_COMPLEMENTO');
     }
@@ -56,18 +63,20 @@ export function applyFiscalRules(r: ValidationResult): ValidationResult {
     // Revisar evidencia de cobro en trazabilidad
     const fechaCobro = res.trazabilidadInfo?.fechaCobro;
     if (!fechaCobro || fechaCobro === '' || fechaCobro === 'NO VIENE EN XML') {
-      res.paymentComplementStatus = 'PUE_REVISAR_COBRO';
+      res.paymentMethodStatus = 'PUE_REVISAR_COBRO';
       reasons.push('PUE sin evidencia de cobro en trazabilidad');
       rulesApplied.push('PUE_REVISAR_COBRO');
     } else {
-      res.paymentComplementStatus = 'PUE_VALIDO';
+      res.paymentMethodStatus = 'PUE_VALIDO';
       rulesApplied.push('PUE_VALIDO');
     }
+    res.paymentComplementStatus = 'NO APLICA';
   }
 
   // CFDI Tipo P detection
   if (String(res.tipoCFDI || '').toUpperCase() === 'P') {
     rulesApplied.push('CFDI_TIPO_P_DETECTADO');
+    res.paymentComplementStatus = 'SIN_COMPLEMENTO';
   }
 
   // UUID relacionado no encontrado (simple heuristic)
@@ -91,7 +100,7 @@ export function applyFiscalRules(r: ValidationResult): ValidationResult {
   }
 
   // IVA acreditable heuristic (restricción: solo NO_ACREDITABLE por falta de complemento o pagos inválidos)
-  if (res.paymentComplementStatus && String(res.paymentComplementStatus).includes('SIN_COMPLEMENTO')) {
+  if (res.paymentMethodStatus === 'PPD_SIN_COMPLEMENTO' || res.paymentComplementStatus === 'SIN_COMPLEMENTO') {
     res.ivaCreditabilityStatus = 'NO_ACREDITABLE';
   } else if (String(res.pagosValido || '').toUpperCase() === 'NO') {
     res.ivaCreditabilityStatus = 'NO_ACREDITABLE';
@@ -129,8 +138,13 @@ export function reconcilePaymentComplements(results: ValidationResult[]): Valida
   results.forEach(r => {
     const tipo = String(r.tipoCFDI || '').toUpperCase();
     if (tipo !== 'P') {
-      if (!r.paymentComplementStatus || r.paymentComplementStatus === 'NO APLICA') {
-        r.paymentComplementStatus = 'SIN_COMPLEMENTO';
+      const metodo = String(r.metodoPago || '').toUpperCase();
+      if (metodo === 'PPD') {
+        if (!r.paymentComplementStatus || r.paymentComplementStatus === 'NO APLICA') {
+          r.paymentComplementStatus = 'SIN_COMPLEMENTO';
+        }
+      } else {
+        r.paymentComplementStatus = 'NO APLICA';
       }
     }
   });
@@ -166,10 +180,12 @@ export function reconcilePaymentComplements(results: ValidationResult[]): Valida
           origin.fiscalRiskLevel = origin.fiscalRiskLevel === 'ROJO' ? origin.fiscalRiskLevel : 'AMARILLO';
           origin.fiscalRiskReason = (origin.fiscalRiskReason ? origin.fiscalRiskReason + ' | ' : '') + 'REVISAR_FECHA';
           origin.fiscalRuleApplied = (origin.fiscalRuleApplied ? origin.fiscalRuleApplied + ', ' : '') + 'REVISAR_FECHA';
+          origin.paymentComplementStatus = 'REVISAR_FECHA';
+
           r.fiscalRiskLevel = r.fiscalRiskLevel === 'ROJO' ? r.fiscalRiskLevel : 'AMARILLO';
           r.fiscalRiskReason = (r.fiscalRiskReason ? r.fiscalRiskReason + ' | ' : '') + 'REVISAR_FECHA';
           r.fiscalRuleApplied = (r.fiscalRuleApplied ? r.fiscalRuleApplied + ', ' : '') + 'REVISAR_FECHA';
-          // No forzar estado COMPLETO/COMPLEMENTO_FUERA_DE_PERIODO cuando fechas inválidas; dejar como está o marcar revisión
+          r.paymentComplementStatus = 'REVISAR_FECHA';
           return;
         }
 
@@ -177,14 +193,42 @@ export function reconcilePaymentComplements(results: ValidationResult[]): Valida
         if (diffDays > PAYMENT_COMPLEMENT_MAX_DAYS) {
           origin.paymentComplementStatus = 'COMPLEMENTO_FUERA_DE_PERIODO';
           origin.fiscalRuleApplied = (origin.fiscalRuleApplied ? origin.fiscalRuleApplied + ', ' : '') + 'COMPLEMENTO_FUERA_DE_PERIODO';
+          
+          if (origin.paymentMethodStatus === 'PPD_SIN_COMPLEMENTO' || !origin.paymentMethodStatus || origin.paymentMethodStatus === 'NO APLICA') {
+            origin.paymentMethodStatus = origin.pagosValido === 'NO' ? 'PPD_REVISAR_COMPLEMENTO' : 'PPD_CON_COMPLEMENTO';
+          }
         } else {
           origin.paymentComplementStatus = 'COMPLETO';
           origin.fiscalRuleApplied = (origin.fiscalRuleApplied ? origin.fiscalRuleApplied + ', ' : '') + 'COMPLETO';
+          
+          if (origin.paymentMethodStatus === 'PPD_SIN_COMPLEMENTO' || !origin.paymentMethodStatus || origin.paymentMethodStatus === 'NO APLICA') {
+            origin.paymentMethodStatus = origin.pagosValido === 'NO' ? 'PPD_REVISAR_COMPLEMENTO' : 'PPD_CON_COMPLEMENTO';
+          }
         }
 
         // Marcar complemento como relacionado correctamente
         r.paymentComplementStatus = 'COMPLETO';
         r.fiscalRuleApplied = (r.fiscalRuleApplied ? r.fiscalRuleApplied + ', ' : '') + 'RELACIONADO_A:' + origin.uuid;
+
+        // Reevaluar IVA acreditable y nivel de riesgo en el origen
+        if ((origin.paymentComplementStatus === 'COMPLETO' || origin.paymentComplementStatus === 'COMPLEMENTO_FUERA_DE_PERIODO') &&
+            origin.pagosValido !== 'NO' && origin.isValid) {
+          if ((origin.ivaTraslado || 0) > 0) {
+            origin.ivaCreditabilityStatus = 'ACREDITABLE';
+          }
+          
+          // Quitar el motivo de falta de complemento del riesgo
+          const originReasons = (origin.fiscalRiskReason || '')
+            .split(' | ')
+            .filter(x => x && x !== 'PPD sin complemento detectado' && x !== 'PPD con complemento presente pero inválido');
+          
+          origin.fiscalRiskReason = originReasons.join(' | ') || 'SIN HALLAZGOS FISCALES';
+          if (originReasons.length > 0) {
+            origin.fiscalRiskLevel = 'AMARILLO';
+          } else {
+            origin.fiscalRiskLevel = 'VERDE';
+          }
+        }
       });
     }
   });
