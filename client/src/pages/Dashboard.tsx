@@ -25,6 +25,8 @@ import { incrementXMLCount, getXMLCount } from "@/services/leadService";
 import { saveSessionCache, loadSessionCache, clearSessionCache, getCacheAge } from "@/hooks/useSessionCache";
 import { useAuth } from "@/contexts/AuthContext";
 import { tokenService } from "@/services/tokenService";
+import { isBlacklistSynced } from "@/utils/blacklistValidator";
+
 
 type DashboardResult = ValidationResult;
 type SortField = 'fileName' | 'uuid' | 'tipoCFDI' | 'fechaEmision' | 'rfcEmisor' | 'total' | 'estatusSAT' | 'resultado' | 'comentarioFiscal';
@@ -48,6 +50,16 @@ export default function Dashboard() {
 
   // ── UUIDs que están siendo revalidados en este momento (para deshabilitar su botón) ──
   const [revalidatingUUIDs, setRevalidatingUUIDs] = useState<Set<string>>(new Set());
+
+  // ── Estado de sincronización de listas 69-B/EFOS en IndexedDB ──
+  const [listasNoSincronizadas, setListasNoSincronizadas] = useState<boolean>(false);
+
+  useEffect(() => {
+    isBlacklistSynced().then((synced) => {
+      setListasNoSincronizadas(!synced);
+    }).catch(() => setListasNoSincronizadas(true));
+  }, []);
+
 
   // WhatsApp CTA constants
   const WHATSAPP_NUMBER = "524776355734";
@@ -445,6 +457,8 @@ export default function Dashboard() {
 
   const getStatusIcon = (resultado: string) => {
 
+    if (resultado.startsWith("No validado")) return <AlertCircle className="w-5 h-5 text-slate-500" />;
+
     if (resultado.includes("🟢")) return <CheckCircle2 className="w-5 h-5 text-emerald-800" />;
 
     if (resultado.includes("🟡")) return <AlertCircle className="w-5 h-5 text-amber-700" />;
@@ -456,6 +470,8 @@ export default function Dashboard() {
 
 
   const getStatusBadge = (resultado: string) => {
+
+    if (resultado.startsWith("No validado")) return <Badge className="bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20 hover:bg-slate-500/20 px-3 py-1 font-black uppercase tracking-tighter">No Validado</Badge>;
 
     if (resultado.includes("🟢")) return <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 hover:bg-emerald-500/20 px-3 py-1 font-black uppercase tracking-tighter animate-in fade-in zoom-in duration-500">Usable</Badge>;
 
@@ -1083,9 +1099,35 @@ export default function Dashboard() {
 
         </div>
 
+        {/* ── Banner: Listas 69-B no cargadas ── */}
+        {listasNoSincronizadas && (
+          <div className="flex items-center justify-between gap-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700/50 rounded-2xl px-5 py-3 mb-6">
+            <div className="flex items-center gap-3">
+              <div className="flex-shrink-0 w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-900/40 flex items-center justify-center">
+                <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+              </div>
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-tight text-amber-800 dark:text-amber-300">
+                  Validación 69-B pendiente
+                </p>
+                <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-tight mt-0.5">
+                  Las listas oficiales del SAT no están cargadas en este dispositivo.
+                  Los resultados no incluyen verificación contra lista 69-B / EFOS.
+                </p>
+              </div>
+            </div>
+            <Link href="/settings">
+              <Button
+                size="sm"
+                className="flex-shrink-0 bg-amber-500 hover:bg-amber-600 text-white text-[10px] uppercase font-black h-7 px-3 rounded-lg shadow-md shadow-amber-500/20 whitespace-nowrap"
+              >
+                <Settings className="w-3 h-3 mr-1" />
+                Cargar listas
+              </Button>
+            </Link>
+          </div>
+        )}
 
-
-        {/* System Health / Main Panel Grid */}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
 

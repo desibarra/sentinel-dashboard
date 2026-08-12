@@ -1,5 +1,5 @@
 import { useState as reactUseState } from "react";
-const useState = typeof window === 'undefined' ? (init: any) => [init, () => {}] : reactUseState;
+const useState: typeof reactUseState = typeof window === 'undefined' ? ((init: any) => [init, () => {}]) as unknown as typeof reactUseState : reactUseState;
 import { UploadedFile } from "@/components/UploadZone";
 import { checkCFDIStatusSAT } from "@/utils/satStatusValidator";
 import { checkRFCBlacklist, BlacklistValidation } from "@/utils/blacklistValidator"; // Nuevo
@@ -345,6 +345,8 @@ export function useXMLValidator() {
             añoFiscal,
             estatusSAT,
             fechaCancelacion,
+            descuentoGlobal: 0,
+            condicionesDePago: "NO VIENE EN XML",
             rfcEmisorBlacklist: { isEFOS: false, is69B: false, found: false },
             rfcReceptorBlacklist: { isEFOS: false, is69B: false, found: false },
             cfdiSustituido,
@@ -572,23 +574,67 @@ export function useXMLValidator() {
         console.error("Error validando listas negras:", err);
       }
 
-      // Reglas de negocio para Listas Negras
+      // ── Reglas de negocio para listas 69-B / EFOS ──
+      // REGLA: si la base no está cargada (notSynced), NO marcar como inválido.
+      //        Solo informar que la validación no pudo realizarse.
       let blacklistNivelValidacion = "SIN CAMBIOS";
 
-      if (rfcEmisorBlacklist?.found) {
-        if (rfcEmisorBlacklist.is69B) {
-          resultado = "🔴 NO USABLE";
-          comentarioFiscal = `[CRÍTICO] RFC EMISOR EN LISTA 69-B (${rfcEmisorBlacklist.situacion}). Operaciones inexistentes. NO DEDUCIBLE. ` + comentarioFiscal;
-          blacklistNivelValidacion = "ERROR";
-        } else if (rfcEmisorBlacklist.isEFOS) {
-          resultado = "🟡 ALERTA";
-          comentarioFiscal = `[ALERTA] RFC EMISOR EN LISTA EFOS (Facturera). Revisar documentación soporte. ` + comentarioFiscal;
-        }
-      }
+      // Helper local: obtiene el mensaje de situación oficial
+      const situacionLabel = (bv: BlacklistValidation) => bv.situacion || "situación no especificada";
 
-      if (rfcReceptorBlacklist?.found) {
-        if (rfcReceptorBlacklist.is69B) {
-          comentarioFiscal += " [ALERTA] RFC Receptor en lista 69-B.";
+      if (rfcEmisorBlacklist?.notSynced || rfcReceptorBlacklist?.notSynced) {
+        // Base no cargada o corrupta: NO penalizar ni afirmar "sin coincidencias".
+        resultado = "No validado: listas SAT no cargadas";
+        comentarioFiscal = `[AVISO] No validado: listas SAT no cargadas. Valida en Configuración → Inteligencia SAT para cargar la lista 69-B. ` + comentarioFiscal;
+      } else {
+        // ── EMISOR ──
+        if (rfcEmisorBlacklist?.found) {
+          const sit = situacionLabel(rfcEmisorBlacklist);
+          const sitNorm = sit.toLowerCase();
+
+          if (rfcEmisorBlacklist.multiEstado) {
+            // Estados múltiples: no se puede determinar el vigente — requiere revisión
+            resultado = resultado === "🟢 USABLE" ? "🟡 ALERTA" : resultado;
+            comentarioFiscal = `[ADVERTENCIA — 69-B SITUACIÓN MÚLTIPLE] RFC Emisor con múltiples estados en lista 69-B sin poder determinar el vigente: "Situación múltiple; requiere revisión". Revisar resolución oficial. ` + comentarioFiscal;
+            if (blacklistNivelValidacion === "SIN CAMBIOS") blacklistNivelValidacion = "ALERTA";
+          } else if (sitNorm.includes("definitivo")) {
+            // Definitivo: alerta crítica — NO DEDUCIBLE
+            resultado = "🔴 NO USABLE";
+            comentarioFiscal = `[CRÍTICO — 69-B DEFINITIVO] RFC Emisor publicado como DEFINITIVO en lista 69-B SAT. Operaciones con este emisor son consideradas inexistentes. NO DEDUCIBLE. Situación oficial: "${sit}". ` + comentarioFiscal;
+            blacklistNivelValidacion = "ERROR";
+          } else if (sitNorm.includes("presunto")) {
+            // Presunto: advertencia preventiva — no bloquear
+            resultado = resultado === "🟢 USABLE" ? "🟡 ALERTA" : resultado;
+            comentarioFiscal = `[ADVERTENCIA — 69-B PRESUNTO] RFC Emisor figura como PRESUNTO en lista 69-B SAT. El contribuyente tiene derecho a desvirtuar. Revisar resolución oficial. Situación oficial: "${sit}". ` + comentarioFiscal;
+            if (blacklistNivelValidacion === "SIN CAMBIOS") blacklistNivelValidacion = "ALERTA";
+          } else if (sitNorm.includes("desvirtuado")) {
+            // Desvirtuado: aclaró su situación — sin alerta de lista negra
+            comentarioFiscal = `[INFO — 69-B] RFC Emisor estuvo en lista 69-B pero aclaró su situación (Desvirtuado). Sentencia favorable según el listado 69-B consultado, con fecha de corte 31/12/2025. ` + comentarioFiscal;
+          } else if (sitNorm.includes("sentencia") || sitNorm.includes("favorable")) {
+            // Sentencia favorable: resolución judicial favorable — sin alerta
+            comentarioFiscal = `[INFO — 69-B] RFC Emisor cuenta con sentencia favorable en lista 69-B. Sentencia favorable según el listado 69-B consultado, con fecha de corte 31/12/2025. ` + comentarioFiscal;
+          } else {
+            // Situación no reconocida: mostrar con advertencia
+            resultado = resultado === "🟢 USABLE" ? "🟡 ALERTA" : resultado;
+            comentarioFiscal = `[ADVERTENCIA — 69-B] RFC Emisor encontrado en lista 69-B SAT. Situación: "${sit}". Requiere revisión manual. ` + comentarioFiscal;
+            if (blacklistNivelValidacion === "SIN CAMBIOS") blacklistNivelValidacion = "ALERTA";
+          }
+        }
+
+        // ── RECEPTOR ──
+        if (rfcReceptorBlacklist?.found) {
+          const sit = situacionLabel(rfcReceptorBlacklist);
+          const sitNorm = sit.toLowerCase();
+
+          if (rfcReceptorBlacklist.multiEstado) {
+            comentarioFiscal += ` [AVISO — 69-B SITUACIÓN MÚLTIPLE] RFC Receptor con múltiples estados en lista 69-B sin poder determinar el vigente: "Situación múltiple; requiere revisión".`;
+          } else if (sitNorm.includes("definitivo")) {
+            comentarioFiscal += ` [AVISO — 69-B DEFINITIVO] RFC Receptor publicado como DEFINITIVO en lista 69-B. Situación: "${sit}".`;
+          } else if (sitNorm.includes("presunto")) {
+            comentarioFiscal += ` [AVISO — 69-B PRESUNTO] RFC Receptor figura como PRESUNTO en lista 69-B. Situación: "${sit}".`;
+          } else if (sitNorm.includes("desvirtuado") || sitNorm.includes("sentencia") || sitNorm.includes("favorable")) {
+            comentarioFiscal += ` [INFO — 69-B] RFC Receptor aclaró situación en lista 69-B: "${sit}". Sentencia favorable según el listado 69-B consultado, con fecha de corte 31/12/2025.`;
+          }
         }
       }
 

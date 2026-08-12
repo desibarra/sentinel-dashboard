@@ -117,3 +117,6 @@ reports/dev-outputs/*.xlsx
 legacy/**/*.xlsx
 reports/certificacion/*.xlsx
 dev-outputs/
+
+# Scripts backups (evidencia local, no versionar)
+scripts/backups/

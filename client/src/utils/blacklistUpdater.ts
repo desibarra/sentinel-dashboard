@@ -1,4 +1,4 @@
-import { addBlacklistRecordsBulk, BlacklistRecord, getMetadata, updateMetadata, BlacklistMetadata } from "@/db/blacklistDB";
+import { replaceBlacklistRecordsBulk, BlacklistRecord, getMetadata, updateMetadata } from "@/db/blacklistDB";
 
 export interface UpdateResult {
     success: boolean;
@@ -25,9 +25,6 @@ export async function processBlacklistFile(
             const lines = text.split(/\r?\n/);
             const records: BlacklistRecord[] = [];
             const errors: string[] = [];
-
-            // Heurística simple para detectar formato CSV SAT
-            // Esperamos: RFC (columna 0) o RFC, Razon Social, Situacion...
 
             let processedCount = 0;
 
@@ -65,7 +62,6 @@ export async function processBlacklistFile(
                     records.push({
                         rfc,
                         tipo,
-                        fechaPublicacion: new Date().toISOString(),
                         razonSocial,
                         situacion: situacion || "Listado Definitivo"
                     });
@@ -79,32 +75,42 @@ export async function processBlacklistFile(
             }
 
             try {
-                await addBlacklistRecordsBulk(records);
+                // Reemplazo atómico: si falla, se conserva la copia anterior válida.
+                const inserted = await replaceBlacklistRecordsBulk(records);
 
-                // Update Metadata
-                const currentMeta = await getMetadata() || {
-                    key: 'lastUpdate',
-                    efosLastUpdate: '',
-                    list69BLastUpdate: '',
-                    efosCount: 0,
-                    list69BCount: 0
-                };
+                const rfcSet = new Set(records.map(r => r.rfc));
+                const conPresunto = new Set<string>();
+                const conDefinitivo = new Set<string>();
+                const conDesvirtuado = new Set<string>();
+                const conSentencia = new Set<string>();
 
-                if (tipo === 'EFOS') {
-                    currentMeta.efosLastUpdate = new Date().toISOString();
-                    currentMeta.efosCount = (currentMeta.efosCount || 0) + records.length; // Incremental simple logic
-                } else {
-                    currentMeta.list69BLastUpdate = new Date().toISOString();
-                    currentMeta.list69BCount = (currentMeta.list69BCount || 0) + records.length;
+                for (const r of records) {
+                    const sit = (r.situacion || '').toLowerCase();
+                    if (sit.includes('presunto')) conPresunto.add(r.rfc);
+                    else if (sit.includes('definitivo')) conDefinitivo.add(r.rfc);
+                    else if (sit.includes('desvirtuado')) conDesvirtuado.add(r.rfc);
+                    else if (sit.includes('sentencia')) conSentencia.add(r.rfc);
                 }
 
-                await updateMetadata(currentMeta);
+                const now = new Date().toISOString();
+                await updateMetadata({
+                    key: 'lastUpdate',
+                    cargadoEl: now,
+                    fechaOficial: null, // carga manual: la fecha oficial no está comprobada
+                    efosCount: records.filter(r => r.tipo === 'EFOS').length,
+                    list69BCount: records.filter(r => r.tipo === '69B').length,
+                    totalRFC: rfcSet.size,
+                    presuntos: conPresunto.size,
+                    definitivos: conDefinitivo.size,
+                    desvirtuados: conDesvirtuado.size,
+                    sentenciaFavorable: conSentencia.size,
+                });
 
                 resolve({
                     success: true,
-                    efosCount: currentMeta.efosCount,
-                    list69BCount: currentMeta.list69BCount,
-                    totalProcessed: processedCount,
+                    efosCount: records.filter(r => r.tipo === 'EFOS').length,
+                    list69BCount: records.filter(r => r.tipo === '69B').length,
+                    totalProcessed: inserted,
                     errors
                 });
 

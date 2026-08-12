@@ -6,7 +6,6 @@ import "express-async-errors";
 import cookieParser from "cookie-parser";
 import { apiRouter } from "./api.js";
 import { getDB } from "./db.js";
-import { startSATCrawlerCron } from "./services/satCrawler.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,9 +13,6 @@ const __dirname = path.dirname(__filename);
 async function startServer() {
   // Initialize Database
   await getDB();
-
-  // Inicia Crawler de listas SAT
-  startSATCrawlerCron();
 
   const app = express();
   const server = createServer(app);
