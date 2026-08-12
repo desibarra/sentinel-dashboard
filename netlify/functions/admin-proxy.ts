@@ -105,8 +105,10 @@ export const handler = async (event: any) => {
                     return { statusCode: 400, body: JSON.stringify({ error: "Token was never activated" }) };
                 }
                 const oldExpiry = new Date(tokenData.expiresAt);
-                const newExpiry = new Date(oldExpiry.getTime() + (days || 30) * 24 * 60 * 60 * 1000);
+                const baseDate = oldExpiry.getTime() < now.getTime() ? now : oldExpiry;
+                const newExpiry = new Date(baseDate.getTime() + (days || 30) * 24 * 60 * 60 * 1000);
                 tokenData.expiresAt = newExpiry.toISOString();
+                tokenData.status = "active";
             } else if (action === "delete") {
                 await store.delete(tokenId);
                 return { statusCode: 200, body: JSON.stringify({ success: true, deleted: true }) };

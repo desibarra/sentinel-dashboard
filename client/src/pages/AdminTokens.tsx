@@ -120,7 +120,12 @@ export default function AdminTokens() {
 
 
 
-    const safeTokens = Array.isArray(tokens) ? tokens : [];
+    const safeTokens = Array.isArray(tokens) ? tokens.map(t => {
+        if (t.status === 'active' && daysUntil(t.expiresAt) < 0) {
+            return { ...t, status: 'expired' as TokenStatus };
+        }
+        return t;
+    }) : [];
 
     const filteredTokens = useMemo(() => {
         return safeTokens.filter(t => {
@@ -354,6 +359,11 @@ export default function AdminTokens() {
                                         {token.status === 'suspended' && (
                                             <button onClick={() => handleAction(token.id, 'reactivate')} className="flex items-center gap-1.5 px-3 py-1.5 bg-green-900/30 text-green-400 rounded-lg text-xs hover:bg-green-900/50 transition-colors">
                                                 <Play className="w-3 h-3" /> Reactivar
+                                            </button>
+                                        )}
+                                        {token.status === 'expired' && (
+                                            <button onClick={() => handleAction(token.id, 'extend', 30)} className="flex items-center gap-1.5 px-3 py-1.5 bg-green-500 text-zinc-950 font-bold rounded-lg text-xs hover:bg-green-400 transition-colors shadow-[0_0_15px_rgba(34,197,94,0.2)]">
+                                                <Play className="w-3 h-3" /> Renovar 30d
                                             </button>
                                         )}
                                         {(token.status === 'active' || token.status === 'suspended') && (
