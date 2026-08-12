@@ -175,7 +175,7 @@ export default function LeadCapture({ onComplete }: LeadCaptureProps) {
                             {[
                                 "Valida errores de totales e impuestos",
                                 "Detecta CFDIs cancelados o no encontrados en el SAT",
-                                "Revisa listas EFOS y 69-B en tiempo real",
+                                "Cruza tus RFC contra el listado oficial 69-B cargado localmente",
                                 "Exporta diagnóstico completo a Excel",
                             ].map((feat) => (
                                 <div key={feat} className="flex items-start gap-3">
