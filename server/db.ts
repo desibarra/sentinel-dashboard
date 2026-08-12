@@ -61,21 +61,6 @@ export async function getDB() {
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
         FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
       );
-
-      CREATE TABLE IF NOT EXISTS blacklist_data (
-        rfc TEXT NOT NULL,
-        tipo TEXT NOT NULL,
-        status TEXT,
-        added_at INTEGER,
-        PRIMARY KEY (rfc, tipo)
-      );
-
-      CREATE TABLE IF NOT EXISTS blacklist_metadata (
-        tipo TEXT PRIMARY KEY,
-        last_sync INTEGER,
-        hash TEXT,
-        count INTEGER DEFAULT 0
-      );
     `);
 
     // Se ha eliminado la creación del usuario por defecto 'admin123' por razones de seguridad.
