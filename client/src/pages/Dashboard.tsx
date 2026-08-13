@@ -32,6 +32,49 @@ type DashboardResult = ValidationResult;
 type SortField = 'fileName' | 'uuid' | 'tipoCFDI' | 'fechaEmision' | 'rfcEmisor' | 'total' | 'estatusSAT' | 'resultado' | 'comentarioFiscal';
 type SortDirection = 'asc' | 'desc' | null;
 
+// Transformación pura del reintento SAT para una fila (extraída del handler para
+// reutilización y pruebas). No altera reglas: reproduce fielmente la lógica previa inline.
+// El handler handleRevalidateSAT la aplica vía setResults(...map por UUID) para
+// actualizar SOLO la fila correspondiente y dejar el resto intactas.
+export type SATRevalidationStatus = {
+  estado: 'Vigente' | 'Cancelado' | 'No Encontrado' | 'Error Conexión';
+  estatusCancelacion?: string;
+  validatedAt: Date;
+};
+
+export function revalidarFilaSAT(
+  row: DashboardResult,
+  status: SATRevalidationStatus,
+  giroEmpresa: string
+): DashboardResult {
+  const resBase = row.resultadoMotor || row.resultado;
+  const comBase = row.comentarioMotor || row.comentarioFiscal;
+
+  let nuevoResultado = resBase;
+  let nuevoComentario = comBase;
+
+  if (status.estado === "Cancelado") {
+    nuevoResultado = "🔴 NO USABLE";
+    nuevoComentario = `[CRÍTICO] CFDI CANCELADO en SAT. ${status.estatusCancelacion || ""}. No tiene efectos fiscales. ` + comBase;
+  } else if (status.estado === "No Encontrado") {
+    nuevoResultado = "No validado SAT";
+    nuevoComentario = `No validado: UUID no encontrado en SAT (puede ser muy reciente o apócrifo). Reintenta la consulta. ` + comBase;
+  } else if (status.estado === "Error Conexión") {
+    nuevoResultado = "No validado SAT";
+    nuevoComentario = `No validado: no se pudo confirmar el estatus del CFDI ante el SAT. Reintenta la consulta. ` + comBase;
+  }
+
+  return {
+    ...row,
+    estatusSAT: status.estado,
+    fechaCancelacion: status.estatusCancelacion || row.fechaCancelacion || "",
+    ultimoRefrescoSAT: status.validatedAt.toISOString(),
+    giroEmpresa,
+    resultado: nuevoResultado,
+    comentarioFiscal: nuevoComentario,
+  };
+}
+
 export default function Dashboard() {
   const { theme, toggleTheme } = useTheme();
   const { currentCompany } = useCompany();
@@ -253,11 +296,13 @@ export default function Dashboard() {
 
       const noUsable = validationResults.filter((r) => r.resultado.includes("🔴")).length;
 
+      const noValidadosSAT = validationResults.filter((r) => r.resultado === "No validado SAT" || r.resultado?.startsWith("No validado")).length;
+
 
 
       toast.success(
 
-        `Validación completada: ${usable} usables, ${alertas} con alertas, ${noUsable} no usables`,
+        `Validación completada: ${usable} usables, ${alertas} con alertas, ${noUsable} no usables, ${noValidadosSAT} no validados SAT`,
 
         { duration: 5000 }
 
@@ -407,8 +452,12 @@ export default function Dashboard() {
     const usables = visibleResults.filter(r => r.resultado.includes("🟢")).length;
     const alertas = visibleResults.filter(r => r.resultado.includes("🟡")).length;
     const noUsable = visibleResults.filter(r => r.resultado.includes("🔴")).length;
-    // Salud ponderada: 🟢 = 100%, 🟡 = 50%, 🔴 = 0%
-    const salud = total > 0 ? Math.round(((usables + alertas * 0.5) / total) * 100) : 100;
+    const noValidadosSAT = visibleResults.filter(r =>
+      r.resultado === "No validado SAT" || r.resultado?.startsWith("No validado")
+    ).length;
+    // Salud ponderada: 🟢 = 100%, 🟡 = 50%, 🔴 = 0%, No validado excluido
+    const totalClasificados = usables + alertas + noUsable;
+    const salud = totalClasificados > 0 ? Math.round(((usables + alertas * 0.5) / totalClasificados) * 100) : 100;
     // Monto en riesgo: suma de totales con 🔴 o 🟡
     const montoRiesgo = visibleResults
       .filter(r => r.resultado.includes("🔴") || r.resultado.includes("🟡"))
@@ -418,6 +467,7 @@ export default function Dashboard() {
       usables,
       alertas,
       noUsable,
+      noValidadosSAT,
       salud,
       montoRiesgo,
       totalMonto: visibleResults.reduce((sum, r) => sum + r.total, 0),
@@ -436,6 +486,8 @@ export default function Dashboard() {
     { name: "Alertas", value: stats.alertas, color: "#B45309" },
 
     { name: "No Usable", value: stats.noUsable, color: "#991B1B" },
+
+    { name: "No Validados SAT", value: stats.noValidadosSAT, color: "#64748B" },
 
   ];
 
@@ -707,59 +759,10 @@ export default function Dashboard() {
 
       setResults(prev => prev.map(row => {
 
-        if (row.uuid !== uuid) return row; // todas las demás filas: sin tocar
+        if (row.uuid !== uuid) return row; // todas las demas filas: sin tocar
 
-
-
-        const resBase = row.resultadoMotor || row.resultado;
-
-        const comBase = row.comentarioMotor || row.comentarioFiscal;
-
-
-
-        let nuevoResultado = resBase;
-
-        let nuevoComentario = comBase;
-
-
-
-        if (status.estado === "Cancelado") {
-
-          nuevoResultado = "🔴 NO DISPONIBLE (CANCELADO)";
-
-          nuevoComentario = `[CRÍTICO] CFDI CANCELADO en SAT. ${status.estatusCancelacion || ""}. No tiene efectos fiscales. ` + comBase;
-
-        } else if (status.estado === "No Encontrado") {
-
-          nuevoComentario = `[ALERTA] UUID no encontrado en SAT (puede ser muy reciente o apócrifo). ` + comBase;
-
-        } else if (status.estado === "Error Conexión") {
-
-          nuevoComentario = `[AVISO] No se pudo actualizar el estatus en SAT (Timeout). ` + comBase;
-
-        }
-
-        // Vigente: resultado y comentario del motor se mantienen
-
-
-
-        return {
-
-          ...row,
-
-          estatusSAT: status.estado,
-
-          fechaCancelacion: status.estatusCancelacion || row.fechaCancelacion || "",
-
-          ultimoRefrescoSAT: status.validatedAt.toISOString(),
-
-          giroEmpresa: currentCompany?.giro || row.giroEmpresa,
-
-          resultado: nuevoResultado,
-
-          comentarioFiscal: nuevoComentario,
-
-        };
+        // Logica de revalidacion delegada a funcion pura reutilizable (revalidarFilaSAT)
+        return revalidarFilaSAT(row, status, currentCompany?.giro || row.giroEmpresa || '');
 
       }));
 
@@ -1448,6 +1451,31 @@ export default function Dashboard() {
                 <p className="text-[10px] font-black uppercase tracking-[0.2em] text-red-600 mb-2">🔴 No Usables</p>
 
                 <p className="text-4xl font-black text-red-800 dark:text-red-300 tracking-tighter">{stats.noUsable}</p>
+
+              </div>
+
+            </CardContent>
+
+          </Card>
+
+
+
+          {/* KPI: No Validados SAT */}
+          <Card className="border-0 shadow-xl bg-white dark:bg-slate-800 rounded-3xl border-b-8 border-slate-500 hover:-translate-y-1 transition-transform duration-300">
+
+            <CardContent className="pt-8 pb-8">
+
+              <div className="flex flex-col items-center">
+
+                <div className="p-4 bg-slate-100 dark:bg-slate-900/10 rounded-2xl mb-4 shadow-inner">
+
+                  <AlertCircle className="w-7 h-7 text-slate-600 dark:text-slate-400" />
+
+                </div>
+
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-600 dark:text-slate-400 mb-2">⏳ No Validados SAT</p>
+
+                <p className="text-4xl font-black text-slate-700 dark:text-slate-300 tracking-tighter">{stats.noValidadosSAT}</p>
 
               </div>
 

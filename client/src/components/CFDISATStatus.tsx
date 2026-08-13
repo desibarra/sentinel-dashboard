@@ -36,12 +36,11 @@ export function CFDISATStatus({
         );
     }
 
-    // Si no hay status SAT y tampoco listas negras relevantes, retornar null
-    // (Aunque si compact es true, mejor mostrar loading o vacío)
+    // Si no hay status SAT y tampoco listas negras relevantes, mostrar PENDIENTE
     if (!estatusSAT || estatusSAT === "No verificado") {
         if ((rfcEmisorBlacklist && rfcEmisorBlacklist.found) || (rfcReceptorBlacklist && rfcReceptorBlacklist.found)) {
             // Si tenemos listas negras pero no SAT, seguimos
-        } else {
+        } else if (!compact) {
             return null;
         }
     }
@@ -73,6 +72,12 @@ export function CFDISATStatus({
         badges.push(
             <span key="sat-err" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-[9px]' : 'px-3 py-1 text-sm'} font-black bg-slate-500/10 text-slate-500 border border-slate-500/20 rounded-lg uppercase tracking-widest`}>
                 Error SAT
+            </span>
+        );
+    } else if (!estatusSAT || estatusSAT === 'No verificado') {
+        badges.push(
+            <span key="sat-pending" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-[9px]' : 'px-3 py-1 text-sm'} font-black bg-blue-500/10 text-blue-600 border border-blue-500/20 rounded-lg uppercase tracking-widest`}>
+                Pendiente
             </span>
         );
     }

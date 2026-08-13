@@ -1312,6 +1312,8 @@ export const classifyCFDI = (
 
     // 2. DETECTORES PARA REGLAS DE NEGOCIO
     const tieneECC = xmlContent.includes("ecc12:EstadoDeCuentaCombustible");
+    const totalXMLMatch = xmlContent.match(/Total="([^"]+)"/i);
+    const totalXML = totalXMLMatch ? parseFloat(totalXMLMatch[1]) : 0;
 
     // Identificadores de Rubros Exentos "Buenos" (Educación, Salud)
     const esRubroExentoBueno = (
@@ -1379,8 +1381,20 @@ export const classifyCFDI = (
         resultado = "🔴 NO USABLE";
         comentarioFiscal = `ERROR FISCAL: Total declarado no coincide con cálculo SAT. Diferencia de $${validation.diferencia.toFixed(2)}.`;
     } else if (tieneECC) {
-        resultado = "🟡 ALERTA";
-        comentarioFiscal = "CFDI con complemento de Estado de Cuenta de Combustible. La información relevante de litros, importes e impuestos viene en el complemento. Revisar deducibilidad y acreditamiento de IVA conforme a política interna.";
+        if (totalXML === 0 && validation.isValid) {
+            // Total cero con ECC y validación correcta: no alertar — el complemento justifica el total cero
+            resultado = "🟢 USABLE";
+            comentarioFiscal = "CFDI con complemento de Estado de Cuenta de Combustibles y total cero. La información relevante de litros, importes e impuestos viene en el complemento. Si el SAT confirma VIGENTE, el total cero está justificado por el complemento.";
+            nivelValidacion = "ECC12 - TOTAL CERO";
+        } else if (!validation.isValid) {
+            // Total no cero pero no cuadra — alerta
+            resultado = "🟡 ALERTA";
+            comentarioFiscal = `CFDI con complemento de Estado de Cuenta de Combustible. Diferencia de totales: $${validation.diferencia.toFixed(2)}. Revisar deducibilidad y acreditamiento de IVA conforme a política interna.`;
+        } else {
+            // Total no cero y cuadra — usable con info
+            resultado = "🟢 USABLE";
+            comentarioFiscal = "CFDI con complemento de Estado de Cuenta de Combustible. La información relevante de litros, importes e impuestos viene en el complemento. Revisar deducibilidad y acreditamiento de IVA conforme a política interna.";
+        }
     }
 
     // AUDITORÍA FOCALIZADA EN NÓMINA HEURÍSTICA Y LIGERA

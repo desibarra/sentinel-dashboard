@@ -30,6 +30,55 @@ import {
 } from "@/lib/cfdiEngine";
 import { applyFiscalRules, reconcilePaymentComplements } from '@/lib/fiscalRules';
 
+export type EstatusSAT = "No verificado" | "Vigente" | "Cancelado" | "No Encontrado" | "Error Conexión";
+
+// Clasificación pura por estatus SAT (extraída del hook para reutilización y pruebas).
+// No altera reglas: reproduce fielmente la lógica previa inline.
+export function classifyBySATStatus(
+  estatusSAT: EstatusSAT,
+  comentarioMotor: string,
+  base: { resultado: string; comentarioFiscal: string; nivelValidacion: string; score: number },
+  estatusCancelacion: string = ""
+): { resultado: string; comentarioFiscal: string; nivelValidacion: string; score: number } {
+  if (estatusSAT === "Cancelado") {
+    return {
+      resultado: "🔴 NO USABLE",
+      comentarioFiscal: `[CRÍTICO] CFDI CANCELADO en SAT. ${estatusCancelacion}. No tiene efectos fiscales. ` + comentarioMotor,
+      nivelValidacion: "ERROR",
+      score: 0,
+    };
+  }
+  if (estatusSAT === "Error Conexión") {
+    return {
+      resultado: "No validado SAT",
+      comentarioFiscal: `No validado: no se pudo confirmar el estatus del CFDI ante el SAT. Reintenta la consulta. ` + comentarioMotor,
+      nivelValidacion: "NO VALIDADO",
+      score: base.score,
+    };
+  }
+  if (estatusSAT === "No Encontrado") {
+    return {
+      resultado: "No validado SAT",
+      comentarioFiscal: `No validado: UUID no encontrado en SAT (puede ser muy reciente o apócrifo). Reintenta la consulta. ` + comentarioMotor,
+      nivelValidacion: "NO VALIDADO",
+      score: base.score,
+    };
+  }
+  if (estatusSAT === "No verificado") {
+    return {
+      resultado: "No validado SAT",
+      comentarioFiscal: `No validado: no se pudo confirmar el estatus del CFDI ante el SAT. Reintenta la consulta. ` + comentarioMotor,
+      nivelValidacion: "NO VALIDADO",
+      score: base.score,
+    };
+  }
+  return {
+    resultado: base.resultado,
+    comentarioFiscal: comentarioMotor,
+    nivelValidacion: base.nivelValidacion,
+    score: base.score,
+  };
+}
 
 export function useXMLValidator() {
   const [isValidating, setIsValidating] = useState(false);
@@ -647,8 +696,10 @@ export function useXMLValidator() {
       let finalNivelValidacion = blacklistNivelValidacion !== "SIN CAMBIOS" ? blacklistNivelValidacion : nivelValidacion;
       let finalScore = scoreInformativoCalculado;
 
-      // Solo validar con SAT si el XML es estructuralmente válido y tiene datos mínimos
-      if (uuid && rfcEmisor && rfcReceptor && totalXML > 0) {
+      // Validar con SAT si el XML es estructuralmente válido y tiene datos mínimos
+      // totalXML >= 0 permite consultar CFDI con total cero (ej. ECC12)
+      // Excluir REP (Tipo P) — no se consultan al SAT
+      if (uuid && rfcEmisor && rfcReceptor && totalXML >= 0 && tipoCFDI !== "P") {
         const cacheKey = `cfdi-status-${uuid}`;
         const cached = localStorage.getItem(cacheKey);
         let shouldUseCache = false;
@@ -692,21 +743,17 @@ export function useXMLValidator() {
 
       const ultimoRefrescoSAT = new Date().toISOString();
 
-      // REGLA CRÍTICA: Si está CANCELADO, anular validez fiscal
-      if (finalEstatusSAT === "Cancelado") {
-        finalResultado = `🔴 NO USABLE`;
-        finalComentarioFiscal = `[CRÍTICO] CFDI CANCELADO en SAT. ${finalEstatusCancelacion}. No tiene efectos fiscales. ` + comentarioMotor;
-        finalNivelValidacion = "ERROR";
-        finalScore = 0;
-      } else if (finalEstatusSAT === "No Encontrado") {
-        finalComentarioFiscal = `[ALERTA] UUID no encontrado en SAT (puede ser muy reciente o apócrifo). ` + comentarioMotor;
-      } else if (finalEstatusSAT === "Error Conexión") {
-        // No penalizar pero avisar
-        finalComentarioFiscal = `[AVISO] No se pudo verificar estatus en SAT (Timeout). ` + comentarioMotor;
-      } else {
-        // En Vigente o No verificado, usamos el comentario base del motor
-        finalComentarioFiscal = comentarioMotor;
-      }
+      // REGLA CRÍTICA: Clasificación por estatus SAT (función pura reutilizable)
+      const satClass = classifyBySATStatus(
+        finalEstatusSAT,
+        comentarioMotor,
+        { resultado: finalResultado, comentarioFiscal: finalComentarioFiscal, nivelValidacion: finalNivelValidacion, score: finalScore },
+        finalEstatusCancelacion
+      );
+      finalResultado = satClass.resultado;
+      finalComentarioFiscal = satClass.comentarioFiscal;
+      finalNivelValidacion = satClass.nivelValidacion;
+      finalScore = satClass.score;
 
       const objVal: ValidationResult = {
         fileName,

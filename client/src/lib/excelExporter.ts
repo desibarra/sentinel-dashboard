@@ -899,13 +899,14 @@ const buildQualityRows = (results: ValidationResult[]) => results.map(r => {
   };
 });
 
-const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
+export const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
   const total = results.length;
 
   // Resumen Operativo (cuadra con Dashboard)
   const usables = results.filter(r => r.resultado?.includes("🟢")).length;
   const alertas = results.filter(r => r.resultado?.includes("🟡")).length;
   const noUsables = results.filter(r => r.resultado?.includes("🔴")).length;
+  const noValidadosSAT = results.filter(r => r.resultado === "No validado SAT" || r.resultado?.startsWith("No validado")).length;
   const totalMonto = results.reduce((sum, r) => sum + (r.total || 0), 0);
   const montoRiesgo = results
     .filter(r => r.resultado?.includes("🔴") || r.resultado?.includes("🟡"))
@@ -937,6 +938,7 @@ const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
     { Metrica: 'Usables', Valor: usables },
     { Metrica: 'Alertas', Valor: alertas },
     { Metrica: 'No usables', Valor: noUsables },
+    { Metrica: 'No validados SAT', Valor: noValidadosSAT },
     { Metrica: 'Monto total', Valor: Math.round(totalMonto * 100) / 100 },
     { Metrica: 'Monto en riesgo', Valor: Math.round(montoRiesgo * 100) / 100 },
     { Metrica: 'Cancelados', Valor: cancelados },
@@ -952,6 +954,16 @@ const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
     { Metrica: 'IVA acreditable', Valor: Math.round(ivaAcreditableVal * 100) / 100 },
     { Metrica: 'IVA en revisión', Valor: Math.round(ivaEnRevisionVal * 100) / 100 },
     { Metrica: 'IVA potencialmente no acreditable', Valor: Math.round(ivaPotencialmenteNoAcreditableVal * 100) / 100 },
+    { Metrica: '', Valor: '' },
+    { Metrica: '=== 3. VALIDACIÓN LISTA 69-B ===', Valor: '' },
+    { Metrica: 'Total RFC revisados 69-B', Valor: results.filter(r => r.rfcEmisorBlacklist && !r.rfcEmisorBlacklist.notSynced).length },
+    { Metrica: 'Sin coincidencia 69-B', Valor: results.filter(r => r.rfcEmisorBlacklist && !r.rfcEmisorBlacklist.notSynced && !r.rfcEmisorBlacklist.found).length },
+    { Metrica: 'Presuntos 69-B', Valor: results.filter(r => { const bl = r.rfcEmisorBlacklist; return bl?.found && (bl.situacion || '').toLowerCase().includes('presunto'); }).length },
+    { Metrica: 'Definitivos 69-B', Valor: results.filter(r => { const bl = r.rfcEmisorBlacklist; return bl?.found && (bl.situacion || '').toLowerCase().includes('definitivo'); }).length },
+    { Metrica: 'Desvirtuados 69-B', Valor: results.filter(r => { const bl = r.rfcEmisorBlacklist; return bl?.found && (bl.situacion || '').toLowerCase().includes('desvirtuado'); }).length },
+    { Metrica: 'Sentencia favorable 69-B', Valor: results.filter(r => { const bl = r.rfcEmisorBlacklist; return bl?.found && ((bl.situacion || '').toLowerCase().includes('sentencia') || (bl.situacion || '').toLowerCase().includes('favorable')); }).length },
+    { Metrica: 'Requieren revisión 69-B', Valor: results.filter(r => { const bl = r.rfcEmisorBlacklist; return bl?.multiEstado; }).length },
+    { Metrica: 'No validados 69-B (lista no cargada)', Valor: results.filter(r => r.rfcEmisorBlacklist?.notSynced).length },
     { Metrica: '', Valor: '' },
     { Metrica: 'NOTA EXPLICATIVA', Valor: 'El resumen operativo mide usabilidad del CFDI. La revisión fiscal preventiva mide posibles puntos de revisión por método de pago, complementos, UUID relacionados e IVA. Un CFDI puede ser usable operativamente y aun así requerir revisión preventiva.' }
   ];
@@ -1548,7 +1560,21 @@ const applyComparativoSheetDefaults = (ws: any, dataRows: any[]) => {
 
 // ─── END COMPARATIVO BASE Y TASA IVA ─────────────────────────────────────────
 
-export function exportToExcel(results: ValidationResult[], fileNameOverride?: string) {
+// Clasificación pura de la situación 69-B del RFC emisor (extraída para reutilización y pruebas).
+// No altera reglas: reproduce fielmente la lógica previa inline del exportador.
+export function clasificarValidacion69B(bl: any): string {
+  if (!bl || bl.notSynced) return 'No validado: lista no cargada';
+  if (!bl.found) return 'Sin coincidencia';
+  if (bl.multiEstado) return 'Requiere revisión';
+  const s = (bl.situacion || '').toLowerCase();
+  if (s.includes('definitivo')) return 'Definitivo';
+  if (s.includes('presunto')) return 'Presunto';
+  if (s.includes('desvirtuado')) return 'Desvirtuado';
+  if (s.includes('sentencia') || s.includes('favorable')) return 'Sentencia favorable';
+  return 'Requiere revisión';
+}
+
+export function buildDiagnosticoWorkbook(results: ValidationResult[]): any {
   // 1. Separar resultados válidos e inválidos
   const isValidUUID = (uuid: string | undefined): boolean => {
     if (!uuid) return false;
@@ -1755,6 +1781,22 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
       Payment_Complement_Status: r.paymentComplementStatus || 'NO APLICA',
       IVA_Creditability_Status: r.ivaCreditabilityStatus || 'POR_DETERMINAR',
       Payment_Method_Status: r.paymentMethodStatus || 'NO APLICA',
+      // ── Columnas 69-B ──
+      RFC_Evaluado_69B: r.rfcEmisor || '',
+      Validacion_69B: clasificarValidacion69B(r.rfcEmisorBlacklist),
+      Situacion_69B: r.rfcEmisorBlacklist?.situacion || (r.rfcEmisorBlacklist?.notSynced ? 'No validado: lista no cargada' : 'Sin coincidencia'),
+      Fecha_Publicacion_69B: r.rfcEmisorBlacklist?.fechaPublicacion || 'NO APLICA',
+      Fecha_Corte_Listado: (() => {
+        const bl = r.rfcEmisorBlacklist;
+        if (bl?.notSynced) return 'Lista no cargada';
+        return '2025-12-31';
+      })(),
+      Historial_69B: r.rfcEmisorBlacklist?.multiEstado ? 'Situación múltiple; requiere revisión' : (r.rfcEmisorBlacklist?.situacion || 'Sin coincidencia'),
+      Observacion_69B: r.rfcEmisorBlacklist?.notSynced
+        ? 'No validado: lista 69-B no cargada en este dispositivo'
+        : r.rfcEmisorBlacklist?.found
+          ? `RFC ${r.rfcEmisor} — ${r.rfcEmisorBlacklist?.situacion || 'situación no especificada'}`
+          : 'RFC no encontrado en lista 69-B',
     };
   });
 
@@ -1839,6 +1881,13 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
     { wch: 24 }, // BT: Payment_Complement_Status
     { wch: 24 }, // BU: IVA_Creditability_Status
     { wch: 24 }, // BV: Payment_Method_Status
+    { wch: 16 }, // BW: RFC_Evaluado_69B
+    { wch: 22 }, // BX: Validacion_69B
+    { wch: 22 }, // BY: Situacion_69B
+    { wch: 18 }, // BZ: Fecha_Publicacion_69B
+    { wch: 18 }, // CA: Fecha_Corte_Listado
+    { wch: 30 }, // CB: Historial_69B
+    { wch: 40 }, // CC: Observacion_69B
   ];
 
   (ws as any)['!cols'] = colWidths;
@@ -2248,11 +2297,14 @@ export function exportToExcel(results: ValidationResult[], fileNameOverride?: st
     }
   });
 
-  // Generar nombre de archivo con fecha
+  return wb;
+}
+
+export function exportToExcel(results: ValidationResult[], fileNameOverride?: string): any {
+  const wb = buildDiagnosticoWorkbook(results);
   const today = new Date();
   const dateStr = today.toISOString().split('T')[0].replace(/-/g, '');
   const fileName = fileNameOverride || `SentinelExpress_Diagnostico_${dateStr}.xlsx`;
-
-  // Descargar archivo
   (XLSX as any).writeFile(wb, fileName);
+  return wb;
 }
