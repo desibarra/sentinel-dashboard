@@ -71,7 +71,7 @@ async function runNodeStressTest() {
         content: d.content
     }));
     
-    const results = await validateXMLFiles(fakeFiles, "Empresa Stress", (curr, total) => {
+    const results = await validateXMLFiles(fakeFiles, "Empresa Stress", undefined, (curr, total) => {
         if (curr % 500 === 0) console.log(`Processed ${curr}/${total}...`);
     });
     
@@ -96,7 +96,7 @@ async function runNodeStressTest() {
         const outPath = path.resolve(__dirname, '../stress_test_export_node.xlsx');
         
         // This will save directly if in Node?
-        exportToExcel(results, outPath);
+        await exportToExcel(results, outPath);
         
         console.log(`Excel generated in ${Date.now() - exportStart}ms at ${outPath}`);
         

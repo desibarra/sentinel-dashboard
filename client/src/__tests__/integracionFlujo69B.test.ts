@@ -13,7 +13,7 @@ const XML_ECC12 = `<?xml version="1.0" encoding="UTF-8"?>
 </cfdi:Comprobante>`;
 
 describe('Integración flujo real 69-B: XML → análisis → clasificación → objeto → Excel', () => {
-  it('sigue el flujo completo y valida celdas 69-B del Excel generado', () => {
+  it('sigue el flujo completo y valida celdas 69-B del Excel generado', async () => {
     // 1. ANÁLISIS + CLASIFICACIÓN (función real del motor)
     const clasificacion = classifyCFDI(
       XML_ECC12,
@@ -126,7 +126,7 @@ describe('Integración flujo real 69-B: XML → análisis → clasificación →
     } as ValidationResult;
 
     // 3. EXPORTACIÓN (función real del exportador)
-    const wb = buildDiagnosticoWorkbook([objetoFinal]);
+    const wb = await buildDiagnosticoWorkbook([objetoFinal]);
 
     // 4. ABRIR EL EXCEL Y VALIDAR CELDAS 69-B (no solo encabezados)
     const sheet = wb.Sheets['Diagnostico_CFDI'];

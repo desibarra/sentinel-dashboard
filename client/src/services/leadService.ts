@@ -93,17 +93,32 @@ export async function saveLeadToServer(lead: Lead): Promise<{ ok: boolean; token
     }
 }
 
-/** Incrementa el contador de XMLs procesados en localStorage y devuelve el nuevo total */
+/**
+ * Incrementa el contador de XMLs procesados en localStorage y devuelve el
+ * nuevo total. Este contador es puramente informativo (no debe bloquear ni
+ * afectar los resultados del lote): si localStorage no está disponible, se
+ * degrada a devolver el conteo en memoria sin lanzar — un fallo aquí, llamado
+ * justo después de validar un lote completo, no debe tirar los resultados ya
+ * obtenidos.
+ */
 export function incrementXMLCount(count: number): number {
     const current = getXMLCount();
     const newCount = current + count;
-    localStorage.setItem(XML_COUNT_KEY, String(newCount));
+    try {
+        localStorage.setItem(XML_COUNT_KEY, String(newCount));
+    } catch (e) {
+        console.warn("[LeadService] No se pudo persistir el contador de XML (localStorage no disponible):", e);
+    }
     return newCount;
 }
 
 /** Lee el contador de XMLs procesados desde localStorage */
 export function getXMLCount(): number {
-    return parseInt(localStorage.getItem(XML_COUNT_KEY) ?? "0", 10);
+    try {
+        return parseInt(localStorage.getItem(XML_COUNT_KEY) ?? "0", 10);
+    } catch {
+        return 0;
+    }
 }
 
 /** Indica si el usuario ya pasó el límite gratuito */

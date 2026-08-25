@@ -2,6 +2,7 @@ import { useState as reactUseState } from "react";
 const useState: typeof reactUseState = typeof window === 'undefined' ? ((init: any) => [init, () => {}]) as unknown as typeof reactUseState : reactUseState;
 import { UploadedFile } from "@/components/UploadZone";
 import { checkCFDIStatusSAT } from "@/utils/satStatusValidator";
+import { satQueue } from "@/lib/satQueue";
 import { checkRFCBlacklist, BlacklistValidation } from "@/utils/blacklistValidator"; // Nuevo
 
 import {
@@ -29,55 +30,167 @@ import {
   evaluarTrazabilidad
 } from "@/lib/cfdiEngine";
 import { applyFiscalRules, reconcilePaymentComplements } from '@/lib/fiscalRules';
+import { resolverClasificacionDireccion } from '@/lib/direccionCFDI';
 
 export type EstatusSAT = "No verificado" | "Vigente" | "Cancelado" | "No Encontrado" | "Error Conexión";
 
-// Clasificación pura por estatus SAT (extraída del hook para reutilización y pruebas).
-// No altera reglas: reproduce fielmente la lógica previa inline.
-export function classifyBySATStatus(
-  estatusSAT: EstatusSAT,
-  comentarioMotor: string,
-  base: { resultado: string; comentarioFiscal: string; nivelValidacion: string; score: number },
-  estatusCancelacion: string = ""
-): { resultado: string; comentarioFiscal: string; nivelValidacion: string; score: number } {
-  if (estatusSAT === "Cancelado") {
+// ═══════════════════════════════════════════════════════════════════════════
+// PRECEDENCIA SAT × 69-B — función pura de composición.
+// ═══════════════════════════════════════════════════════════════════════════
+// SAT (vigencia del comprobante) y 69-B (lista negra del RFC) son dos
+// dimensiones INDEPENDIENTES: una consulta si el CFDI existe y está vigente
+// ante el SAT; la otra evalúa si el RFC de la contraparte está señalado como
+// EFOS. Antes se combinaban por MUTACIÓN SECUENCIAL (el hallazgo 69-B
+// escribía sobre "resultado", y más tarde la clasificación SAT volvía a
+// escribir sobre el mismo "resultado", borrando lo anterior salvo que se
+// recordara reenviarlo a mano). Esta función reemplaza ese patrón: recibe
+// las DOS señales ya evaluadas por separado (nunca una mezclada en la otra)
+// y decide el resultado final en un solo paso, según una tabla de
+// precedencia explícita — no hay ninguna asignación que sobrescriba una
+// asignación previa.
+export type Severidad69B = 'DEFINITIVO' | 'ALERTA' | 'INFO' | 'NINGUNO' | 'NO_SINCRONIZADO';
+
+export interface Hallazgo69B {
+  severidad: Severidad69B;
+  texto: string; // acumulado emisor+receptor, nunca incluye comentarioMotor
+}
+
+export interface ClasificacionEstructural {
+  resultado: string;        // 🟢/🟡/🔴 del motor (classifyCFDI), SIN ajuste de 69-B ni SAT
+  comentarioFiscal: string; // comentario puro del motor (comentarioMotor)
+  nivelValidacion: string;
+  score: number;
+}
+
+export interface ResultadoFinal {
+  resultado: string;
+  comentarioFiscal: string;
+  nivelValidacion: string;
+  score: number;
+}
+
+// Evalúa el hallazgo 69-B de UN RFC (emisor o receptor) — función pura,
+// reutilizada para ambos (antes había dos copias del mismo texto con
+// pequeñas inconsistencias entre sí; ahora es una sola fuente de verdad).
+export function evaluarHallazgo69BParte(
+  bl: BlacklistValidation | undefined,
+  quien: 'Emisor' | 'Receptor'
+): { severidad: Exclude<Severidad69B, 'NO_SINCRONIZADO'>; texto: string } {
+  if (!bl?.found) return { severidad: 'NINGUNO', texto: '' };
+  const sit = bl.situacion || 'situación no especificada';
+  const sitNorm = sit.toLowerCase();
+  const rol = quien === 'Emisor' ? 'emisor' : 'receptor';
+
+  if (bl.multiEstado) {
     return {
-      resultado: "🔴 NO USABLE",
-      comentarioFiscal: `[CRÍTICO] CFDI CANCELADO en SAT. ${estatusCancelacion}. No tiene efectos fiscales. ` + comentarioMotor,
-      nivelValidacion: "ERROR",
-      score: 0,
+      severidad: 'ALERTA',
+      texto: `[ADVERTENCIA — 69-B SITUACIÓN MÚLTIPLE] RFC ${quien} con múltiples estados en lista 69-B sin poder determinar el vigente: "Situación múltiple; requiere revisión". Revisar resolución oficial.`,
     };
   }
-  if (estatusSAT === "Error Conexión") {
+  if (sitNorm.includes('definitivo')) {
     return {
-      resultado: "No validado SAT",
-      comentarioFiscal: `No validado: no se pudo confirmar el estatus del CFDI ante el SAT. Reintenta la consulta. ` + comentarioMotor,
-      nivelValidacion: "NO VALIDADO",
-      score: base.score,
+      severidad: 'DEFINITIVO',
+      texto: `[CRÍTICO — 69-B DEFINITIVO] RFC ${quien} publicado como DEFINITIVO en lista 69-B SAT. Operaciones con este ${rol} son consideradas inexistentes. NO DEDUCIBLE. Situación oficial: "${sit}".`,
     };
   }
-  if (estatusSAT === "No Encontrado") {
+  if (sitNorm.includes('presunto')) {
     return {
-      resultado: "No validado SAT",
-      comentarioFiscal: `No validado: UUID no encontrado en SAT (puede ser muy reciente o apócrifo). Reintenta la consulta. ` + comentarioMotor,
-      nivelValidacion: "NO VALIDADO",
-      score: base.score,
+      severidad: 'ALERTA',
+      texto: `[ADVERTENCIA — 69-B PRESUNTO] RFC ${quien} figura como PRESUNTO en lista 69-B SAT. El contribuyente tiene derecho a desvirtuar. Revisar resolución oficial. Situación oficial: "${sit}".`,
     };
   }
-  if (estatusSAT === "No verificado") {
+  if (sitNorm.includes('desvirtuado')) {
     return {
-      resultado: "No validado SAT",
-      comentarioFiscal: `No validado: no se pudo confirmar el estatus del CFDI ante el SAT. Reintenta la consulta. ` + comentarioMotor,
-      nivelValidacion: "NO VALIDADO",
-      score: base.score,
+      severidad: 'INFO',
+      texto: `[INFO — 69-B] RFC ${quien} estuvo en lista 69-B pero aclaró su situación (Desvirtuado). Sentencia favorable según el listado 69-B consultado, con fecha de corte 31/12/2025.`,
+    };
+  }
+  if (sitNorm.includes('sentencia') || sitNorm.includes('favorable')) {
+    return {
+      severidad: 'INFO',
+      texto: `[INFO — 69-B] RFC ${quien} cuenta con sentencia favorable en lista 69-B. Sentencia favorable según el listado 69-B consultado, con fecha de corte 31/12/2025.`,
     };
   }
   return {
-    resultado: base.resultado,
-    comentarioFiscal: comentarioMotor,
-    nivelValidacion: base.nivelValidacion,
-    score: base.score,
+    severidad: 'ALERTA',
+    texto: `[ADVERTENCIA — 69-B] RFC ${quien} encontrado en lista 69-B SAT. Situación: "${sit}". Requiere revisión manual.`,
   };
+}
+
+// Combina emisor+receptor en UN hallazgo 69-B. La severidad la determina el
+// EMISOR (criterio ya vigente antes de esta corrección: es la contraparte
+// que "emite" la operación); el receptor solo aporta texto informativo
+// adicional — esto no cambia con esta corrección, solo se deja explícito.
+export function combinarHallazgo69B(
+  emisorBl: BlacklistValidation | undefined,
+  receptorBl: BlacklistValidation | undefined
+): Hallazgo69B {
+  if (emisorBl?.notSynced || receptorBl?.notSynced) {
+    return { severidad: 'NO_SINCRONIZADO', texto: '' };
+  }
+  const emisorParte = evaluarHallazgo69BParte(emisorBl, 'Emisor');
+  const receptorParte = evaluarHallazgo69BParte(receptorBl, 'Receptor');
+  const texto = [emisorParte.texto, receptorParte.texto].filter(Boolean).join(' ');
+  return { severidad: emisorParte.severidad, texto };
+}
+
+// Tabla de precedencia (dimensiones independientes, compuestas en UN solo
+// paso — nunca una reasignación sucesiva sobre la anterior):
+//   1. SAT Cancelado           → 🔴 NO USABLE, SIEMPRE (máxima prioridad).
+//   2. 69-B Definitivo         → 🔴 NO USABLE, aunque el SAT no responda.
+//   3. 69-B Presunto/múltiple  → 🟡 ALERTA, aunque el SAT no responda.
+//   4. SAT no validado         → "No validado SAT" (nunca 🟢 USABLE) — cubre
+//      Error Conexión/No Encontrado/No verificado cuando 69-B es INFO,
+//      NINGUNO o NO_SINCRONIZADO (Desvirtuado/Sentencia Favorable no eleva
+//      el riesgo, pero tampoco puede "limpiar" un SAT no confirmado).
+//   5. SAT Vigente + 69-B sin riesgo elevado → resultado estructural normal.
+export function combinarResultadoFinal(
+  estructural: ClasificacionEstructural,
+  hallazgo69B: Hallazgo69B,
+  estatusSAT: EstatusSAT,
+  estatusCancelacion: string = ""
+): ResultadoFinal {
+  const satNoValidado = estatusSAT === 'Error Conexión' || estatusSAT === 'No Encontrado' || estatusSAT === 'No verificado';
+
+  const notaNoSincronizado = hallazgo69B.severidad === 'NO_SINCRONIZADO'
+    ? '[AVISO] No validado: listas SAT no cargadas. Valida en Configuración → Inteligencia SAT para cargar la lista 69-B.'
+    : '';
+  const texto69B = notaNoSincronizado || hallazgo69B.texto;
+
+  const armar = (prefijo: string, resultado: string, nivelValidacion: string, score: number): ResultadoFinal => ({
+    resultado,
+    comentarioFiscal: [prefijo, texto69B, estructural.comentarioFiscal].filter(Boolean).join(' '),
+    nivelValidacion,
+    score,
+  });
+
+  // 1) SAT Cancelado — prioridad crítica absoluta, independiente de 69-B.
+  if (estatusSAT === 'Cancelado') {
+    return armar(`[CRÍTICO] CFDI CANCELADO en SAT. ${estatusCancelacion}. No tiene efectos fiscales.`, '🔴 NO USABLE', 'ERROR', 0);
+  }
+
+  // 2) 69-B Definitivo — crítico, se conserva aunque el SAT no responda.
+  if (hallazgo69B.severidad === 'DEFINITIVO') {
+    return armar('', '🔴 NO USABLE', 'ERROR', estructural.score);
+  }
+
+  // 3) 69-B Presunto o situación múltiple — advertencia, se conserva aunque el SAT no responda.
+  if (hallazgo69B.severidad === 'ALERTA') {
+    return armar('', '🟡 ALERTA', 'ALERTA', estructural.score);
+  }
+
+  // 4) SAT no validado y 69-B sin riesgo elevado — nunca mostrar USABLE.
+  if (satNoValidado) {
+    const motivo = estatusSAT === 'No Encontrado'
+      ? 'No validado: UUID no encontrado en SAT (puede ser muy reciente o apócrifo). Reintenta la consulta.'
+      : 'No validado: no se pudo confirmar el estatus del CFDI ante el SAT. Reintenta la consulta.';
+    return armar(motivo, 'No validado SAT', 'NO VALIDADO', estructural.score);
+  }
+
+  // 5) SAT Vigente + 69-B sin riesgo elevado (ninguno/Desvirtuado/Sentencia
+  // Favorable/no sincronizado) — resultado estructural normal; la info 69-B
+  // (si hay) queda anexada de forma informativa, nunca oculta.
+  return armar('', estructural.resultado, estructural.nivelValidacion, estructural.score);
 }
 
 export function useXMLValidator() {
@@ -86,15 +199,22 @@ export function useXMLValidator() {
   const [progress, setProgress] = useState({ current: 0, total: 0 });
 
   // ✅ PRODUCCIÓN: Procesamiento por LOTES para evitar congelamiento
-  const validateXMLFiles = async (files: UploadedFile[], giroEmpresa?: string, onProgressUpdate?: (current: number, total: number) => void) => {
+  const validateXMLFiles = async (files: UploadedFile[], giroEmpresa?: string, rfcEmpresa?: string, onProgressUpdate?: (current: number, total: number) => void) => {
     setIsValidating(true);
     setProgress({ current: 0, total: files.length });
 
-    const BATCH_SIZE = 20; // Procesar 20 XMLs por lote
+    const BATCH_SIZE = 20; // Procesar 20 XMLs por lote (motor local; la consulta SAT tiene su propia concurrencia acotada — ver satQueue.ts)
     const BATCH_DELAY = 50; // 50ms entre lotes para no bloquear UI
-    const XML_TIMEOUT = 30000; // 30 segundos máximo por XML (SAT puede ser lento)
+    // P0-C: la consulta SAT ahora puede reintentar hasta 2 veces con backoff
+    // (timeout 12s + backoff + 12s + backoff + 12s ≈ 39s en el peor caso).
+    // Este límite por archivo debe quedar por encima de ese peor caso para no
+    // cortar un reintento legítimo a mitad de camino.
+    const XML_TIMEOUT = 45000; // 45 segundos máximo por XML (incluye reintentos SAT)
 
     const allResults: ValidationResult[] = [];
+    // P0-C: reinicia los contadores en vivo de la cola SAT para esta corrida
+    // (consultables vía satQueue.getCounts()/onCountsChange desde la UI).
+    satQueue.resetCounts(files.length);
 
     // Procesar en lotes
     for (let i = 0; i < files.length; i += BATCH_SIZE) {
@@ -107,7 +227,7 @@ export function useXMLValidator() {
         try {
           // Timeout de seguridad por XML
           const result = await Promise.race([
-            validateSingleXML(file.name, file.content, giroEmpresa),
+            validateSingleXML(file.name, file.content, giroEmpresa, rfcEmpresa),
             new Promise<ValidationResult>((_, reject) =>
               setTimeout(() => reject(new Error("Timeout: XML tomó demasiado tiempo")), XML_TIMEOUT)
             )
@@ -163,7 +283,8 @@ export function useXMLValidator() {
   const validateSingleXML = async (
     fileName: string,
     xmlContent: string,
-    giroEmpresa?: string
+    giroEmpresa?: string,
+    rfcEmpresa?: string
   ): Promise<ValidationResult> => {
     try {
       // ✅ SKILL sentinel-express-pro v1.0.0 - BLOQUE 6 - Regla 6.1
@@ -623,85 +744,34 @@ export function useXMLValidator() {
         console.error("Error validando listas negras:", err);
       }
 
-      // ── Reglas de negocio para listas 69-B / EFOS ──
-      // REGLA: si la base no está cargada (notSynced), NO marcar como inválido.
-      //        Solo informar que la validación no pudo realizarse.
-      let blacklistNivelValidacion = "SIN CAMBIOS";
-
-      // Helper local: obtiene el mensaje de situación oficial
-      const situacionLabel = (bv: BlacklistValidation) => bv.situacion || "situación no especificada";
-
-      if (rfcEmisorBlacklist?.notSynced || rfcReceptorBlacklist?.notSynced) {
-        // Base no cargada o corrupta: NO penalizar ni afirmar "sin coincidencias".
-        resultado = "No validado: listas SAT no cargadas";
-        comentarioFiscal = `[AVISO] No validado: listas SAT no cargadas. Valida en Configuración → Inteligencia SAT para cargar la lista 69-B. ` + comentarioFiscal;
-      } else {
-        // ── EMISOR ──
-        if (rfcEmisorBlacklist?.found) {
-          const sit = situacionLabel(rfcEmisorBlacklist);
-          const sitNorm = sit.toLowerCase();
-
-          if (rfcEmisorBlacklist.multiEstado) {
-            // Estados múltiples: no se puede determinar el vigente — requiere revisión
-            resultado = resultado === "🟢 USABLE" ? "🟡 ALERTA" : resultado;
-            comentarioFiscal = `[ADVERTENCIA — 69-B SITUACIÓN MÚLTIPLE] RFC Emisor con múltiples estados en lista 69-B sin poder determinar el vigente: "Situación múltiple; requiere revisión". Revisar resolución oficial. ` + comentarioFiscal;
-            if (blacklistNivelValidacion === "SIN CAMBIOS") blacklistNivelValidacion = "ALERTA";
-          } else if (sitNorm.includes("definitivo")) {
-            // Definitivo: alerta crítica — NO DEDUCIBLE
-            resultado = "🔴 NO USABLE";
-            comentarioFiscal = `[CRÍTICO — 69-B DEFINITIVO] RFC Emisor publicado como DEFINITIVO en lista 69-B SAT. Operaciones con este emisor son consideradas inexistentes. NO DEDUCIBLE. Situación oficial: "${sit}". ` + comentarioFiscal;
-            blacklistNivelValidacion = "ERROR";
-          } else if (sitNorm.includes("presunto")) {
-            // Presunto: advertencia preventiva — no bloquear
-            resultado = resultado === "🟢 USABLE" ? "🟡 ALERTA" : resultado;
-            comentarioFiscal = `[ADVERTENCIA — 69-B PRESUNTO] RFC Emisor figura como PRESUNTO en lista 69-B SAT. El contribuyente tiene derecho a desvirtuar. Revisar resolución oficial. Situación oficial: "${sit}". ` + comentarioFiscal;
-            if (blacklistNivelValidacion === "SIN CAMBIOS") blacklistNivelValidacion = "ALERTA";
-          } else if (sitNorm.includes("desvirtuado")) {
-            // Desvirtuado: aclaró su situación — sin alerta de lista negra
-            comentarioFiscal = `[INFO — 69-B] RFC Emisor estuvo en lista 69-B pero aclaró su situación (Desvirtuado). Sentencia favorable según el listado 69-B consultado, con fecha de corte 31/12/2025. ` + comentarioFiscal;
-          } else if (sitNorm.includes("sentencia") || sitNorm.includes("favorable")) {
-            // Sentencia favorable: resolución judicial favorable — sin alerta
-            comentarioFiscal = `[INFO — 69-B] RFC Emisor cuenta con sentencia favorable en lista 69-B. Sentencia favorable según el listado 69-B consultado, con fecha de corte 31/12/2025. ` + comentarioFiscal;
-          } else {
-            // Situación no reconocida: mostrar con advertencia
-            resultado = resultado === "🟢 USABLE" ? "🟡 ALERTA" : resultado;
-            comentarioFiscal = `[ADVERTENCIA — 69-B] RFC Emisor encontrado en lista 69-B SAT. Situación: "${sit}". Requiere revisión manual. ` + comentarioFiscal;
-            if (blacklistNivelValidacion === "SIN CAMBIOS") blacklistNivelValidacion = "ALERTA";
-          }
-        }
-
-        // ── RECEPTOR ──
-        if (rfcReceptorBlacklist?.found) {
-          const sit = situacionLabel(rfcReceptorBlacklist);
-          const sitNorm = sit.toLowerCase();
-
-          if (rfcReceptorBlacklist.multiEstado) {
-            comentarioFiscal += ` [AVISO — 69-B SITUACIÓN MÚLTIPLE] RFC Receptor con múltiples estados en lista 69-B sin poder determinar el vigente: "Situación múltiple; requiere revisión".`;
-          } else if (sitNorm.includes("definitivo")) {
-            comentarioFiscal += ` [AVISO — 69-B DEFINITIVO] RFC Receptor publicado como DEFINITIVO en lista 69-B. Situación: "${sit}".`;
-          } else if (sitNorm.includes("presunto")) {
-            comentarioFiscal += ` [AVISO — 69-B PRESUNTO] RFC Receptor figura como PRESUNTO en lista 69-B. Situación: "${sit}".`;
-          } else if (sitNorm.includes("desvirtuado") || sitNorm.includes("sentencia") || sitNorm.includes("favorable")) {
-            comentarioFiscal += ` [INFO — 69-B] RFC Receptor aclaró situación en lista 69-B: "${sit}". Sentencia favorable según el listado 69-B consultado, con fecha de corte 31/12/2025.`;
-          }
-        }
-      }
+      // ── Hallazgo 69-B / EFOS: evaluación PURA, independiente del estatus SAT ──
+      // (ver combinarHallazgo69B / combinarResultadoFinal más arriba). Ya no se
+      // muta "resultado"/"comentarioFiscal" aquí — se calcula el hallazgo como
+      // un valor aparte y se compone con el estatus SAT en un único paso.
+      const hallazgo69B = combinarHallazgo69B(rfcEmisorBlacklist, rfcReceptorBlacklist);
 
       // ==================== VALIDACIÓN ESTATUS SAT (ONLINE) ====================
       let finalEstatusSAT: "No verificado" | "Vigente" | "Cancelado" | "No Encontrado" | "Error Conexión" = "No verificado"; // Usamos variables locales para no chocar con las const de arriba
       let finalEstatusCancelacion = "";
-      let finalResultado = resultado;
-      let finalComentarioFiscal = comentarioFiscal;
-      // Usar el nivel de validación calculado por listas negras si aplica, sino el original
-      let finalNivelValidacion = blacklistNivelValidacion !== "SIN CAMBIOS" ? blacklistNivelValidacion : nivelValidacion;
-      let finalScore = scoreInformativoCalculado;
 
       // Validar con SAT si el XML es estructuralmente válido y tiene datos mínimos
       // totalXML >= 0 permite consultar CFDI con total cero (ej. ECC12)
       // Excluir REP (Tipo P) — no se consultan al SAT
       if (uuid && rfcEmisor && rfcReceptor && totalXML >= 0 && tipoCFDI !== "P") {
         const cacheKey = `cfdi-status-${uuid}`;
-        const cached = localStorage.getItem(cacheKey);
+        // Corrección crítica: localStorage.getItem() no estaba protegido. Si
+        // localStorage no está disponible (modo privado de Safari, política de
+        // navegador/organización, o cualquier entorno que lo bloquee), esta
+        // línea lanzaba una excepción que escapaba de este bloque y hacía caer
+        // TODO el registro al catch superior de validateSingleXML — perdiendo
+        // trazabilidadInfo/desglosePorConcepto por completo y mostrando un
+        // mensaje engañoso de "Timeout" que no reflejaba la causa real.
+        let cached: string | null = null;
+        try {
+          cached = localStorage.getItem(cacheKey);
+        } catch (e) {
+          console.warn("localStorage no disponible para leer caché SAT — se continúa sin caché:", e);
+        }
         let shouldUseCache = false;
 
         if (cached) {
@@ -721,39 +791,51 @@ export function useXMLValidator() {
         }
 
         if (!shouldUseCache) {
+          let satStatus: any = null;
           try {
-            // Timeout de 5 segundos para la consulta al SAT
-            const satStatus = await Promise.race([
-              checkCFDIStatusSAT(uuid, rfcEmisor, rfcReceptor, totalXML),
-              new Promise<any>((_, reject) =>
-                setTimeout(() => reject(new Error("Timeout SAT")), 5000)
-              )
-            ]);
+            // P0-C: checkCFDIStatusSAT ahora gestiona su propio timeout (12s,
+            // configurable — antes 5s fijo aquí) y reintentos con backoff a
+            // través de satQueue, con concurrencia acotada (5 por defecto,
+            // independiente del tamaño del lote de 20 del motor local).
+            satStatus = await checkCFDIStatusSAT(uuid, rfcEmisor, rfcReceptor, totalXML);
             finalEstatusSAT = satStatus.estado;
             finalEstatusCancelacion = satStatus.estatusCancelacion || "";
-
-            localStorage.setItem(cacheKey, JSON.stringify(satStatus));
           } catch (error) {
             console.error("Error validating with SAT:", error);
             finalEstatusSAT = "Error Conexión";
             finalEstatusCancelacion = "Error de red / Timeout";
+          }
+
+          // P0 (relacionado con P0-B): el guardado en caché se separa de la
+          // consulta SAT. Un fallo al escribir en localStorage (p.ej. cuota
+          // agotada) NUNCA debe degradar un estatus SAT ya obtenido — si el
+          // SAT respondió "Vigente", debe seguir siendo "Vigente" aunque no
+          // se pueda cachear para la próxima consulta.
+          if (satStatus) {
+            try {
+              localStorage.setItem(cacheKey, JSON.stringify(satStatus));
+            } catch (cacheError) {
+              console.warn("No se pudo guardar la caché de estatus SAT (no afecta el resultado obtenido):", cacheError);
+            }
           }
         }
       }
 
       const ultimoRefrescoSAT = new Date().toISOString();
 
-      // REGLA CRÍTICA: Clasificación por estatus SAT (función pura reutilizable)
-      const satClass = classifyBySATStatus(
+      // REGLA CRÍTICA: composición pura de SAT (estatusSAT) × 69-B (hallazgo69B).
+      // Ambas señales se evaluaron por separado arriba; aquí se combinan en un
+      // solo paso según la tabla de precedencia (ver combinarResultadoFinal).
+      const combinado = combinarResultadoFinal(
+        { resultado: resultadoMotor, comentarioFiscal: comentarioMotor, nivelValidacion, score: scoreInformativoCalculado },
+        hallazgo69B,
         finalEstatusSAT,
-        comentarioMotor,
-        { resultado: finalResultado, comentarioFiscal: finalComentarioFiscal, nivelValidacion: finalNivelValidacion, score: finalScore },
         finalEstatusCancelacion
       );
-      finalResultado = satClass.resultado;
-      finalComentarioFiscal = satClass.comentarioFiscal;
-      finalNivelValidacion = satClass.nivelValidacion;
-      finalScore = satClass.score;
+      const finalResultado = combinado.resultado;
+      const finalComentarioFiscal = combinado.comentarioFiscal;
+      const finalNivelValidacion = combinado.nivelValidacion;
+      const finalScore = combinado.score;
 
       const objVal: ValidationResult = {
         fileName,
@@ -841,6 +923,14 @@ export function useXMLValidator() {
         // ✅ FASE 2 - AUDIT FIX (Hallazgos #5, #9, #10): Campos fiscales del Comprobante
         descuentoGlobal,
         condicionesDePago,
+        // ✅ DIRECCIÓN DEL CFDI: corrige espejos contables (ingresos vs egresos)
+        // Compara emisor/receptor contra el RFC de la empresa que audita (sin hardcodeo).
+        ...resolverClasificacionDireccion(
+          { rfcEmisor, rfcReceptor },
+          rfcEmpresa || '',
+          tipoCFDI,
+          esNomina === true
+        ),
       };
 
       const trazabilidadInfo = evaluarTrazabilidad(xmlDoc, xmlContent, objVal);
@@ -868,12 +958,13 @@ export function useXMLValidator() {
   };
 
   const createErrorResult = (
-    fileName: string, 
-    errorMsg: string, 
+    fileName: string,
+    errorMsg: string,
     giroEmpresa?: string,
     errorGrave: boolean = true,
     warning: boolean = false,
-    xmlContent?: string
+    xmlContent?: string,
+    rfcEmpresa?: string
   ): ValidationResult => {
     let resultado = "🟢 USABLE";
     if (errorGrave) {
@@ -1054,6 +1145,8 @@ export function useXMLValidator() {
         // ✅ FASE 2: campos requeridos por interfaz ValidationResult
         descuentoGlobal: 0,
         condicionesDePago: "NO VIENE EN XML",
+        rfcEmpresaEvaluada: rfcEmpresa,
+        direccionCFDI: 'REQUIERE_REVISION' as const,
       };
     }
 

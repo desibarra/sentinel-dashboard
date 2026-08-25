@@ -191,18 +191,18 @@ describe('Flujo real de reintento SAT (revalidarFilaSAT + reducer por UUID + rec
     expect(metricaDespues).toBe(0);
   });
 
-  it('6. Recálculo del Excel REAL (buildDiagnosticoWorkbook) refleja el nuevo estatus y conserva columnas 69-B', () => {
+  it('6. Recálculo del Excel REAL (buildDiagnosticoWorkbook) refleja el nuevo estatus y conserva columnas 69-B', async () => {
     const rowA = makeRow('AAAAAAAA-1111-4111-8111-AAAAAAAAAAAA', {
       rfcEmisor: 'RAS050131EC5',
       rfcEmisorBlacklist: { rfc: 'RAS050131EC5', is69B: true, found: true, notSynced: false, multiEstado: false, situacion: 'Definitivo', fechaPublicacion: '2023-02-10', source: 'IndexedDB local' } as any,
     });
     const antes = [rowA];
-    const wbAntes = buildDiagnosticoWorkbook(antes);
+    const wbAntes = await buildDiagnosticoWorkbook(antes);
     const filaAntes = XLSX.utils.sheet_to_json(wbAntes.Sheets['Diagnostico_CFDI']) as any[];
     expect(filaAntes[0].Resultado).toBe('No validado SAT');
 
     const after = antes.map(r => revalidarFilaSAT(r, { estado: 'Vigente', validatedAt: new Date() }, 'GIRO'));
-    const wbDespues = buildDiagnosticoWorkbook(after);
+    const wbDespues = await buildDiagnosticoWorkbook(after);
     const filaDespues = XLSX.utils.sheet_to_json(wbDespues.Sheets['Diagnostico_CFDI']) as any[];
     expect(filaDespues[0].Resultado).toBe('🟢 USABLE');
     // Columnas 69-B siguen presentes tras el recálculo

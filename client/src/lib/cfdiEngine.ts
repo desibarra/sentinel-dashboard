@@ -1,6 +1,7 @@
 
 import { BlacklistValidation } from "@/utils/blacklistValidator";
 import { evaluarMaterialidadGasto } from "./materialityRules";
+import { DireccionCFDI } from "./direccionCFDI";
 
 export interface ConceptoDesglose {
     numero: number;
@@ -115,6 +116,13 @@ export interface ValidationResult {
     paymentMethodStatus?: 'PUE_VALIDO' | 'PUE_REVISAR_COBRO' | 'PPD_CON_COMPLEMENTO' | 'PPD_SIN_COMPLEMENTO' | 'PPD_REVISAR_COMPLEMENTO' | string;
     paymentComplementStatus?: 'COMPLETO' | 'SIN_COMPLEMENTO' | 'COMPLEMENTO_FUERA_DE_PERIODO' | 'UUID_RELACIONADO_NO_ENCONTRADO' | 'REVISAR_FECHA' | string;
     ivaCreditabilityStatus?: 'ACREDITABLE' | 'NO_ACREDITABLE' | 'POR_DETERMINAR' | string;
+    // ✅ DIRECCIÓN DEL CFDI: corrección de espejos contables. La empresa audita
+    // sus propios comprobantes; un CFDI "tipo I" recibido NO es ingreso propio.
+    direccionCFDI?: DireccionCFDI;       // 'EMITIDO' | 'RECIBIDO' | 'REQUIERE_REVISION'
+    rfcEmpresaEvaluada?: string;          // RFC de la empresa que audita (no hardcodeado)
+    naturalezaParaEmpresa?: string;       // INGRESO/VENTA | COMPRA/GASTO | etc.
+    impactoIVA?: string;                  // IVA TRASLADADO (A CARGO) | IVA ACREDITABLE (A FAVOR) | etc.
+    motivoClasificacion?: string;         // Explicación legible de la clasificación
 }
 
 export interface UbicacionCP {

@@ -2,7 +2,7 @@ import { it } from 'vitest';
 import { exportToExcel } from '../lib/excelExporter';
 import { ValidationResult } from '../lib/cfdiEngine';
 
-it('genera un Excel de prueba en dev-outputs', () => {
+it('genera un Excel de prueba en dev-outputs', async () => {
   const sample: ValidationResult = {
     fileName: 'fixture_demo.xml',
     uuid: '00000000-0000-4000-8000-000000000000',
@@ -84,5 +84,5 @@ it('genera un Excel de prueba en dev-outputs', () => {
   } as ValidationResult;
 
   // Generar archivo de salida
-  exportToExcel([sample], 'dev-outputs/sentinel_test_export.xlsx');
+  await exportToExcel([sample], 'dev-outputs/sentinel_test_export.xlsx');
 });

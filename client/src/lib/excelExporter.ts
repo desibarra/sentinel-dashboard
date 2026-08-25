@@ -1,5 +1,172 @@
 import * as XLSX from 'xlsx';
 import { ValidationResult } from '@/lib/cfdiEngine';
+import { sentinelStageLog } from '@/lib/stageLog';
+
+// ─────────────────────────────────────────────────────────────────────────
+// P0-A: Blindaje de exportación — límites reales de Excel y saneamiento
+// de celdas. Ningún objeto/array/nodo XML/proxy debe llegar a SheetJS: todo
+// pasa por sanitizeCellValue() y se escribe con aoa_to_sheet (matrices de
+// primitivos + encabezados explícitos), nunca con json_to_sheet directo
+// sobre datos no verificados.
+// ─────────────────────────────────────────────────────────────────────────
+const EXCEL_MAX_ROWS_TOTAL = 1048576; // límite real de Excel (incluye encabezado)
+const EXCEL_MAX_DATA_ROWS = EXCEL_MAX_ROWS_TOTAL - 1;
+const EXCEL_MAX_COLS = 16384; // límite real de Excel
+const EXCEL_MAX_CELL_CHARS = 32767; // límite real de Excel por celda
+
+type PlainRow = Record<string, any>;
+export type ExportProgressStage = 'building' | 'done' | 'error';
+export interface ExportProgressEvent {
+  sheet: string;
+  stage: ExportProgressStage;
+  sheetIndex: number;
+  totalSheets: number;
+  error?: string;
+  affectedRows?: number;
+}
+export type ExportProgressCallback = (event: ExportProgressEvent) => void;
+
+// ─────────────────────────────────────────────────────────────────────────
+// Reportes parciales (requisito 3 de la revisión): si una hoja falla, el
+// archivo nunca debe presentarse como un reporte completo sin más. Se
+// registra cada falla con su alcance, y si una hoja FISCAL CRÍTICA falla, el
+// archivo final se recorta a un reporte de diagnóstico (no se entrega el
+// reporte completo con esa omisión oculta entre 24 hojas).
+// ─────────────────────────────────────────────────────────────────────────
+const CRITICAL_SHEETS = new Set([
+  'Resumen',
+  'Diagnostico_CFDI',
+  'CEDULA INGRESOS SAT',
+  'CEDULA IVA TRASLADADO',
+  'CEDULA IVA ACREDITABLE',
+  'CEDULA NO CLASIFICADOS',
+]);
+
+export interface ExportSheetFailure {
+  sheet: string;
+  error: string;
+  affectedRows: number | 'N/D';
+  critical: boolean;
+}
+export type ExportStatus = 'complete' | 'partial' | 'critical_failure';
+export interface ExportStatusInfo {
+  status: ExportStatus;
+  failures: ExportSheetFailure[];
+}
+
+// Convierte cualquier valor a un primitivo seguro para una celda de Excel.
+// Objetos/arrays/nodos DOM/proxies nunca se entregan tal cual a SheetJS:
+// se serializan de forma explícita y visible, nunca se pierden en silencio.
+const sanitizeCellValue = (value: unknown): string | number | boolean | Date | null => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'boolean') return value;
+  if (value instanceof Date) return value;
+  let str: string;
+  if (typeof value === 'string') {
+    str = value;
+  } else if (Array.isArray(value)) {
+    str = value.map(v => (v === null || v === undefined ? '' : String(v))).join(' | ');
+  } else if (typeof value === 'object') {
+    try { str = JSON.stringify(value); } catch { str = String(value); }
+  } else {
+    str = String(value);
+  }
+  if (str.length > EXCEL_MAX_CELL_CHARS) {
+    const suffix = ` …[TRUNCADO — ${str.length} caracteres originales]`;
+    const cut = Math.max(0, EXCEL_MAX_CELL_CHARS - suffix.length);
+    str = str.slice(0, cut) + suffix;
+  }
+  return str;
+};
+
+// Encabezados: se toman de la primera fila (mismo criterio que usaba json_to_sheet
+// por defecto) y se completan con cualquier clave adicional vista en filas
+// posteriores, para no perder columnas silenciosamente si una fila trae más
+// campos que la primera.
+const collectHeaders = (rows: PlainRow[]): string[] => {
+  if (!rows.length) return [];
+  const headers = Object.keys(rows[0]);
+  const seen = new Set(headers);
+  for (let i = 1; i < rows.length; i++) {
+    const keys = Object.keys(rows[i]);
+    for (const k of keys) {
+      if (!seen.has(k)) { seen.add(k); headers.push(k); }
+    }
+  }
+  if (headers.length > EXCEL_MAX_COLS) {
+    const kept = headers.slice(0, EXCEL_MAX_COLS - 1);
+    kept.push('MAS_COLUMNAS_TRUNCADAS');
+    return kept;
+  }
+  return headers;
+};
+
+const rowsToAOA = (rows: PlainRow[], headers: string[]): any[][] => {
+  const aoa: any[][] = [headers];
+  for (const row of rows) {
+    aoa.push(headers.map(h => (h === 'MAS_COLUMNAS_TRUNCADAS' ? 'SI' : sanitizeCellValue(row[h]))));
+  }
+  return aoa;
+};
+
+const safeSheetName = (name: string): string => {
+  const cleaned = name.replace(/[:\\/?*[\]]/g, ' ').trim();
+  return (cleaned || 'Hoja').slice(0, 31);
+};
+
+const uniqueSheetName = (wb: any, name: string): string => {
+  const base = safeSheetName(name);
+  if (!wb.SheetNames?.includes(base)) return base;
+  let i = 2;
+  let candidate = `${base.slice(0, 28)}_${i}`;
+  while (wb.SheetNames?.includes(candidate)) {
+    i++;
+    candidate = `${base.slice(0, 28)}_${i}`;
+  }
+  return candidate;
+};
+
+interface SheetChunk { ws: any; name: string; rows: PlainRow[]; index: number; total: number }
+
+// Construye una o varias hojas (según el límite de 1,048,576 filas de Excel)
+// a partir de datos ya saneados. Nunca recibe objetos/nodos crudos: todo
+// pasa por rowsToAOA/sanitizeCellValue antes de tocar aoa_to_sheet.
+// Nota: un arreglo vacío produce una hoja vacía (mismo comportamiento que el
+// json_to_sheet([]) original) — el llamador decide si quiere un placeholder
+// "SIN REGISTROS" (algunas cédulas, como CEDULA NO CLASIFICADOS, esperan
+// legítimamente 0 filas cuando no hay registros de ese tipo en el lote).
+const buildSafeSheets = (data: PlainRow[], baseName: string, origin?: string): SheetChunk[] => {
+  const safeData = data || [];
+  const headers = collectHeaders(safeData);
+  const chunkCount = Math.max(1, Math.ceil(safeData.length / EXCEL_MAX_DATA_ROWS));
+  const chunks: SheetChunk[] = [];
+  for (let i = 0; i < chunkCount; i++) {
+    const rows = safeData.slice(i * EXCEL_MAX_DATA_ROWS, (i + 1) * EXCEL_MAX_DATA_ROWS);
+    const aoa = rowsToAOA(rows, headers);
+    const ws = (XLSX as any).utils.aoa_to_sheet(aoa, origin ? { origin } : undefined);
+    const name = chunkCount > 1 ? `${baseName}_${i + 1}` : baseName;
+    chunks.push({ ws, name, rows, index: i, total: chunkCount });
+  }
+  return chunks;
+};
+
+const appendSheetChunks = (wb: any, chunks: SheetChunk[]) => {
+  for (const c of chunks) {
+    (XLSX as any).utils.book_append_sheet(wb, c.ws, uniqueSheetName(wb, c.name));
+  }
+};
+
+// Variante de buildSafeSheets para hojas con una fila de título en A1 y los
+// datos a partir de A2 (patrón usado por las cédulas de IVA). El título se
+// repite en cada fragmento si la hoja llega a dividirse.
+const buildTitledSheetChunks = (data: PlainRow[], baseName: string, title: string): SheetChunk[] => {
+  const chunks = buildSafeSheets(data, baseName, 'A2');
+  for (const c of chunks) {
+    (XLSX as any).utils.sheet_add_aoa(c.ws, [[title]], { origin: 'A1' });
+  }
+  return chunks;
+};
 
 const SAT_RETRY_ACTION = 'Reintentar validación SAT';
 const SAT_FAILURE_PATTERN = /(error|conexión|timeout|failed|network|sat\s+no\s+respondió|no\s+respondió|cors|no\s+confirmado|no\s+verificado)/i;
@@ -20,20 +187,64 @@ const normalizeI18nSiNo = (value: unknown): string => {
 
 const isSatTechnicalFailure = (value: unknown) => SAT_FAILURE_PATTERN.test(String(value ?? ''));
 
-const getSatExportFields = (r: ValidationResult) => {
+// Columnas de dirección del CFDI (corrección de espejos contables) reutilizables
+// en todas las hojas que usan getSatExportFields.
+const direccionFields = (r: ValidationResult) => ({
+  Direccion_CFDI: r.direccionCFDI || 'REQUIERE_REVISION',
+  RFC_Empresa_Evaluada: r.rfcEmpresaEvaluada || '',
+  Naturaleza_Para_Empresa: r.naturalezaParaEmpresa || 'N/A',
+  Impacto_IVA: r.impactoIVA || 'N/A',
+  Motivo_Clasificacion: r.motivoClasificacion || 'N/A',
+});
+
+export const getSatExportFields = (r: ValidationResult) => {
   const rawStatus = r.trazabilidadInfo?.observacionSAT || r.estatusSAT || '';
-  if (isSatTechnicalFailure(rawStatus)) {
+  const statusNorm = String(rawStatus || '').trim();
+
+  // ✅ CORRECCIÓN DE CONTRADICCIÓN: un CFDI cancelado NUNCA debe reportarse como
+  // "VALIDACION OK". Falla técnica o estatus no confirmado => NO VALIDADO SAT.
+  if (isSatTechnicalFailure(statusNorm) || !statusNorm) {
     return {
-      Estatus_SAT: 'ESTATUS SAT NO CONFIRMADO',
-      Resultado_Validacion_SAT: 'FALLA TECNICA DE CONSULTA',
+      Estatus_SAT: statusNorm || 'ESTATUS SAT NO CONFIRMADO',
+      Resultado_Validacion_SAT: 'NO VALIDADO SAT',
       Accion_Recomendada_SAT: SAT_RETRY_ACTION,
+      ...direccionFields(r),
     };
   }
 
+  if (statusNorm === 'Cancelado') {
+    return {
+      Estatus_SAT: 'Cancelado',
+      Resultado_Validacion_SAT: 'CANCELADO',
+      Accion_Recomendada_SAT: 'CANCELAR EFECTOS FISCALES / NO UTILIZAR',
+      ...direccionFields(r),
+    };
+  }
+
+  if (statusNorm === 'Vigente') {
+    return {
+      Estatus_SAT: 'Vigente',
+      Resultado_Validacion_SAT: 'VIGENTE',
+      Accion_Recomendada_SAT: 'SIN ACCION (VIGENTE)',
+      ...direccionFields(r),
+    };
+  }
+
+  if (statusNorm === 'No Encontrado') {
+    return {
+      Estatus_SAT: 'No Encontrado',
+      Resultado_Validacion_SAT: 'NO VALIDADO SAT',
+      Accion_Recomendada_SAT: 'REINTENTAR CONSULTA SAT',
+      ...direccionFields(r),
+    };
+  }
+
+  // Error Conexión u otro estatus no conclusivo
   return {
-    Estatus_SAT: rawStatus || 'ESTATUS SAT NO CONFIRMADO',
-    Resultado_Validacion_SAT: rawStatus ? 'VALIDACION OK' : 'FALLA TECNICA DE CONSULTA',
-    Accion_Recomendada_SAT: rawStatus ? 'Ninguna' : SAT_RETRY_ACTION,
+    Estatus_SAT: statusNorm,
+    Resultado_Validacion_SAT: 'NO VALIDADO SAT',
+    Accion_Recomendada_SAT: SAT_RETRY_ACTION,
+    ...direccionFields(r),
   };
 };
 
@@ -207,9 +418,20 @@ const getNivelExpediente = (r: ValidationResult) => {
 
 const nodeName = (node: Element) => (node.localName || node.nodeName || '').split(':').pop() || '';
 
-const parseXml = (r: ValidationResult): XMLDocument | null => {
-  if (!r.xmlContent || typeof DOMParser === 'undefined') return null;
-  return new DOMParser().parseFromString(r.xmlContent, 'text/xml');
+// Memoria en navegador (item 4 de la revisión): 4 funciones distintas
+// re-parseaban el mismo XML de forma independiente (hasta 4x por documento).
+// `cache` es opcional y de vida corta — se crea justo antes de las 4 hojas
+// que necesitan el XML crudo y se descarta justo después (ver
+// buildDiagnosticoWorkbook), para no retener N documentos DOM parseados
+// simultáneamente durante todo el export, solo durante esa fase puntual.
+type XmlDocCache = Map<ValidationResult, XMLDocument | null>;
+const parseXml = (r: ValidationResult, cache?: XmlDocCache): XMLDocument | null => {
+  if (cache?.has(r)) return cache.get(r)!;
+  const doc = (!r.xmlContent || typeof DOMParser === 'undefined')
+    ? null
+    : new DOMParser().parseFromString(r.xmlContent, 'text/xml');
+  cache?.set(r, doc);
+  return doc;
 };
 
 const nodes = (root: Document | Element | null, name: string): Element[] =>
@@ -237,30 +459,83 @@ const addRawAttr = (rows: any[], r: ValidationResult, seccion: string, node: Ele
   });
 };
 
-const addRecursiveAttrs = (rows: any[], r: ValidationResult, sectionPrefix: string, node: Element | null | undefined, hoja: string) => {
+// P0-A (requisito 4): dump forense recursivo del complemento CartaPorte.
+// Blindado contra documentos con complejidad real fuera de lo trivial:
+// - detecta ciclos (WeakSet de nodos visitados — nunca debería ocurrir en un
+//   DOM bien formado, pero se protege igual);
+// - profundidad máxima razonada (la CartaPorte real no supera ~8 niveles);
+// - solo recorre nodos hijos de CartaPorte esperados fiscalmente (allow-list),
+//   no cualquier elemento XML;
+// - tope de filas total por documento — si se alcanza, se agrega UNA fila de
+//   aviso visible (nunca un truncamiento silencioso) que remite a las hojas
+//   de detalle (DETALLE CARTA PORTE MERCANCIAS/UBICACIONES/FIGURAS), donde
+//   la información completa sigue disponible sin límite artificial.
+const RECURSIVE_ATTRS_MAX_DEPTH = 10;
+const RECURSIVE_ATTRS_MAX_ROWS_PER_DOC = 400;
+const CARTA_PORTE_EXPECTED_CHILDREN = new Set([
+  'Ubicaciones', 'Ubicacion', 'Domicilio',
+  'Mercancias', 'Mercancia', 'DetalleMercancia', 'CantidadTransporta',
+  'Autotransporte', 'IdentificacionVehicular', 'Seguros', 'Remolques', 'Remolque',
+  'FiguraTransporte', 'TiposFigura', 'Operadores', 'Operador', 'PartesTransporte',
+  'Notificaciones', 'Domicilio',
+]);
+
+const addRecursiveAttrs = (
+  rows: any[],
+  r: ValidationResult,
+  sectionPrefix: string,
+  node: Element | null | undefined,
+  hoja: string,
+  visited: WeakSet<Element> = new WeakSet(),
+  depth = 0,
+  budget: { rowsUsed: number; truncated: boolean } = { rowsUsed: 0, truncated: false }
+) => {
   if (!r || !node) return;
+  if (budget.truncated) return;
+  if (visited.has(node)) return; // ciclo detectado — nunca debería ocurrir en un DOM bien formado
+  visited.add(node);
+
+  if (budget.rowsUsed >= RECURSIVE_ATTRS_MAX_ROWS_PER_DOC || depth > RECURSIVE_ATTRS_MAX_DEPTH) {
+    if (!budget.truncated) {
+      budget.truncated = true;
+      addRawAttr(
+        rows, r, sectionPrefix, null, 'ESTRUCTURA_EXTENSA', 'aviso', hoja,
+        `Estructura CartaPorte más extensa de lo habitual: extracción forense cruda detenida en ${budget.rowsUsed} filas para este documento. ` +
+        `El detalle completo de mercancías/ubicaciones/figuras sigue disponible sin límite en las hojas "DETALLE CARTA PORTE MERCANCIAS", "DETALLE CP UBICACIONES" y "DETALLE CARTA PORTE FIGURAS".`,
+        'Ver hoja de detalle correspondiente'
+      );
+    }
+    return;
+  }
+
   const attrs = node.attributes;
   if (attrs) {
     for (let i = 0; i < attrs.length; i++) {
+      if (budget.rowsUsed >= RECURSIVE_ATTRS_MAX_ROWS_PER_DOC) break;
       const attr = attrs[i];
       addRawAttr(rows, r, sectionPrefix, node, attr.name, attr.name, hoja, attr.value);
+      budget.rowsUsed++;
     }
   }
   const children = node.children;
   if (children) {
     const childCounts = new Map<string, number>();
     for (let i = 0; i < children.length; i++) {
+      if (budget.rowsUsed >= RECURSIVE_ATTRS_MAX_ROWS_PER_DOC) break;
       const child = children[i];
       const childName = nodeName(child);
+      // Solo se recorren nodos esperados del complemento CartaPorte (fiscales
+      // conocidos), no cualquier elemento — evita dumps de estructuras ajenas.
+      if (!CARTA_PORTE_EXPECTED_CHILDREN.has(childName)) continue;
       const count = (childCounts.get(childName) || 0) + 1;
       childCounts.set(childName, count);
-      addRecursiveAttrs(rows, r, `${sectionPrefix} -> ${childName}[${count}]`, child, hoja);
+      addRecursiveAttrs(rows, r, `${sectionPrefix} -> ${childName}[${count}]`, child, hoja, visited, depth + 1, budget);
     }
   }
 };
 
-const extractRawXmlRows = (results: ValidationResult[]) => results.flatMap(r => {
-  const doc = parseXml(r);
+const extractRawXmlRows = (results: ValidationResult[], cache?: XmlDocCache) => results.flatMap(r => {
+  const doc = parseXml(r, cache);
   const rows: any[] = [];
   const comp = doc?.documentElement;
   const emisor = firstNode(doc, 'Emisor');
@@ -560,12 +835,24 @@ const applyRetencionesSheetDefaults = (ws: any, dataRows: any[]) => {
   ws['!cols'] = headerCols.map(h => ({ wch: Math.min(Math.max(h.length + 4, 14), 42) }));
 };
 
+// P0-A (requisito 6): resumen truncado con aviso explícito — nunca un
+// .join() sin límite. La lista completa siempre sigue disponible en la hoja
+// de detalle correspondiente (una fila por elemento, con UUID), así que no
+// se pierde información: solo se evita concatenar miles de valores en una
+// sola celda de texto (que rompería el límite de 32,767 caracteres de Excel).
+const summarizeList = (items: unknown[] | undefined | null, max: number, detailSheetName: string): string => {
+  const clean = (items || []).map(v => String(v ?? '').trim()).filter(Boolean);
+  if (!clean.length) return 'NO VIENE EN XML';
+  if (clean.length <= max) return clean.join(' | ');
+  return `${clean.slice(0, max).join(' | ')} | +${clean.length - max} más (ver hoja "${detailSheetName}")`;
+};
+
 const buildForensicRows = (results: ValidationResult[]) => results.map(r => {
   const detail = cp(r);
   const mainOrigen = detail?.origenes?.[0];
   const mainDestino = detail?.destinos?.[0];
   const operador = detail?.figuras?.find((f: any) => f.tipoFigura === '01') || detail?.figuras?.[0];
-  
+
   return {
     Archivo_XML: r.fileName,
     UUID: r.uuid,
@@ -603,7 +890,9 @@ const buildForensicRows = (results: ValidationResult[]) => results.map(r => {
     ISR_Retenido: r.isrRetenido,
     Total_Impuestos_Trasladados: r.ivaTraslado + r.iepsTraslado + r.impuestosLocalesTrasladados,
     Total_Impuestos_Retenidos: r.ivaRetenido + r.isrRetenido + r.iepsRetenido + r.impuestosLocalesRetenidos,
-    Conceptos_Resumen: (r.desglosePorConcepto || []).slice(0, 5).map((c: any) => c.descripcion).filter(Boolean).join(' | ') || 'NO VIENE EN XML',
+    // Antes truncaba en silencio a 5 sin aviso; ahora usa summarizeList igual
+    // que el resto de los resúmenes — nunca pérdida sin marcar (requisito 1).
+    Conceptos_Resumen: summarizeList((r.desglosePorConcepto || []).map((c: any) => c.descripcion), 5, 'DETALLE CONCEPTOS XML'),
     CartaPorte_Presente: getCartaPortePresente(r),
     CartaPorte_Version: detail?.version || r.versionCartaPorte,
     CartaPorte_Completa: r.cartaPorteCompleta,
@@ -613,13 +902,13 @@ const buildForensicRows = (results: ValidationResult[]) => results.map(r => {
     TotalDistanciaRecorrida: detail?.totalDistanciaRecorrida || 'NO VIENE EN XML',
     Origen_Resumen: formatAddress(mainOrigen),
     Destino_Resumen: formatAddress(mainDestino),
-    Mercancias_Resumen: detail?.mercancias?.map((m: any) => m.descripcion).join(' | ') || 'NO VIENE EN XML',
+    Mercancias_Resumen: summarizeList(detail?.mercancias?.map((m: any) => m.descripcion), 5, 'DETALLE CARTA PORTE MERCANCIAS'),
     Unidad_Placas: detail?.autotransporte?.placaVM || 'NO VIENE EN XML',
-    Remolques_Resumen: detail?.autotransporte?.remolques?.map((rem: any) => joinClean(rem.subTipoRem, rem.placa)).join(' | ') || 'NO VIENE EN XML',
+    Remolques_Resumen: summarizeList(detail?.autotransporte?.remolques?.map((rem: any) => joinClean(rem.subTipoRem, rem.placa)), 5, 'DETALLE CARTA PORTE FIGURAS'),
     Operador_Resumen: joinClean(operador?.rfcFigura, operador?.nombreFigura, operador?.numLicencia),
     Pedimentos_Detectados: r.trazabilidadInfo?.pedimento || 'NO VIENE EN XML',
     Pago_Presente: r.pagosPresente || 'NO',
-    CFDI_Relacionados: r.uuids_relacionados?.join(' | ') || 'NO APLICA',
+    CFDI_Relacionados: r.uuids_relacionados?.length ? summarizeList(r.uuids_relacionados, 20, 'EXTRACCION CRUDA XML') : 'NO APLICA',
     Nivel_Trazabilidad: getNivelExpediente(r),
     Datos_Faltantes: getDatosFaltantes(r),
     Accion_Recomendada: r.trazabilidadInfo?.accionRecomendadaMatriz || 'Integrar soporte documental y validar manualmente riesgos detectados',
@@ -706,7 +995,7 @@ const buildCartaPorteFiguras = (results: ValidationResult[]) =>
   });
 
 // ── Construye índice de UUIDs cubiertos por REPs del lote (para vinculación) ──
-const buildRepCoverageIndex = (results: ValidationResult[]): Set<string> => {
+const buildRepCoverageIndex = (results: ValidationResult[], cache?: XmlDocCache): Set<string> => {
   const covered = new Set<string>();
   results.forEach(r => {
     if (r.tipoCFDI !== 'P') return;
@@ -719,7 +1008,7 @@ const buildRepCoverageIndex = (results: ValidationResult[]): Set<string> => {
       return;
     }
     // Leer desde XML vivo
-    const doc = parseXml(r);
+    const doc = parseXml(r, cache);
     nodes(doc, 'DoctoRelacionado').forEach(dr => {
       const uid = String(dr.getAttribute('IdDocumento') || '').trim().toUpperCase();
       if (uid) covered.add(uid);
@@ -728,7 +1017,7 @@ const buildRepCoverageIndex = (results: ValidationResult[]): Set<string> => {
   return covered;
 };
 
-const buildPagosRows = (results: ValidationResult[]) => {
+const buildPagosRows = (results: ValidationResult[], cache?: XmlDocCache) => {
   // Índice de UUIDs de CFDIs de ingreso en el lote (para marcar REP vinculado vs sin origen)
   const loteUuids = new Set(results.filter(r => r.tipoCFDI !== 'P').map(r => String(r.uuid || '').toUpperCase()));
 
@@ -741,7 +1030,7 @@ const buildPagosRows = (results: ValidationResult[]) => {
         return { ...row, ObjetoImpDR: row.ObjetoImpDR || 'NO VIENE EN XML', Complemento_Pago_Localizado: localizado };
       });
     }
-    const doc = parseXml(r);
+    const doc = parseXml(r, cache);
     const tienePagos = nodes(doc, 'Pagos').length > 0;
     if (!tienePagos) return [];
     return nodes(doc, 'DoctoRelacionado').map((dr, index) => {
@@ -825,14 +1114,14 @@ const addAlert = (alerts: any[], r: ValidationResult, tipo: string, regla: strin
   });
 };
 
-const buildAlerts = (results: ValidationResult[]) => {
+const buildAlerts = (results: ValidationResult[], cache?: XmlDocCache) => {
   const alerts: any[] = [];
   const seen = new Map<string, number>();
   results.forEach(r => seen.set(r.uuid, (seen.get(r.uuid) || 0) + 1));
 
   // ── Índice: UUIDs de CFDIs cubiertos por REPs del lote ─────────────────────
   // Sirve para suprimir PAGO-01 cuando el REP sí existe en el mismo lote.
-  const repCoverage = buildRepCoverageIndex(results);
+  const repCoverage = buildRepCoverageIndex(results, cache);
 
   results.forEach(r => {
     const detail = cp(r);
@@ -864,8 +1153,8 @@ const buildAlerts = (results: ValidationResult[]) => {
   return alerts;
 };
 
-const buildQualityRows = (results: ValidationResult[]) => results.map(r => {
-  const doc = parseXml(r);
+const buildQualityRows = (results: ValidationResult[], cache?: XmlDocCache) => results.map(r => {
+  const doc = parseXml(r, cache);
   const missing: string[] = [];
   if (!doc?.documentElement) missing.push('Comprobante');
   if (!firstNode(doc, 'Emisor')) missing.push('Emisor');
@@ -932,6 +1221,15 @@ export const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
 
   const ivaEnRevisionRows = results.filter(r => r.ivaCreditabilityStatus === 'POR_DETERMINAR' || r.fiscalRiskLevel === 'AMARILLO');
   const ivaEnRevisionVal = ivaEnRevisionRows.reduce((sum, r) => sum + (r.ivaTraslado || 0), 0);
+  // Clasificacion direccional (fila por fila) para que los contadores cuadren con las cedulas
+  const emitidosDir = results.filter(r => r.direccionCFDI === 'EMITIDO').length;
+  const recibidosDir = results.filter(r => r.direccionCFDI === 'RECIBIDO').length;
+  const noClasDir = results.filter(r => !r.direccionCFDI || r.direccionCFDI === 'REQUIERE_REVISION').length;
+  const signoRes = (r: ValidationResult) => (String(r.tipoCFDI || '').toUpperCase() === 'E' ? -1 : 1);
+  const notasEmit = results.filter(r => r.direccionCFDI === 'EMITIDO' && String(r.tipoCFDI || '').toUpperCase() === 'E').length;
+  const notasRec = results.filter(r => r.direccionCFDI === 'RECIBIDO' && String(r.tipoCFDI || '').toUpperCase() === 'E').length;
+  const ivaTrasladadoNeto = results.filter(r => r.direccionCFDI === 'EMITIDO').reduce((ac, r) => ac + (r.ivaTraslado || 0) * signoRes(r), 0);
+  const ivaAcreditableNeto = results.filter(r => r.direccionCFDI === 'RECIBIDO').reduce((ac, r) => ac + (r.ivaTraslado || 0) * signoRes(r), 0);
   return [
     { Metrica: '=== 1. RESUMEN OPERATIVO ===', Valor: '' },
     { Metrica: 'CFDI procesados', Valor: total },
@@ -942,6 +1240,15 @@ export const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
     { Metrica: 'Monto total', Valor: Math.round(totalMonto * 100) / 100 },
     { Metrica: 'Monto en riesgo', Valor: Math.round(montoRiesgo * 100) / 100 },
     { Metrica: 'Cancelados', Valor: cancelados },
+    { Metrica: '', Valor: '' },
+    { Metrica: '=== 1B. DIRECCION (clasificacion fila por fila) ===', Valor: '' },
+    { Metrica: 'Emitidos (empresa vende)', Valor: emitidosDir },
+    { Metrica: 'Recibidos (empresa compra)', Valor: recibidosDir },
+    { Metrica: 'No clasificados (REQUIERE_REVISION)', Valor: noClasDir },
+    { Metrica: 'Notas de credito emitidas', Valor: notasEmit },
+    { Metrica: 'Notas de credito recibidas', Valor: notasRec },
+    { Metrica: 'IVA trasladado neto (emitidos, notas restan)', Valor: Math.round(ivaTrasladadoNeto * 100) / 100 },
+    { Metrica: 'IVA acreditable neto (recibidos, notas restan)', Valor: Math.round(ivaAcreditableNeto * 100) / 100 },
     { Metrica: '', Valor: '' },
     { Metrica: '=== 2. REVISIÓN FISCAL PREVENTIVA ===', Valor: '' },
     { Metrica: 'CFDI sin riesgo fiscal preventivo', Valor: verdes },
@@ -1054,10 +1361,55 @@ const applyIvaSheetDefaults = (ws: any) => {
   ws['!cols'] = firstRow.map(h => ({ wch: Math.min(Math.max(h.length + 4, 14), 42) }));
 };
 
-const appendJsonSheet = (wb: any, data: any[], name: string) => {
-  const ws = (XLSX as any).utils.json_to_sheet(data.length ? data : [{ Estado: 'SIN REGISTROS' }]);
-  applySheetDefaults(ws);
-  (XLSX as any).utils.book_append_sheet(wb, ws, name);
+// Cede el control al event loop del navegador entre hojas — permite que React
+// pinte el progreso ("Generando hoja X de N") y que la interfaz no se sienta
+// congelada durante una exportación de miles de registros.
+const yieldToMain = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0));
+
+// P0-A (requisitos 1-3, 7-8, 10, 13-14): construcción segura de hoja.
+// - Nunca pasa objetos/arrays/nodos crudos a SheetJS (rowsToAOA sanea cada celda).
+// - Usa aoa_to_sheet con encabezados explícitos, no json_to_sheet sobre datos sin verificar.
+// - Divide automáticamente en NOMBRE_1/NOMBRE_2/... si excede 1,048,576 filas.
+// - Cede el hilo antes de construir cada hoja para que el progreso sea visible.
+// - Si falla la construcción de ESTA hoja, no aborta el libro completo: registra el
+//   error, reporta qué hoja y en qué etapa falló, y agrega una hoja de aviso visible
+//   en su lugar para que el resto del reporte se conserve íntegro.
+const appendJsonSheet = async (
+  wb: any,
+  data: any[],
+  name: string,
+  onProgress?: ExportProgressCallback,
+  sheetIndex = 0,
+  totalSheets = 0
+) => {
+  onProgress?.({ sheet: name, stage: 'building', sheetIndex, totalSheets });
+  await yieldToMain();
+  try {
+    // appendJsonSheet siempre mostró un placeholder "SIN REGISTROS" para datos
+    // vacíos (comportamiento previo preservado); las cédulas dirigidas que
+    // legítimamente pueden quedar vacías usan buildSafeSheets directamente
+    // sin este placeholder (ver nota en buildSafeSheets).
+    const chunks = buildSafeSheets(data && data.length ? data : [{ Estado: 'SIN REGISTROS' }], name);
+    chunks.forEach(c => c.rows.length && applySheetDefaults(c.ws));
+    appendSheetChunks(wb, chunks);
+    onProgress?.({ sheet: name, stage: 'done', sheetIndex, totalSheets });
+  } catch (err: any) {
+    const message = err?.message || String(err);
+    console.error(`[excelExporter] Fallo construyendo la hoja "${name}":`, err);
+    onProgress?.({ sheet: name, stage: 'error', sheetIndex, totalSheets, error: message, affectedRows: Array.isArray(data) ? data.length : undefined });
+    try {
+      const errorWs = (XLSX as any).utils.aoa_to_sheet([
+        ['ERROR AL GENERAR ESTA HOJA'],
+        ['Hoja afectada', name],
+        ['Detalle técnico', message],
+        ['Las demás hojas del reporte se generaron correctamente.'],
+        ['Si el problema persiste, reporte este mensaje a soporte junto con el lote de XML usado.'],
+      ]);
+      (XLSX as any).utils.book_append_sheet(wb, errorWs, uniqueSheetName(wb, `ERROR_${name}`));
+    } catch (fallbackErr) {
+      console.error('[excelExporter] No se pudo ni siquiera crear la hoja de aviso de error:', fallbackErr);
+    }
+  }
 };
 
 // ─── Helper: resuelve Coincide_Tasa con reglas estrictas sin includes/startsWith ───────────────
@@ -1574,7 +1926,60 @@ export function clasificarValidacion69B(bl: any): string {
   return 'Requiere revisión';
 }
 
-export function buildDiagnosticoWorkbook(results: ValidationResult[]): any {
+// P0-A (requisitos 10, 13): ejecuta la construcción de una hoja con
+// aislamiento de error — si falla, se reporta qué hoja y en qué etapa,
+// se agrega una hoja de aviso visible, y el resto del libro se conserva.
+const TOTAL_EXPORT_STAGES = 24;
+const runSheetStage = async (
+  wb: any,
+  name: string,
+  sheetIndex: number,
+  onProgress: ExportProgressCallback | undefined,
+  build: () => void,
+  affectedRows?: number
+) => {
+  onProgress?.({ sheet: name, stage: 'building', sheetIndex, totalSheets: TOTAL_EXPORT_STAGES });
+  await yieldToMain();
+  try {
+    build();
+    onProgress?.({ sheet: name, stage: 'done', sheetIndex, totalSheets: TOTAL_EXPORT_STAGES });
+  } catch (err: any) {
+    const message = err?.message || String(err);
+    console.error(`[excelExporter] Fallo construyendo la hoja "${name}":`, err);
+    onProgress?.({ sheet: name, stage: 'error', sheetIndex, totalSheets: TOTAL_EXPORT_STAGES, error: message, affectedRows });
+    try {
+      const errorWs = (XLSX as any).utils.aoa_to_sheet([
+        ['ERROR AL GENERAR ESTA HOJA'],
+        ['Hoja afectada', name],
+        ['Detalle técnico', message],
+        ['Las demás hojas del reporte se generaron correctamente.'],
+        ['Si el problema persiste, reporte este mensaje a soporte junto con el lote de XML usado.'],
+      ]);
+      (XLSX as any).utils.book_append_sheet(wb, errorWs, uniqueSheetName(wb, `ERROR_${name}`));
+    } catch (fallbackErr) {
+      console.error('[excelExporter] No se pudo ni siquiera crear la hoja de aviso de error:', fallbackErr);
+    }
+  }
+};
+
+export async function buildDiagnosticoWorkbook(results: ValidationResult[], onProgressIn?: ExportProgressCallback): Promise<any> {
+  let stageIdx = 0;
+  // Reportes parciales (requisito 3): se intercepta cada evento de progreso
+  // para registrar las fallas de hoja sin cambiar el resto del pipeline —
+  // el resultado se usa al final para decidir si el archivo se entrega
+  // completo, parcial (con aviso) o recortado a un diagnóstico mínimo.
+  const failures: ExportSheetFailure[] = [];
+  const onProgress: ExportProgressCallback = (event) => {
+    if (event.stage === 'error') {
+      failures.push({
+        sheet: event.sheet,
+        error: event.error || 'Error desconocido',
+        affectedRows: typeof event.affectedRows === 'number' ? event.affectedRows : 'N/D',
+        critical: CRITICAL_SHEETS.has(event.sheet),
+      });
+    }
+    onProgressIn?.(event);
+  };
   // 1. Separar resultados válidos e inválidos
   const isValidUUID = (uuid: string | undefined): boolean => {
     if (!uuid) return false;
@@ -1627,14 +2032,21 @@ export function buildDiagnosticoWorkbook(results: ValidationResult[]): any {
   receptorCounts.forEach(count => {
     if (count > maxReceptorCount) maxReceptorCount = count;
   });
-  
-  const esLoteEmitidos = maxEmisorCount > maxReceptorCount;
+
+  // ✅ CORRECCIÓN: NO se usa dirección predominante del lote para clasificar registros.
+  // La clasificación es SIEMPRE fila por fila (rfcEmisor/rfcReceptor vs RFC de empresa).
+  // Si el lote fue validado con el RFC de la empresa, la dirección está definida y se
+  // generan las cédulas por dirección; si no, se mantiene una sola cédula IVA legacy.
+  const tieneDireccion = validResults.some(r => r.direccionCFDI && r.direccionCFDI !== 'REQUIERE_REVISION');
+
+  // Signo para notas de crédito (tipo E): restan al agregarlas a ingresos/gastos e IVA.
+  const signoCFDI = (r: ValidationResult) => (String(r.tipoCFDI || '').toUpperCase() === 'E' ? -1 : 1);
 
   // Crear workbook
   const wb = (XLSX as any).utils.book_new();
 
   // Hoja Resumen como primera hoja del Excel
-  appendJsonSheet(wb, buildExecutiveSummaryRows(validResults), 'Resumen');
+  await appendJsonSheet(wb, buildExecutiveSummaryRows(validResults), 'Resumen', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
   if (wb.Sheets['Resumen']) {
     wb.Sheets['Resumen']['!cols'] = [
       { wch: 45 }, // Metrica
@@ -1643,12 +2055,13 @@ export function buildDiagnosticoWorkbook(results: ValidationResult[]): any {
   }
 
   // Preparar datos en el orden exacto de columnas
+  await runSheetStage(wb, 'Diagnostico_CFDI', ++stageIdx, onProgress, () => {
   const data = validResults.map((r) => {
     const detail = cp(r);
     const mainOrigen = detail?.origenes?.[0];
     const mainDestino = detail?.destinos?.[0];
     const operador = detail?.figuras?.find((f: any) => f.tipoFigura === '01') || detail?.figuras?.[0];
-    
+
     return {
       Archivo_XML: r.fileName,
       UUID: r.uuid,
@@ -1724,7 +2137,7 @@ export function buildDiagnosticoWorkbook(results: ValidationResult[]): any {
       Anio_Modelo_VM: detail?.autotransporte?.anioModeloVM || 'NO VIENE EN XML',
       Aseguradora_RC: detail?.autotransporte?.aseguradoraRespCivil || 'NO VIENE EN XML',
       Poliza_RC: detail?.autotransporte?.polizaRespCivil || 'NO VIENE EN XML',
-      Remolques: detail?.autotransporte?.remolques?.map((rem: any) => joinClean(rem.subTipoRem, rem.placa)).join(' | ') || 'NO VIENE EN XML',
+      Remolques: summarizeList(detail?.autotransporte?.remolques?.map((rem: any) => joinClean(rem.subTipoRem, rem.placa)), 5, 'DETALLE CARTA PORTE FIGURAS'),
       Tipo_Figura: operador?.tipoFigura || 'NO VIENE EN XML',
       RFC_Figura: operador?.rfcFigura || 'NO VIENE EN XML',
       Nombre_Figura: operador?.nombreFigura || 'NO VIENE EN XML',
@@ -1736,7 +2149,14 @@ export function buildDiagnosticoWorkbook(results: ValidationResult[]): any {
       Total_Deducciones: r.totalDeducciones,
       Total_OtrosPagos: r.totalOtrosPagos,
       ISR_Retenido_Nomina: r.isrRetenidoNomina,
-      OBJETO_IMP_XML: r.desglosePorConcepto?.map(c => c.objetoImp).join(',') || 'N/A',
+      // Tope defensivo (sin deduplicar, para no cambiar el formato en documentos normales):
+      // un documento con miles de conceptos ya no puede exceder el límite de 32,767
+      // caracteres por celda de Excel en este campo.
+      OBJETO_IMP_XML: r.desglosePorConcepto?.length
+        ? (r.desglosePorConcepto.length <= 500
+          ? (r.desglosePorConcepto.map(c => c.objetoImp).join(',') || 'N/A')
+          : `${r.desglosePorConcepto.slice(0, 500).map(c => c.objetoImp).join(',')},+${r.desglosePorConcepto.length - 500} más (ver hoja "DETALLE CONCEPTOS XML")`)
+        : 'N/A',
       CLASIFICACION_FISCAL: r.clasificacionFiscal ?? 'SIN_IMPUESTOS',
       BASE_NO_OBJETO: r.baseNoObjeto ?? 0,
       BASE_SIN_DESGLOSE: r.baseObjetoSinDesglose ?? 0,
@@ -1771,7 +2191,7 @@ export function buildDiagnosticoWorkbook(results: ValidationResult[]): any {
       Observaciones_Tecnicas: r.observacionesTecnicas,
       Observaciones_Contador: r.observacionesContador,
       Giro_Empresa: r.giroEmpresa || 'NO DEFINIDO',
-      UUIDs_Relacionados: r.uuids_relacionados?.join(', ') || 'NO APLICA',
+      UUIDs_Relacionados: r.uuids_relacionados?.length ? summarizeList(r.uuids_relacionados, 20, 'EXTRACCION CRUDA XML') : 'NO APLICA',
       Nivel_Trazabilidad: r.trazabilidadInfo?.nivelExpediente || 'NO APLICA',
       Requiere_Soporte_Externo: r.trazabilidadInfo?.fuenteExternaRequerida || 'NO',
       Accion_Recomendada: r.trazabilidadInfo?.accionRecomendadaMatriz || 'NO APLICA',
@@ -1782,26 +2202,46 @@ export function buildDiagnosticoWorkbook(results: ValidationResult[]): any {
       IVA_Creditability_Status: r.ivaCreditabilityStatus || 'POR_DETERMINAR',
       Payment_Method_Status: r.paymentMethodStatus || 'NO APLICA',
       // ── Columnas 69-B ──
-      RFC_Evaluado_69B: r.rfcEmisor || '',
-      Validacion_69B: clasificarValidacion69B(r.rfcEmisorBlacklist),
-      Situacion_69B: r.rfcEmisorBlacklist?.situacion || (r.rfcEmisorBlacklist?.notSynced ? 'No validado: lista no cargada' : 'Sin coincidencia'),
-      Fecha_Publicacion_69B: r.rfcEmisorBlacklist?.fechaPublicacion || 'NO APLICA',
-      Fecha_Corte_Listado: (() => {
-        const bl = r.rfcEmisorBlacklist;
-        if (bl?.notSynced) return 'Lista no cargada';
-        return '2025-12-31';
+      // ✅ CORRECCIÓN: el RFC a evaluar en 69-B depende de la dirección del CFDI.
+      //   - RECIBIDO (la empresa compra): el proveedor es el EMISOR => evaluar rfcEmisor.
+      //   - EMITIDO (la empresa vende): el cliente es el RECEPTOR => evaluar rfcReceptor.
+      // Si la dirección no está definida, se mantiene el emisor (criterio legacy).
+      ...(() => {
+        const evaluarReceptor = r.direccionCFDI === 'EMITIDO';
+        const bl = evaluarReceptor ? r.rfcReceptorBlacklist : r.rfcEmisorBlacklist;
+        const rfcEval = evaluarReceptor ? r.rfcReceptor : r.rfcEmisor;
+        return {
+          RFC_Evaluado_69B: rfcEval || '',
+          Validacion_69B: clasificarValidacion69B(bl),
+          Situacion_69B: bl?.situacion || (bl?.notSynced ? 'No validado: lista no cargada' : 'Sin coincidencia'),
+          Fecha_Publicacion_69B: bl?.fechaPublicacion || 'NO APLICA',
+          Fecha_Corte_Listado: (() => {
+            if (bl?.notSynced) return 'Lista no cargada';
+            return '2025-12-31';
+          })(),
+          Historial_69B: bl?.multiEstado ? 'Situación múltiple; requiere revisión' : (bl?.situacion || 'Sin coincidencia'),
+          Observacion_69B: bl?.notSynced
+            ? 'No validado: lista 69-B no cargada en este dispositivo'
+            : bl?.found
+              ? `RFC ${rfcEval} — ${bl?.situacion || 'situación no especificada'}`
+              : 'RFC no encontrado en lista 69-B',
+        };
       })(),
-      Historial_69B: r.rfcEmisorBlacklist?.multiEstado ? 'Situación múltiple; requiere revisión' : (r.rfcEmisorBlacklist?.situacion || 'Sin coincidencia'),
-      Observacion_69B: r.rfcEmisorBlacklist?.notSynced
-        ? 'No validado: lista 69-B no cargada en este dispositivo'
-        : r.rfcEmisorBlacklist?.found
-          ? `RFC ${r.rfcEmisor} — ${r.rfcEmisorBlacklist?.situacion || 'situación no especificada'}`
-          : 'RFC no encontrado en lista 69-B',
     };
   });
 
-  // Crear sheet
-  const ws = (XLSX as any).utils.json_to_sheet(data);
+  // Crear sheet — P0-A: si el lote excede el límite de filas de Excel, se divide
+  // automáticamente (Diagnostico_CFDI_1, _2, ...) con el estilo simple por defecto;
+  // en el caso normal (siempre, con lotes de miles de XML) se conserva el estilo
+  // detallado de columnas/encabezados de abajo sobre una sola hoja saneada.
+  if (data.length > EXCEL_MAX_DATA_ROWS) {
+    const chunks = buildSafeSheets(data, 'Diagnostico_CFDI');
+    chunks.forEach(c => applySheetDefaults(c.ws));
+    appendSheetChunks(wb, chunks);
+    return;
+  }
+  const diagHeaders = collectHeaders(data);
+  const ws = (XLSX as any).utils.aoa_to_sheet(rowsToAOA(data, diagHeaders));
 
   // Configurar ancho de columnas
   const colWidths = [
@@ -1926,30 +2366,41 @@ export function buildDiagnosticoWorkbook(results: ValidationResult[]): any {
 
   // Agregar sheet al workbook
   (XLSX as any).utils.book_append_sheet(wb, ws, 'Diagnostico_CFDI');
+  }, validResults.length); // fin runSheetStage('Diagnostico_CFDI')
 
   // 1. CEDULA INGRESOS SAT
-  const dataIngresos = validResults.filter(r => r.tipoCFDI === 'I').map(r => ({
-    UUID: r.uuid,
-    Serie: r.serie,
-    Folio: r.folio,
-    Fecha: r.fechaEmision,
-    RFC_Receptor: r.rfcReceptor,
-    Nombre_Receptor: r.nombreReceptor,
-    Concepto: r.desglosePorConcepto ? Array.from(new Set(r.desglosePorConcepto.map((c: any) => c.descripcion))).join(' | ') : 'NO VIENE EN XML',
-    Subtotal: r.subtotal,
-    IVA: r.ivaTraslado,
-    Total: r.total,
-    Metodo_Pago: r.metodoPago,
-    Forma_Pago: r.formaPago,
-    Estatus_CFDI: r.trazabilidadInfo?.observacionSAT || r.estatusSAT,
-    Fecha_Cobro: r.trazabilidadInfo?.fechaCobro || 'REQUIERE IMPORTACION',
-    Folio_Transferencia: r.trazabilidadInfo?.folioTransferencia || 'REQUIERE IMPORTACION',
-    Banco: r.trazabilidadInfo?.banco || 'REQUIERE IMPORTACION',
-    Identificador_Bancario: r.trazabilidadInfo?.identificadorBancario || 'REQUIERE IMPORTACION',
-    Observacion_SAT: r.trazabilidadInfo?.observacionSAT || 'NO APLICA'
-  }));
-  const wsIngresos = (XLSX as any).utils.json_to_sheet(dataIngresos);
-  (XLSX as any).utils.book_append_sheet(wb, wsIngresos, 'CEDULA INGRESOS SAT');
+  // ✅ CORRECCIÓN DE ESPEJO CONTABLE: solo entran los CFDI EMITIDOS por la empresa
+  // (su venta/ingreso). Un "tipo I" RECIBIDO es compra del proveedor, no ingreso propio.
+  const dataIngresos = validResults
+    .filter(r => (tieneDireccion ? r.direccionCFDI === 'EMITIDO' : r.tipoCFDI === 'I'))
+    .map(r => ({
+      Direccion_CFDI: r.direccionCFDI || 'REQUIERE_REVISION',
+      RFC_Empresa_Evaluada: r.rfcEmpresaEvaluada || '',
+      Naturaleza_Para_Empresa: r.naturalezaParaEmpresa || 'N/A',
+      UUID: r.uuid,
+      Serie: r.serie,
+      Folio: r.folio,
+      Fecha: r.fechaEmision,
+      RFC_Receptor: r.rfcReceptor,
+      Nombre_Receptor: r.nombreReceptor,
+      // Tope alto (200) para no alterar el listado en facturas normales con varias
+      // decenas de conceptos — solo protege contra documentos con miles de líneas.
+      Concepto: r.desglosePorConcepto ? summarizeList(Array.from(new Set(r.desglosePorConcepto.map((c: any) => c.descripcion))), 200, 'DETALLE CONCEPTOS XML') : 'NO VIENE EN XML',
+      Subtotal: (r.subtotal || 0) * signoCFDI(r),
+      IVA: (r.ivaTraslado || 0) * signoCFDI(r),
+      Total: (r.total || 0) * signoCFDI(r),
+      Metodo_Pago: r.metodoPago,
+      Forma_Pago: r.formaPago,
+      Estatus_CFDI: r.trazabilidadInfo?.observacionSAT || r.estatusSAT,
+      Fecha_Cobro: r.trazabilidadInfo?.fechaCobro || 'REQUIERE IMPORTACION',
+      Folio_Transferencia: r.trazabilidadInfo?.folioTransferencia || 'REQUIERE IMPORTACION',
+      Banco: r.trazabilidadInfo?.banco || 'REQUIERE IMPORTACION',
+      Identificador_Bancario: r.trazabilidadInfo?.identificadorBancario || 'REQUIERE IMPORTACION',
+      Observacion_SAT: r.trazabilidadInfo?.observacionSAT || 'NO APLICA'
+    }));
+  await runSheetStage(wb, 'CEDULA INGRESOS SAT', ++stageIdx, onProgress, () => {
+    appendSheetChunks(wb, buildSafeSheets(dataIngresos, 'CEDULA INGRESOS SAT'));
+  }, dataIngresos.length);
 
   // 2. CEDULA TASA 0%
   const dataTasa0 = validResults.filter(r => (r.baseIVA0 || 0) > 0).map(r => {
@@ -1963,13 +2414,15 @@ export function buildDiagnosticoWorkbook(results: ValidationResult[]): any {
       Fecha: r.fechaEmision,
       RFC_Receptor: r.rfcReceptor,
       Nombre_Receptor: r.nombreReceptor,
-      Concepto: r.desglosePorConcepto ? Array.from(new Set(r.desglosePorConcepto.map((c: any) => c.descripcion))).join(' | ') : 'NO VIENE EN XML',
+      // Tope alto (200) para no alterar el listado en facturas normales con varias
+      // decenas de conceptos — solo protege contra documentos con miles de líneas.
+      Concepto: r.desglosePorConcepto ? summarizeList(Array.from(new Set(r.desglosePorConcepto.map((c: any) => c.descripcion))), 200, 'DETALLE CONCEPTOS XML') : 'NO VIENE EN XML',
       Base_Tasa_0: r.baseIVA0,
       IVA_Trasladado_0: 0,
       Exportacion: r.trazabilidadInfo?.exportacion || 'NO DISPONIBLE',
       Tiene_Carta_Porte: getCartaPortePresente(r),
       Placas: detail?.autotransporte?.placaVM || r.trazabilidadInfo?.placas || 'NO VIENE EN XML',
-      Remolques: detail?.autotransporte?.remolques?.map((rem: any) => joinClean(rem.subTipoRem, rem.placa)).join(' | ') || r.trazabilidadInfo?.remolques || 'NO VIENE EN XML',
+      Remolques: (detail?.autotransporte?.remolques?.length ? summarizeList(detail.autotransporte.remolques.map((rem: any) => joinClean(rem.subTipoRem, rem.placa)), 5, 'DETALLE CARTA PORTE FIGURAS') : null) || r.trazabilidadInfo?.remolques || 'NO VIENE EN XML',
       Origen: formatAddress(mainOrigen),
       Destino: formatAddress(mainDestino),
       RFC_Operador: operador?.rfcFigura || r.trazabilidadInfo?.rfcOperador || 'NO VIENE EN XML',
@@ -1988,8 +2441,9 @@ export function buildDiagnosticoWorkbook(results: ValidationResult[]): any {
       Accion_Recomendada: r.trazabilidadInfo?.accionRecomendadaTasa0 || 'Integrar evidencia de exportacion, pedimento/DODA o soporte contractual y bancario segun aplique'
     };
   });
-  const wsTasa0 = (XLSX as any).utils.json_to_sheet(dataTasa0);
-  (XLSX as any).utils.book_append_sheet(wb, wsTasa0, 'CEDULA TASA 0%');
+  await runSheetStage(wb, 'CEDULA TASA 0%', ++stageIdx, onProgress, () => {
+    appendSheetChunks(wb, buildSafeSheets(dataTasa0, 'CEDULA TASA 0%'));
+  }, dataTasa0.length);
 
   // 2b. AUDITORIA IVA TASA 0%
   const dataAuditoriaIvaTasa0 = validResults.flatMap(r => {
@@ -2056,39 +2510,71 @@ export function buildDiagnosticoWorkbook(results: ValidationResult[]): any {
       };
     });
   });
-  const wsAuditoriaIvaTasa0 = (XLSX as any).utils.json_to_sheet(dataAuditoriaIvaTasa0);
-  (XLSX as any).utils.book_append_sheet(wb, wsAuditoriaIvaTasa0, 'AUDITORIA IVA TASA 0%');
+  await runSheetStage(wb, 'AUDITORIA IVA TASA 0%', ++stageIdx, onProgress, () => {
+    appendSheetChunks(wb, buildSafeSheets(dataAuditoriaIvaTasa0, 'AUDITORIA IVA TASA 0%'));
+  }, dataAuditoriaIvaTasa0.length);
 
   // 3. CEDULA IVA (ACREDITABLE/TRASLADADO)
-  const dataIva = validResults.filter(r => r.tipoCFDI === 'E' || (r.tipoCFDI === 'I' && r.rfcReceptor && !r.rfcReceptor.startsWith('XEXX') && r.rfcEmisor !== r.rfcReceptor)).map(r => ({
-    UUID: r.uuid,
-    Fecha: r.fechaEmision,
-    RFC_Emisor: r.rfcEmisor,
-    Nombre_Emisor: r.nombreEmisor,
-    Concepto: r.desglosePorConcepto ? Array.from(new Set(r.desglosePorConcepto.map((c: any) => c.descripcion))).join(' | ') : 'NO VIENE EN XML',
-    Subtotal: r.subtotal,
-    [esLoteEmitidos ? 'IVA_Trasladado' : 'IVA_Acreditable']: r.trazabilidadInfo?.ivaAcreditable || 0,
-    Total: r.total,
-    Metodo_Pago: r.metodoPago,
-    Forma_Pago: r.formaPago,
-    Estatus_CFDI: r.trazabilidadInfo?.observacionSAT || r.estatusSAT,
-    Uso_CFDI: r.usoCFDI,
-    Regimen_Emisor: r.regimenEmisor,
-    Identificacion_Bancaria: r.trazabilidadInfo?.identificadorBancario || 'REQUIERE IMPORTACION',
-    Fecha_Pago: r.trazabilidadInfo?.fechaPago || 'REQUIERE IMPORTACION',
-    Folio_Transferencia: r.trazabilidadInfo?.folioTransferencia || 'REQUIERE IMPORTACION',
-    [esLoteEmitidos ? 'Diagnostico_IVA_Trasladado' : 'Diagnostico_IVA_Acreditable']: r.trazabilidadInfo?.diagnosticoIvaAcreditable || 'NO APLICA',
-    Accion_Recomendada: r.trazabilidadInfo?.accionRecomendadaIvaAcreditable || 'NO APLICA'
-  }));
-  
-  const wsIva = (XLSX as any).utils.json_to_sheet(dataIva, { origin: "A2" });
-  (XLSX as any).utils.sheet_add_aoa(wsIva, [[
-    esLoteEmitidos 
-      ? "NOTA: Esta cédula aplica para XMLs EMITIDOS (Facturas de Clientes). Para análisis de XMLs RECIBIDOS los datos de IVA serán diferentes."
-      : "NOTA: Esta cédula aplica para XMLs RECIBIDOS (Facturas de Proveedores). Para análisis de XMLs EMITIDOS los datos de IVA serán diferentes."
-  ]], { origin: "A1" });
+  // ✅ CORRECCIÓN DE ESPEJO CONTABLE: el IVA ACREDITABLE proviene de CFDI RECIBIDOS
+  // (compras del proveedor). El IVA TRASLADADO proviene de CFDI EMITIDOS (ventas).
+  // Filtramos por dirección cuando está disponible; si no, usamos la lógica legacy.
+  const mapaFilaIva = (r: ValidationResult) => {
+    const sg = signoCFDI(r);
+    return {
+      Direccion_CFDI: r.direccionCFDI || 'REQUIERE_REVISION',
+      RFC_Empresa_Evaluada: r.rfcEmpresaEvaluada || '',
+      Naturaleza_Para_Empresa: r.naturalezaParaEmpresa || 'N/A',
+      Impacto_IVA: r.impactoIVA || 'N/A',
+      UUID: r.uuid,
+      Fecha: r.fechaEmision,
+      RFC_Emisor: r.rfcEmisor,
+      Nombre_Emisor: r.nombreEmisor,
+      // Tope alto (200) para no alterar el listado en facturas normales con varias
+      // decenas de conceptos — solo protege contra documentos con miles de líneas.
+      Concepto: r.desglosePorConcepto ? summarizeList(Array.from(new Set(r.desglosePorConcepto.map((c: any) => c.descripcion))), 200, 'DETALLE CONCEPTOS XML') : 'NO VIENE EN XML',
+      Subtotal: (r.subtotal || 0) * sg,
+      IVA: (r.trazabilidadInfo?.ivaAcreditable || r.ivaTraslado || 0) * sg,
+      Total: (r.total || 0) * sg,
+      Metodo_Pago: r.metodoPago,
+      Forma_Pago: r.formaPago,
+      Estatus_CFDI: r.trazabilidadInfo?.observacionSAT || r.estatusSAT,
+      Uso_CFDI: r.usoCFDI,
+      Regimen_Emisor: r.regimenEmisor,
+      Identificacion_Bancaria: r.trazabilidadInfo?.identificadorBancario || 'REQUIERE IMPORTACION',
+      Fecha_Pago: r.trazabilidadInfo?.fechaPago || 'REQUIERE IMPORTACION',
+      Folio_Transferencia: r.trazabilidadInfo?.folioTransferencia || 'REQUIERE IMPORTACION',
+      Diagnostico_IVA: r.trazabilidadInfo?.diagnosticoIvaAcreditable || 'NO APLICA',
+      Accion_Recomendada: r.trazabilidadInfo?.accionRecomendadaIvaAcreditable || 'NO APLICA',
+    };
+  };
 
-  (XLSX as any).utils.book_append_sheet(wb, wsIva, esLoteEmitidos ? 'CEDULA IVA TRASLADADO' : 'CEDULA IVA ACREDITABLE');
+  const filtroEmitido = (r: ValidationResult) =>
+    tieneDireccion ? r.direccionCFDI === 'EMITIDO'
+      : (r.tipoCFDI === 'I' && !!r.rfcEmisor && !r.rfcEmisor.startsWith('XEXX') && r.rfcReceptor !== r.rfcEmisor);
+  const filtroRecibido = (r: ValidationResult) =>
+    tieneDireccion ? r.direccionCFDI === 'RECIBIDO'
+      : (r.tipoCFDI === 'E' || (r.tipoCFDI === 'I' && !!r.rfcReceptor && !r.rfcReceptor.startsWith('XEXX') && r.rfcEmisor !== r.rfcReceptor));
+  const filtroNoClas = (r: ValidationResult) =>
+    tieneDireccion && (r.direccionCFDI === 'REQUIERE_REVISION' || !r.direccionCFDI);
+
+  const dataIvaTrasladado = validResults.filter(filtroEmitido).map(mapaFilaIva);
+  const dataIvaAcreditable = validResults.filter(filtroRecibido).map(mapaFilaIva);
+  const dataNoClasificados = validResults.filter(filtroNoClas).map(mapaFilaIva);
+
+  await runSheetStage(wb, 'CEDULA IVA TRASLADADO', ++stageIdx, onProgress, () => {
+    appendSheetChunks(wb, buildTitledSheetChunks(dataIvaTrasladado, 'CEDULA IVA TRASLADADO',
+      "CEDULA IVA TRASLADADO (CFDI EMITIDOS - RFC empresa = emisor). Las notas de credito (tipo E) restan."));
+  }, dataIvaTrasladado.length);
+
+  await runSheetStage(wb, 'CEDULA IVA ACREDITABLE', ++stageIdx, onProgress, () => {
+    appendSheetChunks(wb, buildTitledSheetChunks(dataIvaAcreditable, 'CEDULA IVA ACREDITABLE',
+      "CEDULA IVA ACREDITABLE (CFDI RECIBIDOS - RFC empresa = receptor). Las notas de credito (tipo E) restan."));
+  }, dataIvaAcreditable.length);
+
+  await runSheetStage(wb, 'CEDULA NO CLASIFICADOS', ++stageIdx, onProgress, () => {
+    appendSheetChunks(wb, buildTitledSheetChunks(dataNoClasificados, 'CEDULA NO CLASIFICADOS',
+      "CEDULA NO CLASIFICADOS: direccion no determinada (RFC empresa no coincide con emisor/receptor). No suman a ingresos, gastos ni IVA."));
+  }, dataNoClasificados.length);
 
   // 4. ANEXO DATOS FALTANTES
   const dataFaltantes = validResults.map(r => {
@@ -2123,8 +2609,9 @@ export function buildDiagnosticoWorkbook(results: ValidationResult[]): any {
       Se_Puede_Auditar_Con_Este_XML_Solamente: r.trazabilidadInfo?.auditableSoloConXML || 'NO'
     };
   });
-  const wsFaltantes = (XLSX as any).utils.json_to_sheet(dataFaltantes);
-  (XLSX as any).utils.book_append_sheet(wb, wsFaltantes, 'ANEXO DATOS FALTANTES');
+  await runSheetStage(wb, 'ANEXO DATOS FALTANTES', ++stageIdx, onProgress, () => {
+    appendSheetChunks(wb, buildSafeSheets(dataFaltantes, 'ANEXO DATOS FALTANTES'));
+  }, dataFaltantes.length);
 
   // 5. MATRIZ DE RASTREABILIDAD
   const dataMatriz = validResults.map(r => {
@@ -2162,31 +2649,42 @@ export function buildDiagnosticoWorkbook(results: ValidationResult[]): any {
       Accion_Recomendada: r.trazabilidadInfo?.accionRecomendadaMatriz || (isSatTechnicalFailure(r.estatusSAT) ? SAT_RETRY_ACTION : 'Integrar documentos faltantes y relacionarlos por UUID')
     };
   });
-  const wsMatriz = (XLSX as any).utils.json_to_sheet(dataMatriz);
-  (XLSX as any).utils.book_append_sheet(wb, wsMatriz, 'MATRIZ DE RASTREABILIDAD');
+  await runSheetStage(wb, 'MATRIZ DE RASTREABILIDAD', ++stageIdx, onProgress, () => {
+    appendSheetChunks(wb, buildSafeSheets(dataMatriz, 'MATRIZ DE RASTREABILIDAD'));
+  }, dataMatriz.length);
 
-  const alertasForenses = buildAlerts(validResults);
-  appendJsonSheet(wb, extractRawXmlRows(validResults), 'EXTRACCION CRUDA XML');
-  appendJsonSheet(wb, buildForensicRows(validResults), 'DETALLE FORENSE POR CFDI');
-  appendJsonSheet(wb, buildConceptRows(validResults), 'DETALLE CONCEPTOS XML');
-  appendJsonSheet(wb, buildTaxRows(validResults), 'DETALLE IMPUESTOS CONCEPTO');
-  appendJsonSheet(wb, buildCartaPorteMercancias(validResults), 'DETALLE CARTA PORTE MERCANCIAS');
-  appendJsonSheet(wb, buildCartaPorteUbicaciones(validResults), 'DETALLE CP UBICACIONES');
-  appendJsonSheet(wb, buildCartaPorteFiguras(validResults), 'DETALLE CARTA PORTE FIGURAS');
-  appendJsonSheet(wb, buildPagosRows(validResults), 'DETALLE COMPLEMENTOS PAGO');
-  appendJsonSheet(wb, alertasForenses, 'ALERTAS FORENSES');
-  appendJsonSheet(wb, buildQualityRows(validResults), 'CONTROL CALIDAD XML');
-  appendJsonSheet(wb, buildSummaryRows(validResults, alertasForenses), 'RESUMEN EJECUTIVO');
+  // Memoria/CPU (item 4): caché de documentos XML parseados, con vida acotada
+  // a esta fase (las únicas 4 hojas que necesitan volver a leer el XML crudo).
+  // Antes: hasta 4 parseos independientes por documento en este tramo. Ahora:
+  // 1 parseo por documento, reutilizado, y la caché se descarta al terminar
+  // esta fase — no se retienen los documentos DOM parseados durante el resto
+  // del export (COMPARATIVO/RETENCIONES/ERRORES no los necesitan).
+  const xmlDocCache: XmlDocCache = new Map();
+  const alertasForenses = buildAlerts(validResults, xmlDocCache);
+  await appendJsonSheet(wb, extractRawXmlRows(validResults, xmlDocCache), 'EXTRACCION CRUDA XML', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
+  await appendJsonSheet(wb, buildForensicRows(validResults), 'DETALLE FORENSE POR CFDI', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
+  await appendJsonSheet(wb, buildConceptRows(validResults), 'DETALLE CONCEPTOS XML', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
+  await appendJsonSheet(wb, buildTaxRows(validResults), 'DETALLE IMPUESTOS CONCEPTO', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
+  await appendJsonSheet(wb, buildCartaPorteMercancias(validResults), 'DETALLE CARTA PORTE MERCANCIAS', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
+  await appendJsonSheet(wb, buildCartaPorteUbicaciones(validResults), 'DETALLE CP UBICACIONES', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
+  await appendJsonSheet(wb, buildCartaPorteFiguras(validResults), 'DETALLE CARTA PORTE FIGURAS', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
+  await appendJsonSheet(wb, buildPagosRows(validResults, xmlDocCache), 'DETALLE COMPLEMENTOS PAGO', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
+  await appendJsonSheet(wb, alertasForenses, 'ALERTAS FORENSES', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
+  await appendJsonSheet(wb, buildQualityRows(validResults, xmlDocCache), 'CONTROL CALIDAD XML', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
+  await appendJsonSheet(wb, buildSummaryRows(validResults, alertasForenses), 'RESUMEN EJECUTIVO', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
+  xmlDocCache.clear(); // liberar los documentos DOM parseados — ya no se necesitan en las hojas restantes
 
   // ── Nueva hoja: COMPARATIVO BASE Y TASA IVA ──
   const dataComparativo = buildComparativoBaseTasaRows(validResults);
-  const wsComparativo = (XLSX as any).utils.json_to_sheet(dataComparativo, { origin: 'A10' });
-  (XLSX as any).utils.book_append_sheet(wb, wsComparativo, 'COMPARATIVO BASE Y TASA IVA');
+  await runSheetStage(wb, 'COMPARATIVO BASE Y TASA IVA', ++stageIdx, onProgress, () => {
+    appendSheetChunks(wb, buildSafeSheets(dataComparativo, 'COMPARATIVO BASE Y TASA IVA', 'A10'));
+  }, dataComparativo.length);
 
   // ── Nueva hoja: CEDULA RETENCIONES ──
   const dataRetenciones = buildRetencionesRows(validResults);
-  const wsRetenciones = (XLSX as any).utils.json_to_sheet(dataRetenciones, { origin: 'A10' });
-  (XLSX as any).utils.book_append_sheet(wb, wsRetenciones, 'CEDULA RETENCIONES');
+  await runSheetStage(wb, 'CEDULA RETENCIONES', ++stageIdx, onProgress, () => {
+    appendSheetChunks(wb, buildSafeSheets(dataRetenciones, 'CEDULA RETENCIONES', 'A10'));
+  }, dataRetenciones.length);
 
   // ── Nueva hoja obligatoria: ERRORES LECTURA XML ──
   const dataErrores = invalidResults.map(r => {
@@ -2282,13 +2780,19 @@ export function buildDiagnosticoWorkbook(results: ValidationResult[]): any {
     };
   });
 
-  const wsErrores = (XLSX as any).utils.json_to_sheet(dataErrores.length ? dataErrores : [{ Archivo_XML: 'SIN REGISTROS', Motivo_Error: 'Ningún XML con error de lectura.' }]);
-  (XLSX as any).utils.book_append_sheet(wb, wsErrores, 'ERRORES LECTURA XML');
+  await runSheetStage(wb, 'ERRORES LECTURA XML', ++stageIdx, onProgress, () => {
+    appendSheetChunks(wb, buildSafeSheets(
+      dataErrores.length ? dataErrores : [{ Archivo_XML: 'SIN REGISTROS', Motivo_Error: 'Ningún XML con error de lectura.' }],
+      'ERRORES LECTURA XML'
+    ));
+  }, dataErrores.length);
 
+  // Nota: se usa startsWith (no ===) porque hojas voluminosas pueden dividirse
+  // automáticamente en NOMBRE_1/NOMBRE_2/... si exceden 1,048,576 filas (P0-A).
   wb.SheetNames.forEach((sheetName: string) => {
-    if (sheetName === 'COMPARATIVO BASE Y TASA IVA') {
+    if (sheetName.startsWith('COMPARATIVO BASE Y TASA IVA')) {
       applyComparativoSheetDefaults(wb.Sheets[sheetName], dataComparativo);
-    } else if (sheetName === 'CEDULA RETENCIONES') {
+    } else if (sheetName.startsWith('CEDULA RETENCIONES')) {
       applyRetencionesSheetDefaults(wb.Sheets[sheetName], dataRetenciones);
     } else if (sheetName.startsWith('CEDULA IVA')) {
       applyIvaSheetDefaults(wb.Sheets[sheetName]);
@@ -2297,14 +2801,71 @@ export function buildDiagnosticoWorkbook(results: ValidationResult[]): any {
     }
   });
 
+  // ── Reportes parciales (requisito 3) ──────────────────────────────────
+  // Nunca se presenta un archivo con hojas faltantes como si fuera un
+  // reporte completo. Si falló alguna hoja: se agrega un aviso EXPLICITO
+  // como primera hoja del libro (imposible de pasar por alto), con el
+  // detalle de qué hoja, por qué, y cuántas filas quedaron afectadas.
+  // Si la hoja que falló es FISCAL CRÍTICA (Resumen, Diagnostico_CFDI,
+  // cédulas de ingresos/IVA), el archivo se recorta a un reporte de
+  // diagnóstico — nunca se entrega como si tuviera el detalle completo.
+  const hasCriticalFailure = failures.some(f => f.critical);
+  const exportStatus: ExportStatus = hasCriticalFailure ? 'critical_failure' : (failures.length > 0 ? 'partial' : 'complete');
+
+  if (failures.length > 0) {
+    const summaryAoa: any[][] = [
+      ['EXPORTACION INCOMPLETA'],
+      [hasCriticalFailure
+        ? 'Al menos una hoja FISCAL CRITICA no pudo generarse. Este archivo se recorto a un reporte de diagnostico y NO contiene el detalle completo habitual.'
+        : 'Todas las hojas fiscales criticas se generaron correctamente. Una o mas hojas de detalle/forenses no pudieron generarse; el resto del reporte esta completo.'],
+      [],
+      ['Hoja afectada', 'Critica', 'Filas afectadas', 'Motivo'],
+      ...failures.map(f => [f.sheet, f.critical ? 'SI' : 'NO', String(f.affectedRows), f.error]),
+    ];
+    const statusWs = (XLSX as any).utils.aoa_to_sheet(summaryAoa);
+    statusWs['!cols'] = [{ wch: 30 }, { wch: 10 }, { wch: 16 }, { wch: 80 }];
+    const cellA1 = statusWs['A1'];
+    if (cellA1) cellA1.s = { font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 14 }, fill: { fgColor: { rgb: hasCriticalFailure ? 'C00000' : 'B45309' } } };
+    const statusSheetName = 'EXPORTACION INCOMPLETA';
+    wb.Sheets[statusSheetName] = statusWs;
+    // Insertar como PRIMERA hoja del libro.
+    wb.SheetNames = [statusSheetName, ...wb.SheetNames.filter((n: string) => n !== statusSheetName)];
+
+    if (hasCriticalFailure) {
+      // Recorte a reporte de diagnóstico: solo el aviso + hojas críticas que
+      // sí se generaron + errores de lectura. Las demás hojas permanecen en
+      // wb.Sheets (no se destruyen), pero se excluyen de wb.SheetNames — por
+      // lo que NO se escriben en el archivo final. Así nunca se entrega un
+      // reporte "completo" con una hoja fiscal crítica omitida en silencio.
+      const keep = new Set<string>([statusSheetName, 'ERRORES LECTURA XML']);
+      wb.SheetNames.forEach((n: string) => {
+        const base = n.replace(/_\d+$/, '');
+        if (CRITICAL_SHEETS.has(base) && !failures.some(f => f.sheet === base)) keep.add(n);
+      });
+      wb.SheetNames = wb.SheetNames.filter((n: string) => keep.has(n));
+    }
+  }
+
+  // Estado estructurado de la exportación — disponible para el llamador
+  // (Dashboard.tsx) sin romper el contrato existente de "devuelve wb".
+  wb.__sentinelExportStatus = { status: exportStatus, failures } as ExportStatusInfo;
+
   return wb;
 }
 
-export function exportToExcel(results: ValidationResult[], fileNameOverride?: string): any {
-  const wb = buildDiagnosticoWorkbook(results);
+export async function exportToExcel(results: ValidationResult[], fileNameOverride?: string, onProgress?: ExportProgressCallback): Promise<any> {
+  const wb = await buildDiagnosticoWorkbook(results, onProgress);
+  const status: ExportStatusInfo | undefined = wb.__sentinelExportStatus;
   const today = new Date();
   const dateStr = today.toISOString().split('T')[0].replace(/-/g, '');
-  const fileName = fileNameOverride || `SentinelExpress_Diagnostico_${dateStr}.xlsx`;
+  let fileName = fileNameOverride || `SentinelExpress_Diagnostico_${dateStr}.xlsx`;
+  if (!fileNameOverride && status?.status === 'critical_failure') {
+    fileName = `DIAGNOSTICO_INCOMPLETO_${dateStr}.xlsx`;
+  } else if (!fileNameOverride && status?.status === 'partial') {
+    fileName = `INCOMPLETO_SentinelExpress_Diagnostico_${dateStr}.xlsx`;
+  }
+  sentinelStageLog("serializacion_descarga_inicio", { fileName });
   (XLSX as any).writeFile(wb, fileName);
+  sentinelStageLog("serializacion_descarga_fin", { fileName });
   return wb;
 }

@@ -114,7 +114,7 @@ describe('Clasificación 69-B (función real clasificarValidacion69B)', () => {
 });
 
 describe('Exportación Excel con columnas 69-B (buildDiagnosticoWorkbook real)', () => {
-  it('8. El Excel contiene las columnas 69-B y los valores reales del objeto analizado', () => {
+  it('8. El Excel contiene las columnas 69-B y los valores reales del objeto analizado', async () => {
     const conDefinitivo: ValidationResult = {
       ...baseResult,
       rfcEmisor: 'RAS050131EC5',
@@ -144,7 +144,7 @@ describe('Exportación Excel con columnas 69-B (buildDiagnosticoWorkbook real)',
       } as any,
     };
 
-    const wb = buildDiagnosticoWorkbook([conDefinitivo, noCargada]);
+    const wb = await buildDiagnosticoWorkbook([conDefinitivo, noCargada]);
     const sheet = wb.Sheets['Diagnostico_CFDI'];
     expect(sheet).toBeTruthy();
 

@@ -100,7 +100,11 @@ export function applyFiscalRules(r: ValidationResult): ValidationResult {
   }
 
   // IVA acreditable heuristic (restricción: solo NO_ACREDITABLE por falta de complemento o pagos inválidos)
-  if (res.paymentMethodStatus === 'PPD_SIN_COMPLEMENTO' || res.paymentComplementStatus === 'SIN_COMPLEMENTO') {
+  // ✅ CORRECCIÓN DE ESPEJO CONTABLE: la acreditación de IVA solo aplica a CFDI RECIBIDOS.
+  // Un CFDI EMITIDO (la empresa vende) genera IVA TRASLADADO a cargo, no acreditable para la empresa.
+  if (res.direccionCFDI === 'EMITIDO') {
+    res.ivaCreditabilityStatus = (res.ivaTraslado || 0) > 0 ? 'TRASLADADO' : 'NO_APLICA';
+  } else if (res.paymentMethodStatus === 'PPD_SIN_COMPLEMENTO' || res.paymentComplementStatus === 'SIN_COMPLEMENTO') {
     res.ivaCreditabilityStatus = 'NO_ACREDITABLE';
   } else if (String(res.pagosValido || '').toUpperCase() === 'NO') {
     res.ivaCreditabilityStatus = 'NO_ACREDITABLE';
@@ -111,8 +115,15 @@ export function applyFiscalRules(r: ValidationResult): ValidationResult {
   }
 
   // Nivel de riesgo simplificado
+  // ✅ CORRECCIÓN DE CONTRADICCIÓN: un hallazgo fiscal NUNCA debe quedar en VERDE.
+  // Un CFDI NO USABLE (🔴) o no validado SAT no puede reportarse como "SIN HALLAZGOS".
+  const esNoUsable = String(res.resultado || '').includes('NO USABLE');
+  const esNoValidado = String(res.resultado || '').includes('No validado');
+  if (esNoUsable && reasons.length === 0) reasons.push('Documento NO USABLE (ilegible/corrupto)');
+  if (esNoValidado && reasons.length === 0) reasons.push('Estatus SAT no confirmado: requiere reintento');
+
   const isCritical = res.ivaCreditabilityStatus === 'NO_ACREDITABLE' || (String(res.tipoCFDI || '').toUpperCase() === 'P' && String(res.total || '0') !== '0');
-  if (isCritical) {
+  if (isCritical || esNoUsable) {
     res.fiscalRiskLevel = 'ROJO';
   } else if (reasons.length > 0) {
     res.fiscalRiskLevel = 'AMARILLO';

@@ -5,7 +5,7 @@ import * as XLSX from 'xlsx';
 import * as fs from 'fs';
 
 describe('Executive Summary (Hoja Resumen)', () => {
-  it('genera la hoja Resumen como la primera hoja con cálculos correctos', () => {
+  it('genera la hoja Resumen como la primera hoja con cálculos correctos', async () => {
     const cfdis: ValidationResult[] = [
       // Verde / PUE Válido / Acreditable
       {
@@ -109,7 +109,7 @@ describe('Executive Summary (Hoja Resumen)', () => {
       fs.unlinkSync(outputPath);
     }
 
-    exportToExcel(cfdis, outputPath);
+    await exportToExcel(cfdis, outputPath);
 
     expect(fs.existsSync(outputPath)).toBe(true);
 

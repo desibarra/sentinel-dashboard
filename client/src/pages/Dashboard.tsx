@@ -9,7 +9,8 @@ import { Button } from "@/components/ui/button";
 import UploadZone, { UploadedFile } from "@/components/UploadZone";
 import { useXMLValidator } from "@/hooks/useXMLValidator";
 import { ValidationResult } from "@/lib/cfdiEngine";
-import { exportToExcel } from "@/lib/excelExporter";
+import { exportToExcel, ExportProgressEvent } from "@/lib/excelExporter";
+import { resolverClasificacionDireccion } from "@/lib/direccionCFDI";
 import { toast } from "sonner";
 import { useTheme } from "@/contexts/ThemeContext";
 import { Link } from "wouter";
@@ -21,11 +22,13 @@ import { startMainTour } from "@/utils/tourScript";
 import { Input } from "@/components/ui/input";
 import { History, RefreshCcw, Save } from "lucide-react";
 import { checkCFDIStatusSAT } from "@/utils/satStatusValidator";
+import { satQueue, SatQueueCounts } from "@/lib/satQueue";
 import { incrementXMLCount, getXMLCount } from "@/services/leadService";
 import { saveSessionCache, loadSessionCache, clearSessionCache, getCacheAge } from "@/hooks/useSessionCache";
 import { useAuth } from "@/contexts/AuthContext";
 import { tokenService } from "@/services/tokenService";
 import { isBlacklistSynced } from "@/utils/blacklistValidator";
+import { sentinelStageLog } from "@/lib/stageLog";
 
 
 type DashboardResult = ValidationResult;
@@ -45,7 +48,8 @@ export type SATRevalidationStatus = {
 export function revalidarFilaSAT(
   row: DashboardResult,
   status: SATRevalidationStatus,
-  giroEmpresa: string
+  giroEmpresa: string,
+  rfcEmpresa?: string
 ): DashboardResult {
   const resBase = row.resultadoMotor || row.resultado;
   const comBase = row.comentarioMotor || row.comentarioFiscal;
@@ -64,6 +68,21 @@ export function revalidarFilaSAT(
     nuevoComentario = `No validado: no se pudo confirmar el estatus del CFDI ante el SAT. Reintenta la consulta. ` + comBase;
   }
 
+  // ✅ Recalcular la dirección del CFDI tras revalidar (usa el RFC de la empresa,
+  // nunca un valor hardcodeado) para mantener la coherencia de las cédulas.
+  const dir = resolverClasificacionDireccion(
+    { rfcEmisor: row.rfcEmisor, rfcReceptor: row.rfcReceptor },
+    rfcEmpresa || row.rfcEmpresaEvaluada || '',
+    row.tipoCFDI,
+    (row.esNomina || '').toUpperCase() === 'SÍ'
+  );
+
+  // ✅ Coherencia de riesgo: un hallazgo (NO USABLE / no validado) nunca queda VERDE.
+  const nuevoRiskLevel: 'VERDE' | 'AMARILLO' | 'ROJO' =
+    nuevoResultado.includes('NO USABLE') ? 'ROJO'
+    : nuevoResultado === 'No validado SAT' ? 'AMARILLO'
+    : (row.fiscalRiskLevel || 'VERDE');
+
   return {
     ...row,
     estatusSAT: status.estado,
@@ -72,6 +91,8 @@ export function revalidarFilaSAT(
     giroEmpresa,
     resultado: nuevoResultado,
     comentarioFiscal: nuevoComentario,
+    fiscalRiskLevel: nuevoRiskLevel,
+    ...dir,
   };
 }
 
@@ -86,10 +107,32 @@ export default function Dashboard() {
   const [sortField, setSortField] = useState<SortField | null>('fechaEmision');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [currentPage, setCurrentPage] = useState(1);
+  // P0-A: progreso de exportación por hoja + bloqueo de doble ejecución
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState<{ sheet: string; sheetIndex: number; totalSheets: number } | null>(null);
+  // P0-C: reintento masivo de CFDI "No validado SAT" + contadores en vivo de la cola SAT
+  const [isBulkRevalidating, setIsBulkRevalidating] = useState(false);
+  const [satBulkCounts, setSatBulkCounts] = useState<SatQueueCounts | null>(null);
   const ITEMS_PER_PAGE = 50;
 
   // ── Contador de XMLs procesados (informativo, sin límite visible) ──
   const [xmlCount, setXmlCount] = useState<number>(getXMLCount());
+
+  // ── Contadores de dirección del CFDI (corrección de espejos contables) ──
+  // Emitidos (la empresa vende) vs Recibidos (la empresa compra) vs sin clasificar.
+  const contadoresDireccion = (() => {
+    const total = results.length;
+    const emitidos = results.filter(r => r.direccionCFDI === 'EMITIDO').length;
+    const recibidos = results.filter(r => r.direccionCFDI === 'RECIBIDO').length;
+    const revision = results.filter(r => !r.direccionCFDI || r.direccionCFDI === 'REQUIERE_REVISION').length;
+    const vigentes = results.filter(r => /vigente/i.test(r.estatusSAT || '')).length;
+    const cancelados = results.filter(r => /cancelado/i.test(r.estatusSAT || '')).length;
+    const con69B = results.filter(r => {
+      const bl = r.direccionCFDI === 'EMITIDO' ? r.rfcReceptorBlacklist : r.rfcEmisorBlacklist;
+      return !!bl?.found;
+    }).length;
+    return { total, emitidos, recibidos, revision, vigentes, cancelados, con69B };
+  })();
 
   // ── UUIDs que están siendo revalidados en este momento (para deshabilitar su botón) ──
   const [revalidatingUUIDs, setRevalidatingUUIDs] = useState<Set<string>>(new Set());
@@ -116,6 +159,9 @@ export default function Dashboard() {
 
   // FIX 2: ref para detectar primer mount y no borrar caché en la carga inicial
   const isFirstMount = useRef(true);
+  // P0-B: empresa anterior, para limpiar SOLO su caché de sesión al cambiar de empresa
+  // (cada empresa tiene su propia entrada en IndexedDB — appDB.ts "sessionCache").
+  const prevCompanyIdRef = useRef<string | undefined>(undefined);
 
   // Calcular días restantes de prueba
   const getDaysLeft = () => {
@@ -148,59 +194,55 @@ export default function Dashboard() {
 
 
   // FIX 2: Restaurar análisis previo de la sesión (TTL 30 min, por empresa)
-  // Se ejecuta ANTES del cleanup para que los datos restaurados no sean borrados
+  // Se ejecuta ANTES del cleanup para que los datos restaurados no sean borrados.
+  // P0-B: loadSessionCache ahora lee de IndexedDB (async) — cada empresa tiene su
+  // propia entrada, así que ya no depende de que sea "la última empresa guardada".
   useEffect(() => {
-
     if (!currentCompany) return;
+    let cancelled = false;
 
-    const cached = loadSessionCache(currentCompany.id);
-
-    if (cached && cached.results.length > 0) {
+    (async () => {
+      const cached = await loadSessionCache(currentCompany.id);
+      if (cancelled || !cached || cached.results.length === 0) return;
 
       setResults(cached.results);
-
       setHasValidatedResults(true);
-
       setXmlCount(cached.results.length);
 
-      const age = getCacheAge();
-
+      const age = await getCacheAge(currentCompany.id);
+      if (cancelled) return;
       toast.info(
-
         `Se restauró el análisis previo de esta sesión (${cached.results.length.toLocaleString()} CFDI, hace ${age} min).`,
-
         { duration: 6000 }
-
       );
+    })();
 
-    }
-
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-
   }, [currentCompany?.id]);
 
 
 
-  // FIX 2: Limpiar dashboard y caché SOLO cuando la empresa cambia (no en el primer mount)
-
-  // isFirstMount evita que este efecto borre lo que el efecto anterior acaba de restaurar
-
+  // FIX 2: Limpiar dashboard SOLO cuando la empresa cambia (no en el primer mount).
+  // isFirstMount evita que este efecto borre lo que el efecto anterior acaba de restaurar.
+  // P0-B: se limpia únicamente la caché de la empresa que se abandona — la nueva
+  // empresa conserva su propia caché de sesión (por eso el efecto de arriba sí
+  // puede restaurarla al volver a seleccionarla dentro del TTL de 30 min).
   useEffect(() => {
-
     if (isFirstMount.current) {
-
       isFirstMount.current = false;
-
+      prevCompanyIdRef.current = currentCompany?.id;
       return;
-
     }
 
     setResults([]);
-
     setHasValidatedResults(false);
 
-    clearSessionCache();
-
+    const leavingCompanyId = prevCompanyIdRef.current;
+    if (leavingCompanyId) {
+      clearSessionCache(leavingCompanyId);
+    }
+    prevCompanyIdRef.current = currentCompany?.id;
   }, [currentCompany?.id]);
 
 
@@ -255,11 +297,15 @@ export default function Dashboard() {
 
         }
 
+        sentinelStageLog("validacion_lote", { current, total });
+
       };
 
 
 
-      const validationResults = await validateXMLFiles(files, currentCompany.giro, onBatchProgress);
+        sentinelStageLog("validacion_inicio", { total: files.length });
+        const validationResults = await validateXMLFiles(files, currentCompany.giro, currentCompany.rfc, onBatchProgress);
+        sentinelStageLog("validacion_fin", { count: validationResults.length });
       setProcessingPhase(null);
 
       // --- FILTRO DE DESDUPLICACIÓN ---
@@ -280,7 +326,10 @@ export default function Dashboard() {
 
       // Persistir en sesión (sin XML crudos)
 
-      saveSessionCache(currentCompany.id, newResults);
+      sentinelStageLog("persistencia_indexeddb_inicio", { count: newResults.length });
+      saveSessionCache(currentCompany.id, newResults).then(status => {
+        sentinelStageLog("persistencia_indexeddb_fin", { status });
+      });
 
 
 
@@ -390,22 +439,52 @@ export default function Dashboard() {
 
 
 
-  const handleExportToExcel = () => {
+  const handleExportToExcel = async () => {
+    // P0-A (requisito 12): evitar doble ejecución — si ya hay una exportación
+    // en curso, ignorar clics adicionales en vez de encolar otra.
+    if (isExporting) return;
+
+    setIsExporting(true);
+    setExportProgress({ sheet: 'Preparando...', sheetIndex: 0, totalSheets: 0 });
 
     try {
+      const onProgress = (event: ExportProgressEvent) => {
+        setExportProgress({ sheet: event.sheet, sheetIndex: event.sheetIndex, totalSheets: event.totalSheets });
+        sentinelStageLog("export_hoja", { sheet: event.sheet, sheetIndex: event.sheetIndex, totalSheets: event.totalSheets, stage: (event as any).stage, affectedRows: (event as any).affectedRows });
+      };
 
-      exportToExcel(results);
+      // exportToExcel cede el hilo principal entre cada hoja (P0-A requisito 10):
+      // el progreso se pinta en tiempo real y la interfaz no se congela durante
+      // la exportación de lotes grandes.
+      sentinelStageLog("export_inicio", { count: results.length });
+      const wb = await exportToExcel(results, undefined, onProgress);
+      sentinelStageLog("export_fin_workbook", { count: results.length });
 
-      toast.success("Diagnóstico exportado exitosamente");
+      // Reportes parciales (requisito 3): el estado real de la exportación viene
+      // del workbook, no solo de si exportToExcel lanzó o no — un archivo puede
+      // "tener éxito" técnicamente y aun así estar incompleto.
+      const status = (wb as any).__sentinelExportStatus as { status: 'complete' | 'partial' | 'critical_failure'; failures: { sheet: string; error: string; critical: boolean }[] } | undefined;
 
+      if (status?.status === 'critical_failure') {
+        toast.error(
+          `EXPORTACIÓN INCOMPLETA: una hoja fiscal crítica (${status.failures.filter(f => f.critical).map(f => f.sheet).join(', ')}) no se pudo generar. Se descargó únicamente un reporte de diagnóstico (archivo "DIAGNOSTICO_INCOMPLETO_..."), no el reporte completo. Revise la primera hoja del archivo para el detalle.`,
+          { duration: 15000 }
+        );
+      } else if (status?.status === 'partial') {
+        toast.warning(
+          `EXPORTACIÓN INCOMPLETA: ${status.failures.length} hoja(s) de detalle no se pudieron generar (las hojas fiscales críticas sí se generaron). El archivo se descargó como "INCOMPLETO_...". Revise la primera hoja para el detalle.`,
+          { duration: 12000 }
+        );
+      } else {
+        toast.success("Diagnóstico exportado exitosamente");
+      }
     } catch (error) {
-
       toast.error("Error al exportar el diagnóstico");
-
       console.error("Export error:", error);
-
+    } finally {
+      setIsExporting(false);
+      setExportProgress(null);
     }
-
   };
 
 
@@ -421,7 +500,9 @@ export default function Dashboard() {
       setXmlCount(0);
 
       // 2. Limpiar almacenamiento local
-      clearSessionCache();
+      if (currentCompany) {
+        clearSessionCache(currentCompany.id);
+      }
       localStorage.removeItem("sentinel_xml_count");
       localStorage.removeItem("xmlAnalysis");
       localStorage.removeItem("xmlResults");
@@ -762,7 +843,7 @@ export default function Dashboard() {
         if (row.uuid !== uuid) return row; // todas las demas filas: sin tocar
 
         // Logica de revalidacion delegada a funcion pura reutilizable (revalidarFilaSAT)
-        return revalidarFilaSAT(row, status, currentCompany?.giro || row.giroEmpresa || '');
+        return revalidarFilaSAT(row, status, currentCompany?.giro || row.giroEmpresa || '', currentCompany?.rfc || row.rfcEmpresaEvaluada);
 
       }));
 
@@ -798,6 +879,56 @@ export default function Dashboard() {
 
       });
 
+    }
+
+  };
+
+  // P0-C: reintento masivo de SAT. Objetivo explícito: un timeout/error SAT no
+  // debe dejar un CFDI huérfano esperando un reintento manual fila por fila.
+  // Solo toca registros en estado NO concluyente ("No validado SAT" — cubre
+  // Timeout, Error de conexión y No Encontrado); Vigente y Cancelado NUNCA se
+  // tocan aquí. Las llamadas reales pasan por satQueue (useXMLValidator.ts /
+  // satStatusValidator.ts), que ya acota la concurrencia — por eso es seguro
+  // lanzarlas todas juntas en vez de trocearlas manualmente aquí.
+  const handleRevalidateAllPending = async () => {
+    if (isBulkRevalidating) return; // evita doble ejecución
+
+    const pendientes = results.filter(r =>
+      r.uuid && r.uuid !== 'NO DISPONIBLE' &&
+      String(r.resultado || '').startsWith('No validado')
+    );
+    if (pendientes.length === 0) {
+      toast.info('No hay CFDI pendientes de validar con el SAT.');
+      return;
+    }
+
+    setIsBulkRevalidating(true);
+    satQueue.resetCounts(pendientes.length);
+    const unsubscribe = satQueue.onCountsChange(counts => setSatBulkCounts({ ...counts }));
+    toast.loading(`Reintentando ${pendientes.length.toLocaleString()} CFDI pendientes ante el SAT...`, { id: 'bulk-sat-retry' });
+
+    try {
+      const outcomes = await Promise.all(pendientes.map(async (row) => {
+        const status = await checkCFDIStatusSAT(row.uuid, row.rfcEmisor, row.rfcReceptor, row.total);
+        return { uuid: row.uuid, status };
+      }));
+
+      const byUuid = new Map(outcomes.map(o => [o.uuid, o.status]));
+      setResults(prev => prev.map(row => {
+        const status = byUuid.get(row.uuid);
+        if (!status) return row; // fila no incluida en el reintento: sin tocar
+        return revalidarFilaSAT(row, status, currentCompany?.giro || row.giroEmpresa || '', currentCompany?.rfc || row.rfcEmpresaEvaluada);
+      }));
+
+      const resueltos = outcomes.filter(o => o.status.estado === 'Vigente' || o.status.estado === 'Cancelado').length;
+      toast.success(`Reintento completado: ${resueltos}/${pendientes.length} CFDI obtuvieron un estatus definitivo del SAT.`, { id: 'bulk-sat-retry', duration: 8000 });
+    } catch (error) {
+      console.error('Bulk SAT revalidation error:', error);
+      toast.error('Error inesperado durante el reintento masivo.', { id: 'bulk-sat-retry' });
+    } finally {
+      unsubscribe();
+      setIsBulkRevalidating(false);
+      setSatBulkCounts(null);
     }
 
   };
@@ -932,6 +1063,29 @@ export default function Dashboard() {
 
               </div>
 
+            )}
+
+
+            {/* ── Contadores de dirección del CFDI (emitidos vs recibidos) ── */}
+            {contadoresDireccion.total > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[10px] font-black text-white/50 uppercase tracking-widest">Dirección:</span>
+                <div className="flex items-center gap-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-2 py-1">
+                  <span className="text-[10px] font-black text-emerald-300 uppercase">Emitidos {contadoresDireccion.emitidos}</span>
+                </div>
+                <div className="flex items-center gap-1 bg-sky-500/10 border border-sky-500/20 rounded-lg px-2 py-1">
+                  <span className="text-[10px] font-black text-sky-300 uppercase">Recibidos {contadoresDireccion.recibidos}</span>
+                </div>
+                <div className="flex items-center gap-1 bg-amber-500/10 border border-amber-500/20 rounded-lg px-2 py-1">
+                  <span className="text-[10px] font-black text-amber-300 uppercase">Revisión {contadoresDireccion.revision}</span>
+                </div>
+                <div className="flex items-center gap-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1">
+                  <span className="text-[10px] font-black text-white/70 uppercase">Vig {contadoresDireccion.vigentes} · Cancel {contadoresDireccion.cancelados}</span>
+                </div>
+                <div className="flex items-center gap-1 bg-rose-500/10 border border-rose-500/20 rounded-lg px-2 py-1">
+                  <span className="text-[10px] font-black text-rose-300 uppercase">69-B {contadoresDireccion.con69B}</span>
+                </div>
+              </div>
             )}
 
 
@@ -1699,12 +1853,34 @@ export default function Dashboard() {
               </div>
 
               <Button
-                onClick={handleExportToExcel}
-                className="bg-primary hover:bg-primary/90 text-white font-black shadow-lg shadow-primary/20 gap-2 rounded-xl"
+                onClick={handleRevalidateAllPending}
+                disabled={isBulkRevalidating || isValidating}
+                variant="outline"
+                className="gap-2 rounded-xl disabled:opacity-60 disabled:cursor-not-allowed"
                 size="sm"
+                title={
+                  satBulkCounts
+                    ? `Procesados ${satBulkCounts.processed}/${satBulkCounts.total} — Vigentes: ${satBulkCounts.vigentes}, Cancelados: ${satBulkCounts.cancelados}, No encontrados: ${satBulkCounts.noEncontrados}, Timeout/Error: ${satBulkCounts.timeoutOrError}, Reintentos: ${satBulkCounts.reintentos}`
+                    : 'Reintenta ante el SAT únicamente los CFDI en estado "No validado SAT" (Timeout, Error o No Encontrado). Vigente y Cancelado nunca se tocan.'
+                }
+              >
+                <RefreshCcw className={`w-4 h-4 ${isBulkRevalidating ? 'animate-spin' : ''}`} />
+                {isBulkRevalidating && satBulkCounts
+                  ? `Reintentando SAT (${satBulkCounts.processed}/${satBulkCounts.total})`
+                  : 'Reintentar No Validados SAT'}
+              </Button>
+
+              <Button
+                onClick={handleExportToExcel}
+                disabled={isExporting}
+                className="bg-primary hover:bg-primary/90 text-white font-black shadow-lg shadow-primary/20 gap-2 rounded-xl disabled:opacity-60 disabled:cursor-not-allowed"
+                size="sm"
+                title={isExporting && exportProgress ? `Generando "${exportProgress.sheet}"${exportProgress.totalSheets ? ` (${exportProgress.sheetIndex}/${exportProgress.totalSheets})` : ''}...` : undefined}
               >
                 <Download className="w-4 h-4" />
-                Exportar Reporte
+                {isExporting
+                  ? `Exportando${exportProgress?.totalSheets ? ` (${exportProgress.sheetIndex}/${exportProgress.totalSheets})` : '...'}`
+                  : 'Exportar Reporte'}
               </Button>
 
               <Button
