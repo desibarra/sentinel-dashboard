@@ -164,7 +164,18 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
   };
 
   const validFiles = files.filter((f) => f.status !== "error" && f.content);
-  const readyToValidate = validFiles.length > 0 && !isValidating;
+  // Diagnóstico de memoria escalonado (Fase 4): con lotes grandes, el botón
+  // se habilitaba en cuanto el PRIMER archivo terminaba de leerse (FileReader
+  // es asíncrono por archivo), no cuando TODOS terminaban. Un clic en ese
+  // punto intermedio (real o automatizado) llamaba a handleValidate(), que
+  // solo envía los archivos con status==="pending" && content ya listo, y
+  // luego hace setFiles([]) incondicionalmente — descartando en silencio
+  // cualquier archivo cuyo FileReader aún no hubiera terminado. Se reprodujo
+  // de forma controlada: 1000 XML → solo 700 procesados; 1500 XML → solo 600.
+  // Ahora se exige que TODOS los archivos hayan terminado de leerse (contenido
+  // listo o marcados en error) antes de habilitar el botón.
+  const allFilesSettled = files.every((f) => f.status === "error" || !!f.content);
+  const readyToValidate = validFiles.length > 0 && allFilesSettled && !isValidating;
   const shouldDisableValidate = !readyToValidate || (hasValidatedResults && files.length === 0);
 
   return (
