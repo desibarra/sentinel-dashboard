@@ -9,7 +9,8 @@ import { Button } from "@/components/ui/button";
 import UploadZone, { UploadedFile } from "@/components/UploadZone";
 import { useXMLValidator } from "@/hooks/useXMLValidator";
 import { ValidationResult, contarEstatusSAT, aplicarConciliacionPagos, reconciliarPagosPPD, mergeAndReconcileResults } from "@/lib/cfdiEngine";
-import { exportToExcel, ExportProgressEvent } from "@/lib/excelExporter";
+import { exportToExcel, planExportChunks, ExportProgressEvent, ExportCancelToken, ExportChunkPlan, MinimalFileSystemDirectoryHandle } from "@/lib/excelExporter";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { resolverClasificacionDireccion } from "@/lib/direccionCFDI";
 import { toast } from "sonner";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -109,7 +110,22 @@ export default function Dashboard() {
   const [currentPage, setCurrentPage] = useState(1);
   // P0-A: progreso de exportación por hoja + bloqueo de doble ejecución
   const [isExporting, setIsExporting] = useState(false);
-  const [exportProgress, setExportProgress] = useState<{ sheet: string; sheetIndex: number; totalSheets: number } | null>(null);
+  const [exportProgress, setExportProgress] = useState<{ sheet: string; sheetIndex: number; totalSheets: number; fileIndex?: number; fileTotal?: number; fileName?: string } | null>(null);
+  // Exportación cancelable (lotes grandes, paquete de varios archivos): se
+  // crea un token nuevo por cada exportación; cancelar nunca borra archivos
+  // ya descargados ni la sesión guardada (`results` no se toca aquí).
+  const exportCancelTokenRef = useRef<ExportCancelToken | null>(null);
+  // Pantalla previa (instrucción 5): antes de exportar un lote grande se
+  // informa cuántos archivos se generarán y se ofrece elegir una carpeta
+  // real (File System Access API, escritura confirmada) o descargar uno por
+  // uno (mecanismo de navegador de siempre, que el navegador puede bloquear
+  // sin que JS se entere).
+  const [exportPrecheck, setExportPrecheck] = useState<{ plan: ExportChunkPlan; basePrefix: string } | null>(null);
+  // Reintento dirigido: recuerda el último intento fallido/cancelado para
+  // poder ofrecer "reanudar desde el archivo N" en vez de regenerar todo.
+  const lastExportAttemptRef = useRef<{
+    basePrefix: string; failedAtFile?: number; directoryHandle?: MinimalFileSystemDirectoryHandle;
+  } | null>(null);
   // P0-C: reintento masivo de CFDI "No validado SAT" + contadores en vivo de la cola SAT
   const [isBulkRevalidating, setIsBulkRevalidating] = useState(false);
   const [satBulkCounts, setSatBulkCounts] = useState<SatQueueCounts | null>(null);
@@ -447,33 +463,151 @@ export default function Dashboard() {
 
 
 
-  const handleExportToExcel = async () => {
-    // P0-A (requisito 12): evitar doble ejecución — si ya hay una exportación
-    // en curso, ignorar clics adicionales en vez de encolar otra.
-    if (isExporting) return;
+  // Punto de entrada del botón "Exportar Reporte". Para lotes pequeños
+  // exporta directamente (comportamiento de siempre). Para lotes grandes
+  // (paquete de varios archivos) muestra primero la pantalla previa
+  // (instrucción 5) — o, si el intento anterior quedó a medias, ofrece
+  // reanudar en vez de volver a mostrar la pantalla previa desde cero.
+  const handleExportToExcel = () => {
+    if (isExporting) return; // P0-A (requisito 12): evitar doble ejecución.
+
+    const plan = planExportChunks(results);
+    if (plan.singleFile) {
+      runExport({});
+      return;
+    }
+
+    const pendiente = lastExportAttemptRef.current;
+    if (pendiente?.failedAtFile) {
+      const reanudar = window.confirm(
+        `La exportación anterior se detuvo en el archivo ${pendiente.failedAtFile} de ${plan.chunks.length + 1}. ` +
+        `¿Reanudar desde ahí (los archivos ya generados no se repiten)? Cancelar para empezar de nuevo.`
+      );
+      if (reanudar) {
+        runExport({ resumeFromFile: pendiente.failedAtFile, basePrefix: pendiente.basePrefix, directoryHandle: pendiente.directoryHandle });
+        return;
+      }
+      lastExportAttemptRef.current = null; // el usuario eligió empezar de nuevo
+    }
+
+    const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
+    setExportPrecheck({ plan, basePrefix: `SentinelExpress_Diagnostico_${today}_${Date.now()}` });
+  };
+
+  const supportsFileSystemAccess = typeof window !== 'undefined' && typeof (window as any).showDirectoryPicker === 'function';
+
+  const handleChooseFolder = async () => {
+    if (!exportPrecheck) return;
+    const { basePrefix } = exportPrecheck;
+    setExportPrecheck(null);
+    try {
+      const directoryHandle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
+      runExport({ basePrefix, directoryHandle });
+    } catch (err) {
+      // El usuario cerró el selector de carpeta sin elegir una — no se afirma
+      // ningún guardado; simplemente no se exporta nada todavía.
+      toast.info('No se eligió ninguna carpeta. La exportación no se inició.');
+    }
+  };
+
+  const handleDownloadIndividually = () => {
+    if (!exportPrecheck) return;
+    const { basePrefix } = exportPrecheck;
+    setExportPrecheck(null);
+    runExport({ basePrefix });
+  };
+
+  const runExport = async (opts: { basePrefix?: string; directoryHandle?: MinimalFileSystemDirectoryHandle; resumeFromFile?: number }) => {
+    const cancelToken: ExportCancelToken = { cancelled: false };
+    exportCancelTokenRef.current = cancelToken;
 
     setIsExporting(true);
     setExportProgress({ sheet: 'Preparando...', sheetIndex: 0, totalSheets: 0 });
 
     try {
       const onProgress = (event: ExportProgressEvent) => {
-        setExportProgress({ sheet: event.sheet, sheetIndex: event.sheetIndex, totalSheets: event.totalSheets });
-        sentinelStageLog("export_hoja", { sheet: event.sheet, sheetIndex: event.sheetIndex, totalSheets: event.totalSheets, stage: (event as any).stage, affectedRows: (event as any).affectedRows });
+        setExportProgress({
+          sheet: event.sheet, sheetIndex: event.sheetIndex, totalSheets: event.totalSheets,
+          fileIndex: event.fileIndex, fileTotal: event.fileTotal, fileName: event.fileName,
+        });
+        sentinelStageLog("export_hoja", { sheet: event.sheet, sheetIndex: event.sheetIndex, totalSheets: event.totalSheets, stage: (event as any).stage, affectedRows: (event as any).affectedRows, fileIndex: event.fileIndex, fileTotal: event.fileTotal });
       };
 
       // exportToExcel cede el hilo principal entre cada hoja (P0-A requisito 10):
       // el progreso se pinta en tiempo real y la interfaz no se congela durante
-      // la exportación de lotes grandes.
+      // la exportación de lotes grandes. Para lotes muy grandes, exportToExcel
+      // decide internamente generar un paquete de varios archivos en vez de un
+      // único XLSX — ver ExportStatusInfo.isMultiFile.
       sentinelStageLog("export_inicio", { count: results.length });
-      const wb = await exportToExcel(results, undefined, onProgress);
+      const wb = await exportToExcel(results, opts.basePrefix, onProgress, {
+        cancelToken, directoryHandle: opts.directoryHandle, resumeFromFile: opts.resumeFromFile,
+      });
       sentinelStageLog("export_fin_workbook", { count: results.length });
 
       // Reportes parciales (requisito 3): el estado real de la exportación viene
       // del workbook, no solo de si exportToExcel lanzó o no — un archivo puede
       // "tener éxito" técnicamente y aun así estar incompleto.
-      const status = (wb as any).__sentinelExportStatus as { status: 'complete' | 'partial' | 'critical_failure'; failures: { sheet: string; error: string; critical: boolean }[] } | undefined;
+      const status = (wb as any).__sentinelExportStatus as {
+        status: 'complete' | 'partial' | 'critical_failure' | 'cancelled';
+        failures: { sheet: string; error: string; critical: boolean }[];
+        isMultiFile?: boolean;
+        filesWritten?: string[];
+        totalFiles?: number;
+        failedAtFile?: number;
+        writesConfirmed?: boolean;
+        reconciliacion?: { totalProcesados: number; uuidExportados: number; erroresLectura: number; duplicadosControlados: number; cuadra: boolean };
+      } | undefined;
 
-      if (status?.status === 'critical_failure') {
+      // Redacción honesta (instrucción 5): sin File System Access API, JS NO
+      // puede confirmar que el navegador no bloqueó una descarga múltiple —
+      // nunca se afirma "guardado", solo "enviado a descarga".
+      const verboGuardado = status?.writesConfirmed ? 'guardado' : 'enviado a descarga';
+      const avisoNoConfirmado = status?.isMultiFile && !status?.writesConfirmed
+        ? ' Si tu navegador bloqueó alguna descarga, verás un aviso de "descargas bloqueadas" en la barra de direcciones — revísalo y permite descargas múltiples para este sitio antes de reintentar.'
+        : '';
+
+      // Punto de reanudación unificado: para una falla, exportToExcel ya
+      // indica exactamente cuál archivo falló (failedAtFile); para una
+      // cancelación, se infiere del número de archivos de BLOQUE ya escritos
+      // (la cancelación siempre ocurre antes de intentar el resumen global,
+      // que solo se genera al final) — instrucción 6: "cancela después del
+      // archivo 3" debe poder reanudar exactamente en el archivo 4.
+      const resumePoint = status?.status === 'critical_failure'
+        ? status.failedAtFile
+        : status?.status === 'cancelled'
+          ? (status.filesWritten?.length || 0) + 1
+          : undefined;
+
+      if (status?.isMultiFile && opts.basePrefix) {
+        lastExportAttemptRef.current = resumePoint !== undefined
+          ? { basePrefix: opts.basePrefix, failedAtFile: resumePoint, directoryHandle: opts.directoryHandle }
+          : null; // completo o parcial (sin fallas críticas de archivo) — nada que reanudar
+      }
+
+      if (status?.status === 'cancelled') {
+        toast.warning(
+          `Exportación cancelada. ${status.filesWritten?.length || 0} archivo(s) ya se habían ${verboGuardado} antes de cancelar y se conservan; la sesión cargada no se vio afectada. Puede reanudar desde el botón "Exportar Reporte".`,
+          { duration: 10000 }
+        );
+      } else if (status?.isMultiFile && status.status === 'critical_failure') {
+        toast.error(
+          `EXPORTACIÓN INCOMPLETA: falló la generación del archivo ${status.failedAtFile} de ${status.totalFiles}. Los ${status.filesWritten?.length || 0} archivo(s) anteriores ya ${verboGuardado} se conservan intactos. Vuelva a pulsar "Exportar Reporte" para reanudar solo los pendientes.`,
+          { duration: 15000 }
+        );
+      } else if (status?.isMultiFile) {
+        const rec = status.reconciliacion;
+        const recTexto = rec
+          ? ` Reconciliación: ${rec.totalProcesados} procesados = ${rec.uuidExportados} exportados + ${rec.erroresLectura} errores + ${rec.duplicadosControlados} duplicados (${rec.cuadra ? 'cuadra exactamente' : 'REVISAR — no cuadra'}).`
+          : '';
+        if (status.status === 'partial') {
+          toast.warning(
+            `Diagnóstico ${verboGuardado} como paquete de ${status.totalFiles} archivos (lote grande). Algunas hojas de detalle no se pudieron generar en uno o más bloques.${recTexto}${avisoNoConfirmado}`,
+            { duration: 14000 }
+          );
+        } else {
+          toast.success(`Diagnóstico ${verboGuardado} como paquete de ${status.totalFiles} archivos (00_Resumen_Global + ${status.totalFiles! - 1} bloques).${recTexto}${avisoNoConfirmado}`, { duration: 12000 });
+        }
+      } else if (status?.status === 'critical_failure') {
         toast.error(
           `EXPORTACIÓN INCOMPLETA: una hoja fiscal crítica (${status.failures.filter(f => f.critical).map(f => f.sheet).join(', ')}) no se pudo generar. Se descargó únicamente un reporte de diagnóstico (archivo "DIAGNOSTICO_INCOMPLETO_..."), no el reporte completo. Revise la primera hoja del archivo para el detalle.`,
           { duration: 15000 }
@@ -492,6 +626,14 @@ export default function Dashboard() {
     } finally {
       setIsExporting(false);
       setExportProgress(null);
+      exportCancelTokenRef.current = null;
+    }
+  };
+
+  const handleCancelExport = () => {
+    if (exportCancelTokenRef.current) {
+      exportCancelTokenRef.current.cancelled = true;
+      toast.info("Cancelando exportación… se conservarán los archivos ya generados.");
     }
   };
 
@@ -1988,13 +2130,77 @@ export default function Dashboard() {
                 disabled={isExporting}
                 className="bg-primary hover:bg-primary/90 text-white font-black shadow-lg shadow-primary/20 gap-2 rounded-xl disabled:opacity-60 disabled:cursor-not-allowed"
                 size="sm"
-                title={isExporting && exportProgress ? `Generando "${exportProgress.sheet}"${exportProgress.totalSheets ? ` (${exportProgress.sheetIndex}/${exportProgress.totalSheets})` : ''}...` : undefined}
+                title={isExporting && exportProgress
+                  ? (exportProgress.fileTotal
+                    ? `Preparando archivo ${exportProgress.fileIndex} de ${exportProgress.fileTotal}${exportProgress.fileName ? ` (${exportProgress.fileName})` : ''} — hoja "${exportProgress.sheet}"${exportProgress.totalSheets ? ` (${exportProgress.sheetIndex}/${exportProgress.totalSheets})` : ''}...`
+                    : `Generando "${exportProgress.sheet}"${exportProgress.totalSheets ? ` (${exportProgress.sheetIndex}/${exportProgress.totalSheets})` : ''}...`)
+                  : undefined}
               >
                 <Download className="w-4 h-4" />
                 {isExporting
-                  ? `Exportando${exportProgress?.totalSheets ? ` (${exportProgress.sheetIndex}/${exportProgress.totalSheets})` : '...'}`
+                  ? (exportProgress?.fileTotal
+                    ? `Preparando archivo ${exportProgress.fileIndex} de ${exportProgress.fileTotal}`
+                    : `Exportando${exportProgress?.totalSheets ? ` (${exportProgress.sheetIndex}/${exportProgress.totalSheets})` : '...'}`)
                   : 'Exportar Reporte'}
               </Button>
+              {isExporting && (
+                <Button
+                  onClick={handleCancelExport}
+                  variant="outline"
+                  className="gap-2 rounded-xl"
+                  size="sm"
+                  title="Cancela la exportación. Los archivos ya descargados y la sesión cargada se conservan."
+                >
+                  Cancelar exportación
+                </Button>
+              )}
+
+              {/* Pantalla previa (instrucción 5): lotes grandes generan varios
+                  archivos — se informa cuántos ANTES de empezar y se ofrece
+                  elegir una carpeta real (escritura confirmada) o descargar
+                  uno por uno (el navegador puede bloquear descargas múltiples). */}
+              <Dialog open={!!exportPrecheck} onOpenChange={(open) => { if (!open) setExportPrecheck(null); }}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Este lote generará varios archivos</DialogTitle>
+                    <DialogDescription>
+                      {exportPrecheck && (
+                        <>
+                          Se generarán <strong>{exportPrecheck.plan.chunks.length + 1} archivos</strong> (1 resumen global
+                          "00_Resumen_Global.xlsx" + {exportPrecheck.plan.chunks.length} bloques "Diagnostico_00N.xlsx"),
+                          uno a la vez, para no agotar la memoria del navegador con {results.length.toLocaleString()} CFDI en un solo archivo.
+                        </>
+                      )}
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="text-sm text-slate-600 dark:text-slate-400 space-y-2">
+                    {supportsFileSystemAccess ? (
+                      <p>
+                        <strong>Recomendado:</strong> elige una carpeta y los {exportPrecheck ? exportPrecheck.plan.chunks.length + 1 : ''} archivos
+                        se guardan ahí directamente, con confirmación real de escritura (nunca se afirma un guardado que no ocurrió).
+                      </p>
+                    ) : (
+                      <p>
+                        Tu navegador no soporta elegir una carpeta directamente. Los archivos se enviarán como descargas individuales —
+                        si tu navegador bloquea descargas múltiples, deberás permitirlas desde el aviso que aparecerá en la barra de direcciones.
+                      </p>
+                    )}
+                  </div>
+                  <DialogFooter className="flex-col sm:flex-col gap-2">
+                    {supportsFileSystemAccess && (
+                      <Button onClick={handleChooseFolder} className="w-full gap-2">
+                        Elegir carpeta (recomendado)
+                      </Button>
+                    )}
+                    <Button onClick={handleDownloadIndividually} variant={supportsFileSystemAccess ? 'outline' : 'default'} className="w-full gap-2">
+                      Descargar archivos individualmente
+                    </Button>
+                    <Button onClick={() => setExportPrecheck(null)} variant="ghost" className="w-full">
+                      Cancelar
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
 
               <Button
                 variant="destructive"

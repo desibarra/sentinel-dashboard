@@ -23,8 +23,22 @@ export interface ExportProgressEvent {
   totalSheets: number;
   error?: string;
   affectedRows?: number;
+  // Exportación de lotes grandes (paquete de varios archivos): además del
+  // progreso de hoja dentro de un archivo, informa en cuál archivo del
+  // paquete va la exportación. Ausentes en el modo de archivo único (no
+  // cambia el contrato existente para lotes pequeños/medianos).
+  fileIndex?: number;
+  fileTotal?: number;
+  fileName?: string;
 }
 export type ExportProgressCallback = (event: ExportProgressEvent) => void;
+
+// Exportación cancelable (instrucción 7/8): un token mutable simple — más
+// fácil de controlar en pruebas que un AbortController real — que Dashboard
+// marca en `cancelled = true` cuando el usuario cancela. Se revisa entre
+// archivo y entre hoja; cancelar NUNCA borra los archivos ya descargados ni
+// la sesión guardada.
+export interface ExportCancelToken { cancelled: boolean }
 
 // ─────────────────────────────────────────────────────────────────────────
 // Reportes parciales (requisito 3 de la revisión): si una hoja falla, el
@@ -48,10 +62,30 @@ export interface ExportSheetFailure {
   affectedRows: number | 'N/D';
   critical: boolean;
 }
-export type ExportStatus = 'complete' | 'partial' | 'critical_failure';
+export type ExportStatus = 'complete' | 'partial' | 'critical_failure' | 'cancelled';
 export interface ExportStatusInfo {
   status: ExportStatus;
   failures: ExportSheetFailure[];
+  // Presentes SOLO en modo paquete multi-archivo (lotes grandes). Ausentes
+  // (undefined) en el modo de archivo único — Dashboard.tsx distingue los
+  // dos modos por la presencia de `isMultiFile`.
+  isMultiFile?: boolean;
+  filesWritten?: string[];
+  totalFiles?: number;
+  failedAtFile?: number;
+  // true si se usó File System Access API (escritura con confirmación real).
+  // false/ausente si se usó el mecanismo de descarga de navegador — en ese
+  // caso `filesWritten` es la lista de archivos ENVIADOS al navegador para
+  // descargar, no una confirmación de que se guardaron: el navegador puede
+  // bloquear descargas múltiples sin que JavaScript se entere.
+  writesConfirmed?: boolean;
+  reconciliacion?: {
+    totalProcesados: number;
+    uuidExportados: number;
+    erroresLectura: number;
+    duplicadosControlados: number;
+    cuadra: boolean; // totalProcesados === uuidExportados + erroresLectura + duplicadosControlados
+  };
 }
 
 // Convierte cualquier valor a un primitivo seguro para una celda de Excel.
@@ -2959,19 +2993,516 @@ export async function buildDiagnosticoWorkbook(results: ValidationResult[], onPr
   return wb;
 }
 
-export async function exportToExcel(results: ValidationResult[], fileNameOverride?: string, onProgress?: ExportProgressCallback): Promise<any> {
-  const wb = await buildDiagnosticoWorkbook(results, onProgress);
-  const status: ExportStatusInfo | undefined = wb.__sentinelExportStatus;
+// ═══════════════════════════════════════════════════════════════════════════
+// EXPORTACIÓN ESCALABLE (lotes grandes) ──────────────────────────────────────
+//
+// CAUSA RAÍZ diagnosticada (ver exportScalability.test.ts para la evidencia
+// medida): buildDiagnosticoWorkbook() construye ~20 hojas de detalle POR
+// DOCUMENTO (una de ellas, "EXTRACCION CRUDA XML", emite ~56 filas por CFDI —
+// un atributo XML por fila, no un resumen) y las mantiene TODAS en un único
+// objeto `wb` hasta el final. Con 6,726 CFDI eso son ~8 millones de celdas en
+// memoria simultáneamente, y XLSX.writeFile() debe entonces serializar TODO
+// ese workbook de una sola vez (ZIP + XML + tabla de cadenas compartidas) en
+// una sola llamada síncrona. Medido: build ~66s / ~2.4GB RSS, más
+// XLSX.write ~14s / ~3.0GB RSS pico, archivo final ~353MB — muy por encima de
+// lo que un tab de navegador (con la app ya cargada) puede sostener de forma
+// fiable, y muy por encima de lo que cualquier prueba con lotes menores
+// alcanza (500 CFDI: ~1.3s / ~400MB). NINGUNA hoja individual llega al límite
+// de 1,048,576 filas de Excel (el auto-split existente por eso nunca se
+// activa) — el problema es memoria/tiempo AGREGADOS de todo el libro a la vez,
+// no el límite de una sola hoja.
+//
+// SOLUCIÓN: en vez de un único `wb` con TODO el lote, se reutiliza
+// buildDiagnosticoWorkbook() SIN MODIFICARLO, una vez POR BLOQUE de CFDI, y
+// cada bloque se escribe y se descarta (nunca se mantienen dos workbooks
+// completos en memoria a la vez). Un resumen global (00_Resumen_Global.xlsx)
+// agrega los totales sobre el LOTE COMPLETO (misma fuente central que hoy:
+// contarEstatusSAT, reconciliarPagosPPD, buildAlerts — CERO cambios a esas
+// funciones ni a sus reglas). La partición en bloques NUNCA separa un REP de
+// las facturas con las que tiene relación (ver buildExportClusters): eso
+// garantiza que cada archivo de bloque sea, por sí solo, fiscalmente
+// autoconsistente (sus propias hojas de conciliación/alertas están completas
+// para los documentos que contiene), sin tener que tocar la lógica interna
+// de reconciliarPagosPPD/buildAlerts para hacerlas conscientes de bloques.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Peso estimado ("filas equivalentes") que un CFDI aporta al conjunto de
+// hojas de detalle. Calibrado empíricamente (ver exportScalability.test.ts)
+// contra las hojas más voluminosas: EXTRACCION CRUDA XML (un atributo XML por
+// fila), DETALLE CONCEPTOS/IMPUESTOS, hojas de Carta Porte y conciliación de
+// pagos. Deliberadamente conservador (sobreestima antes que subestimar) —
+// instrucción del usuario: dividir por filas/celdas y memoria estimada, no
+// solo por cantidad de XML.
+const EXPORT_WEIGHT_BASE = 40;
+const EXPORT_WEIGHT_PER_CONCEPTO = 16;
+const EXPORT_WEIGHT_PER_CARTA_PORTE_ITEM = 13;
+const EXPORT_WEIGHT_PER_PAGO_RELACIONADO = 8;
+
+export const estimateCfdiExportWeight = (r: ValidationResult): number => {
+  const conceptos = r.desglosePorConcepto?.length || 0;
+  const cpDetail: any = r.trazabilidadInfo?.cartaPorteDetalle;
+  const cpItems = (cpDetail?.mercancias?.length || 0) + (cpDetail?.origenes?.length || 0) +
+    (cpDetail?.destinos?.length || 0) + (cpDetail?.figuras?.length || 0);
+  const pagos = r.pagosRelacionados?.length || 0;
+  return EXPORT_WEIGHT_BASE
+    + conceptos * EXPORT_WEIGHT_PER_CONCEPTO
+    + cpItems * EXPORT_WEIGHT_PER_CARTA_PORTE_ITEM
+    + pagos * EXPORT_WEIGHT_PER_PAGO_RELACIONADO;
+};
+
+// Presupuesto por bloque. A este peso, un bloque se comporta como el caso
+// medido de ~500 CFDI típicos (~1.3s, ~400MB de pico) — muy por debajo de
+// donde el tiempo/memoria empiezan a crecer de forma no lineal (medido a
+// partir de ~2,300 CFDI). PLAN_MAX_CFDI_POR_BLOQUE es un tope adicional por
+// conteo bruto (además del peso, nunca en su lugar).
+const PLAN_MAX_WEIGHT_POR_BLOQUE = 40000;
+const PLAN_MAX_CFDI_POR_BLOQUE = 800;
+
+// Une con path compression + union by reference — estructura mínima, solo
+// para agrupar UUIDs relacionados antes de exportar (no es parte del motor
+// fiscal, no se usa en reconciliarPagosPPD).
+class ExportUnionFind {
+  private parent = new Map<string, string>();
+  find(x: string): string {
+    if (!this.parent.has(x)) this.parent.set(x, x);
+    let root = x;
+    while (this.parent.get(root) !== root) root = this.parent.get(root)!;
+    let cur = x;
+    while (cur !== root) {
+      const next = this.parent.get(cur)!;
+      this.parent.set(cur, root);
+      cur = next;
+    }
+    return root;
+  }
+  union(a: string, b: string) {
+    const ra = this.find(a);
+    const rb = this.find(b);
+    if (ra !== rb) this.parent.set(ra, rb);
+  }
+}
+
+// Agrupa resultados en "clusters" que jamás deben separarse entre archivos
+// de bloque: mismo UUID (duplicados exactos) y relaciones REP<->factura
+// (pagosRelacionados). Un documento sin relaciones queda en su propio
+// cluster de tamaño 1 — la inmensa mayoría del lote no se ve afectada.
+// Devuelve los clusters en orden de primera aparición en `results` (los Map
+// de JS preservan el orden de inserción), para que la partición en bloques
+// sea determinística.
+const buildExportClusters = (results: ValidationResult[]): Map<string, ValidationResult[]> => {
+  const uf = new ExportUnionFind();
+  const byUuid = new Map<string, ValidationResult[]>();
+  results.forEach((r, idx) => {
+    const uuid = String(r.uuid || '').trim().toUpperCase();
+    const key = uuid && uuid !== 'NO DISPONIBLE' && uuid !== 'NO VIENE EN XML' ? uuid : `__SIN_UUID__${idx}`;
+    uf.find(key);
+    if (!byUuid.has(key)) byUuid.set(key, []);
+    byUuid.get(key)!.push(r);
+  });
+  results.forEach(r => {
+    if (String(r.tipoCFDI || '').toUpperCase() !== 'P') return;
+    const repUuid = String(r.uuid || '').trim().toUpperCase();
+    if (!repUuid || !byUuid.has(repUuid)) return;
+    (r.pagosRelacionados || []).forEach(pago => {
+      const facturaUuid = String(pago.uuidFacturaRelacionada || '').trim().toUpperCase();
+      if (facturaUuid && byUuid.has(facturaUuid)) uf.union(repUuid, facturaUuid);
+    });
+  });
+
+  const membersByCluster = new Map<string, ValidationResult[]>();
+  const clusterKeyByUuidKey = new Map<string, string>();
+  Array.from(byUuid.keys()).forEach(key => clusterKeyByUuidKey.set(key, uf.find(key)));
+  results.forEach((r, idx) => {
+    const uuid = String(r.uuid || '').trim().toUpperCase();
+    const uuidKey = uuid && uuid !== 'NO DISPONIBLE' && uuid !== 'NO VIENE EN XML' ? uuid : `__SIN_UUID__${idx}`;
+    const clusterKey = clusterKeyByUuidKey.get(uuidKey)!;
+    if (!membersByCluster.has(clusterKey)) membersByCluster.set(clusterKey, []);
+    membersByCluster.get(clusterKey)!.push(r);
+  });
+  return membersByCluster;
+};
+
+export interface ExportChunkPlan {
+  chunks: ValidationResult[][];
+  totalWeight: number;
+  singleFile: boolean; // true si cabe todo en un solo bloque — conserva el XLSX único actual
+}
+
+// Decide cómo particionar `results` en bloques de exportación. NUNCA separa
+// un cluster (REP + sus facturas relacionadas, o UUIDs duplicados) entre dos
+// bloques distintos — instrucción explícita del usuario. Si un solo cluster
+// excede el presupuesto de un bloque (muy improbable con datos reales), se
+// convierte en su propio bloque sobredimensionado en vez de romperlo.
+export function planExportChunks(
+  results: ValidationResult[],
+  maxWeightPerChunk: number = PLAN_MAX_WEIGHT_POR_BLOQUE,
+  maxCfdiPerChunk: number = PLAN_MAX_CFDI_POR_BLOQUE
+): ExportChunkPlan {
+  const membersByCluster = buildExportClusters(results);
+  const chunks: ValidationResult[][] = [];
+  let current: ValidationResult[] = [];
+  let currentWeight = 0;
+  let totalWeight = 0;
+
+  const clusterGroups: ValidationResult[][] = Array.from(membersByCluster.values());
+  for (const members of clusterGroups) {
+    const clusterWeight = members.reduce((sum: number, r: ValidationResult) => sum + estimateCfdiExportWeight(r), 0);
+    totalWeight += clusterWeight;
+    const overflow = current.length > 0 &&
+      (currentWeight + clusterWeight > maxWeightPerChunk || current.length + members.length > maxCfdiPerChunk);
+    if (overflow) {
+      chunks.push(current);
+      current = [];
+      currentWeight = 0;
+    }
+    current.push(...members);
+    currentWeight += clusterWeight;
+  }
+  if (current.length > 0 || chunks.length === 0) chunks.push(current);
+
+  return { chunks, totalWeight, singleFile: chunks.length <= 1 };
+}
+
+// Hoja "INDICE_CONCILIACION" + reconciliación exacta del lote completo, para
+// el archivo 00_Resumen_Global.xlsx. Usa exclusivamente resultados YA
+// calculados (contarEstatusSAT/reconciliarPagosPPD no se vuelven a computar
+// aquí de forma distinta) — solo agrega la vista "qué CFDI quedó en qué
+// archivo".
+const buildIndiceConciliacionRows = (
+  results: ValidationResult[],
+  chunks: ValidationResult[][],
+  chunkFileNames: string[]
+) => {
+  const isValidUUID = (uuid: string | undefined): boolean => {
+    if (!uuid) return false;
+    const u = String(uuid).trim().toUpperCase();
+    return u !== 'NO DISPONIBLE' && u !== 'NO_DISPONIBLE' && u !== 'NO VIENE EN XML' && u !== '';
+  };
+
+  const rows = chunks.map((chunk, i) => {
+    const validos = chunk.filter(r => isValidUUID(r.uuid));
+    const uuidCounts = new Map<string, number>();
+    validos.forEach(r => {
+      const u = String(r.uuid).toUpperCase();
+      uuidCounts.set(u, (uuidCounts.get(u) || 0) + 1);
+    });
+    const distintos = uuidCounts.size;
+    const duplicados = validos.length - distintos;
+    const errores = chunk.length - validos.length;
+    const uuidsOrdenados = Array.from(uuidCounts.keys()).sort();
+    return {
+      Archivo: chunkFileNames[i],
+      CFDI_Incluidos: chunk.length,
+      UUID_Unicos: distintos,
+      Duplicados_En_Este_Archivo: duplicados,
+      Errores_Lectura_En_Este_Archivo: errores,
+      Primer_UUID: uuidsOrdenados[0] || 'NO APLICA',
+      Ultimo_UUID: uuidsOrdenados[uuidsOrdenados.length - 1] || 'NO APLICA',
+      Peso_Estimado: chunk.reduce((sum, r) => sum + estimateCfdiExportWeight(r), 0),
+    };
+  });
+
+  // Reconciliación exacta del LOTE COMPLETO (instrucción 6): Total procesados
+  // = UUID exportados (distintos) + errores de lectura + duplicados
+  // controlados. Ninguna fila se pierde: todo CFDI cargado queda en
+  // exactamente un archivo de bloque (ver buildExportClusters).
+  const validosTotal = results.filter(r => isValidUUID(r.uuid));
+  const uuidCountsTotal = new Map<string, number>();
+  validosTotal.forEach(r => {
+    const u = String(r.uuid).toUpperCase();
+    uuidCountsTotal.set(u, (uuidCountsTotal.get(u) || 0) + 1);
+  });
+  const uuidExportados = uuidCountsTotal.size;
+  const erroresLectura = results.length - validosTotal.length;
+  const duplicadosControlados = validosTotal.length - uuidExportados;
+  const totalProcesados = results.length;
+  const cuadra = totalProcesados === uuidExportados + erroresLectura + duplicadosControlados;
+
+  return {
+    rows,
+    reconciliacion: { totalProcesados, uuidExportados, erroresLectura, duplicadosControlados, cuadra },
+  };
+};
+
+// Construye el archivo 00_Resumen_Global.xlsx: Resumen + RESUMEN EJECUTIVO
+// (exactamente las mismas funciones que usa el archivo único de hoy, sobre
+// el LOTE COMPLETO) + el índice de conciliación del paquete. Es
+// deliberadamente ligero: no reconstruye ninguna hoja de detalle por
+// documento (esas viven en los archivos de bloque), así que no reintroduce
+// el problema de memoria que se está resolviendo.
+async function buildResumenGlobalWorkbook(
+  results: ValidationResult[],
+  chunks: ValidationResult[][],
+  chunkFileNames: string[]
+): Promise<{ wb: any; reconciliacion: ExportStatusInfo['reconciliacion'] }> {
+  const isValidUUID = (uuid: string | undefined): boolean => {
+    if (!uuid) return false;
+    const u = String(uuid).trim().toUpperCase();
+    return u !== 'NO DISPONIBLE' && u !== 'NO_DISPONIBLE' && u !== 'NO VIENE EN XML' && u !== '';
+  };
+  const validResults = results.filter(r => isValidUUID(r.uuid));
+
+  const wb = (XLSX as any).utils.book_new();
+  await appendJsonSheet(wb, buildExecutiveSummaryRows(validResults), 'Resumen');
+  if (wb.Sheets['Resumen']) {
+    wb.Sheets['Resumen']['!cols'] = [{ wch: 45 }, { wch: 80 }];
+  }
+  const alertasGlobales = buildAlerts(validResults);
+  await appendJsonSheet(wb, buildSummaryRows(validResults, alertasGlobales), 'RESUMEN EJECUTIVO');
+
+  const { rows: indiceRows, reconciliacion } = buildIndiceConciliacionRows(results, chunks, chunkFileNames);
+  const reconciliacionRows = [
+    { Metrica: 'Total CFDI procesados (lote completo)', Valor: reconciliacion.totalProcesados },
+    { Metrica: 'UUID exportados (distintos)', Valor: reconciliacion.uuidExportados },
+    { Metrica: 'Errores de lectura (sin UUID válido)', Valor: reconciliacion.erroresLectura },
+    { Metrica: 'Duplicados controlados (mismo UUID, no se pierden ni se duplican en los totales)', Valor: reconciliacion.duplicadosControlados },
+    { Metrica: 'Reconciliación exacta (procesados = exportados + errores + duplicados)', Valor: reconciliacion.cuadra ? 'CUADRA' : 'NO CUADRA — REVISAR' },
+    { Metrica: 'Total de archivos de bloque generados', Valor: chunks.length },
+  ];
+  await appendJsonSheet(wb, [...reconciliacionRows, { Metrica: '', Valor: '' }, { Metrica: '=== DETALLE POR ARCHIVO ===', Valor: '' }], 'INDICE_CONCILIACION');
+  // Se agrega el detalle por archivo a partir de la fila siguiente, en la
+  // misma hoja (misma lógica de aoa que usan las demás cédulas con título).
+  if (wb.Sheets['INDICE_CONCILIACION'] && indiceRows.length) {
+    const headers = collectHeaders(indiceRows);
+    const startRow = reconciliacionRows.length + 2; // +1 encabezado, +1 fila de título de sección
+    (XLSX as any).utils.sheet_add_aoa(wb.Sheets['INDICE_CONCILIACION'], rowsToAOA(indiceRows, headers), { origin: { r: startRow, c: 0 } });
+    const ref = wb.Sheets['INDICE_CONCILIACION']['!ref'];
+    const range = ref ? (XLSX as any).utils.decode_range(ref) : null;
+    const lastRow = startRow + indiceRows.length;
+    const lastCol = Math.max(range ? range.e.c : 1, headers.length - 1);
+    wb.Sheets['INDICE_CONCILIACION']['!ref'] = (XLSX as any).utils.encode_range({ s: { r: 0, c: 0 }, e: { r: lastRow, c: lastCol } });
+  }
+
+  return { wb, reconciliacion };
+}
+
+// Tipado mínimo de File System Access API (no siempre presente en lib.dom
+// según la versión de TypeScript) — evita depender de tipos globales que
+// pueden faltar en el entorno de build.
+export interface MinimalWritableFileStream {
+  write(data: BufferSource | Blob | string): Promise<void>;
+  close(): Promise<void>;
+}
+export interface MinimalFileSystemDirectoryHandle {
+  getFileHandle(name: string, options?: { create?: boolean }): Promise<{
+    createWritable(): Promise<MinimalWritableFileStream>;
+  }>;
+}
+
+export interface ExportToExcelOptions {
+  cancelToken?: ExportCancelToken;
+  // Si se provee (usuario concedió acceso a una carpeta vía
+  // window.showDirectoryPicker()), cada archivo se escribe ahí con
+  // confirmación real de escritura (File System Access API) en vez de una
+  // descarga de navegador "dispara y olvida" — nunca se afirma que un
+  // archivo se guardó sin esa confirmación.
+  directoryHandle?: MinimalFileSystemDirectoryHandle;
+  // Reintento dirigido (instrucción 6, "reintenta solo los pendientes"):
+  // 1-indexado, mismo valor que ExportProgressEvent.fileIndex. Los archivos
+  // con índice MENOR a este NO se reconstruyen ni se vuelven a escribir —
+  // se asume que ya existen de un intento anterior (el llamador es
+  // responsable de esa garantía, típicamente porque status.filesWritten los
+  // reportó como exitosos). Ningún archivo ya generado se repite.
+  resumeFromFile?: number;
+}
+
+export async function exportToExcel(
+  results: ValidationResult[],
+  fileNameOverride?: string,
+  onProgress?: ExportProgressCallback,
+  options?: ExportToExcelOptions
+): Promise<any> {
+  const plan = planExportChunks(results);
+
+  // Lotes pequeños/medianos (la inmensa mayoría de los casos reales): se
+  // conserva EXACTAMENTE el comportamiento actual — un solo XLSX, sin ningún
+  // cambio de nombre de archivo ni de contrato de retorno.
+  if (plan.singleFile) {
+    const wb = await buildDiagnosticoWorkbook(results, onProgress);
+    const status: ExportStatusInfo | undefined = wb.__sentinelExportStatus;
+    const today = new Date();
+    const dateStr = today.toISOString().split('T')[0].replace(/-/g, '');
+    let fileName = fileNameOverride || `SentinelExpress_Diagnostico_${dateStr}.xlsx`;
+    if (!fileNameOverride && status?.status === 'critical_failure') {
+      fileName = `DIAGNOSTICO_INCOMPLETO_${dateStr}.xlsx`;
+    } else if (!fileNameOverride && status?.status === 'partial') {
+      fileName = `INCOMPLETO_SentinelExpress_Diagnostico_${dateStr}.xlsx`;
+    }
+    sentinelStageLog("serializacion_descarga_inicio", { fileName });
+    (XLSX as any).writeFile(wb, fileName);
+    sentinelStageLog("serializacion_descarga_fin", { fileName });
+    return wb;
+  }
+
+  // Lotes grandes: paquete de varios archivos, generados y descargados UNO A
+  // LA VEZ — nunca se mantienen dos workbooks completos en memoria
+  // simultáneamente (instrucción 3). Cada archivo se descarga tan pronto se
+  // termina de construir, así que si un bloque posterior falla, los
+  // anteriores YA están en el disco del usuario — no hay nada que "perder"
+  // (instrucción 7).
+  return exportToExcelMultiFile(results, plan, fileNameOverride, onProgress, options);
+}
+
+// Escribe UN workbook a disco/descarga. Si se proveyó `directoryHandle`
+// (File System Access API — el usuario ya concedió acceso a una carpeta),
+// la escritura queda CONFIRMADA: cualquier error (permiso revocado, cuota,
+// usuario cerró el picker) se propaga como excepción real, nunca se informa
+// éxito sin esa confirmación. Sin `directoryHandle`, se usa el mecanismo de
+// descarga de navegador de siempre (XLSX.writeFile) — que dispara la
+// descarga pero NO puede confirmar que el navegador no la haya bloqueado
+// (limitación de la plataforma, no de este código): por eso
+// ExportStatusInfo.writesConfirmed queda en `false` para ese camino, y
+// Dashboard.tsx nunca debe redactar el mensaje como si fuera un guardado
+// confirmado.
+async function writeWorkbookFile(
+  wb: any,
+  fileName: string,
+  directoryHandle?: MinimalFileSystemDirectoryHandle
+): Promise<void> {
+  if (directoryHandle) {
+    const baseName = fileName.split(/[\\/]/).pop() || fileName;
+    const buffer: Uint8Array = (XLSX as any).write(wb, { type: 'array', bookType: 'xlsx' });
+    const fileHandle = await directoryHandle.getFileHandle(baseName, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(buffer);
+    await writable.close();
+    return;
+  }
+  (XLSX as any).writeFile(wb, fileName);
+}
+
+async function exportToExcelMultiFile(
+  results: ValidationResult[],
+  plan: ExportChunkPlan,
+  fileNameOverride: string | undefined,
+  onProgress: ExportProgressCallback | undefined,
+  options: ExportToExcelOptions | undefined
+): Promise<any> {
   const today = new Date();
   const dateStr = today.toISOString().split('T')[0].replace(/-/g, '');
-  let fileName = fileNameOverride || `SentinelExpress_Diagnostico_${dateStr}.xlsx`;
-  if (!fileNameOverride && status?.status === 'critical_failure') {
-    fileName = `DIAGNOSTICO_INCOMPLETO_${dateStr}.xlsx`;
-  } else if (!fileNameOverride && status?.status === 'partial') {
-    fileName = `INCOMPLETO_SentinelExpress_Diagnostico_${dateStr}.xlsx`;
+  // Si se pasó un nombre/ruta explícito (usado por las pruebas para escribir
+  // a un directorio conocido), se usa como prefijo de cada archivo del
+  // paquete en vez de como nombre único.
+  const basePrefix = fileNameOverride
+    ? fileNameOverride.replace(/\.xlsx$/i, '')
+    : `SentinelExpress_Diagnostico_${dateStr}`;
+
+  const totalChunks = plan.chunks.length;
+  const chunkFileNames = plan.chunks.map((_, i) => `${basePrefix}_Diagnostico_${String(i + 1).padStart(3, '0')}.xlsx`);
+  const globalFileName = `${basePrefix}_00_Resumen_Global.xlsx`;
+
+  const filesWritten: string[] = [];
+  const chunkFailures: ExportSheetFailure[] = [];
+  let failedAtFile: number | undefined;
+  let cancelled = false;
+  const directoryHandle = options?.directoryHandle;
+  // Reintento dirigido: los archivos con índice MENOR a resumeFromFile no se
+  // reconstruyen — se asume que ya existen de un intento previo (instrucción
+  // 6, "reintenta solo los pendientes" / "ningún archivo ya generado se
+  // repite"). Se registran igual en filesWritten para que la reconciliación
+  // final del paquete completo siga siendo honesta y completa.
+  const resumeFromFile = options?.resumeFromFile && options.resumeFromFile > 1 ? options.resumeFromFile : 1;
+
+  sentinelStageLog("export_multiarchivo_inicio", { totalChunks, totalCfdi: results.length, pesoTotal: plan.totalWeight, resumeFromFile });
+
+  for (let i = 0; i < totalChunks; i++) {
+    if (i + 1 < resumeFromFile) {
+      filesWritten.push(chunkFileNames[i]); // ya generado en un intento anterior — no se repite
+      continue;
+    }
+    if (options?.cancelToken?.cancelled) { cancelled = true; break; }
+
+    const chunkFileName = chunkFileNames[i];
+    onProgress?.({ sheet: `Preparando archivo ${i + 1} de ${totalChunks}`, stage: 'building', sheetIndex: 0, totalSheets: TOTAL_EXPORT_STAGES, fileIndex: i + 1, fileTotal: totalChunks, fileName: chunkFileName });
+
+    // Reenvía el progreso interno de hoja (ya probado y estable) anotado con
+    // en qué archivo del paquete va — Dashboard.tsx puede mostrar ambos
+    // niveles ("Archivo 2 de 12 — hoja DETALLE CONCEPTOS XML").
+    const innerOnProgress: ExportProgressCallback = (event) => {
+      if (event.stage === 'error') {
+        chunkFailures.push({
+          sheet: `${chunkFileName} :: ${event.sheet}`,
+          error: event.error || 'Error desconocido',
+          affectedRows: typeof event.affectedRows === 'number' ? event.affectedRows : 'N/D',
+          critical: CRITICAL_SHEETS.has(event.sheet),
+        });
+      }
+      onProgress?.({ ...event, fileIndex: i + 1, fileTotal: totalChunks, fileName: chunkFileName });
+    };
+
+    try {
+      // buildDiagnosticoWorkbook NO se modifica: se reutiliza tal cual, una
+      // vez por bloque. Como cada bloque preserva intactos los clusters
+      // REP<->factura (buildExportClusters), la conciliación/alertas de ESTE
+      // archivo son correctas y autosuficientes para los CFDI que contiene.
+      // Nota de cancelación: no se interrumpe a mitad de un bloque ya
+      // iniciado (el trabajo ya invertido en construirlo se aprovecha y se
+      // descarga) — la cancelación se aplica ANTES de empezar el SIGUIENTE
+      // bloque (chequeo al inicio del for). Así "cancelar" nunca tira a la
+      // basura un archivo que ya estaba prácticamente listo.
+      let chunkWb: any = await buildDiagnosticoWorkbook(plan.chunks[i], innerOnProgress);
+      sentinelStageLog("serializacion_descarga_inicio", { fileName: chunkFileName });
+      await writeWorkbookFile(chunkWb, chunkFileName, directoryHandle);
+      sentinelStageLog("serializacion_descarga_fin", { fileName: chunkFileName });
+      filesWritten.push(chunkFileName);
+      // Se libera la referencia explícitamente antes de construir el
+      // siguiente bloque — nunca coexisten dos workbooks completos.
+      chunkWb = null;
+      onProgress?.({ sheet: `Archivo ${i + 1} de ${totalChunks} completado`, stage: 'done', sheetIndex: TOTAL_EXPORT_STAGES, totalSheets: TOTAL_EXPORT_STAGES, fileIndex: i + 1, fileTotal: totalChunks, fileName: chunkFileName });
+    } catch (err: any) {
+      const message = err?.message || String(err);
+      console.error(`[excelExporter] Fallo generando el archivo de bloque "${chunkFileName}":`, err);
+      failedAtFile = i + 1;
+      onProgress?.({ sheet: chunkFileName, stage: 'error', sheetIndex: 0, totalSheets: TOTAL_EXPORT_STAGES, error: message, fileIndex: i + 1, fileTotal: totalChunks, fileName: chunkFileName });
+      break; // Los archivos anteriores ya se escribieron/descargaron — se conservan (instrucción 7).
+    }
+    await yieldToMain(); // deja pintar el progreso y dar tiempo a GC entre bloques
   }
-  sentinelStageLog("serializacion_descarga_inicio", { fileName });
-  (XLSX as any).writeFile(wb, fileName);
-  sentinelStageLog("serializacion_descarga_fin", { fileName });
-  return wb;
+
+  let reconciliacion: ExportStatusInfo['reconciliacion'] | undefined;
+  if (!cancelled && failedAtFile === undefined) {
+    onProgress?.({ sheet: '00_Resumen_Global', stage: 'building', sheetIndex: 0, totalSheets: TOTAL_EXPORT_STAGES, fileIndex: totalChunks + 1, fileTotal: totalChunks + 1, fileName: globalFileName });
+    try {
+      const { wb: globalWb, reconciliacion: rec } = await buildResumenGlobalWorkbook(results, plan.chunks, chunkFileNames);
+      reconciliacion = rec;
+      sentinelStageLog("serializacion_descarga_inicio", { fileName: globalFileName });
+      await writeWorkbookFile(globalWb, globalFileName, directoryHandle);
+      sentinelStageLog("serializacion_descarga_fin", { fileName: globalFileName });
+      filesWritten.unshift(globalFileName);
+      onProgress?.({ sheet: '00_Resumen_Global', stage: 'done', sheetIndex: TOTAL_EXPORT_STAGES, totalSheets: TOTAL_EXPORT_STAGES, fileIndex: totalChunks + 1, fileTotal: totalChunks + 1, fileName: globalFileName });
+    } catch (err: any) {
+      const message = err?.message || String(err);
+      console.error('[excelExporter] Fallo generando 00_Resumen_Global.xlsx:', err);
+      failedAtFile = totalChunks + 1;
+      onProgress?.({ sheet: globalFileName, stage: 'error', sheetIndex: 0, totalSheets: TOTAL_EXPORT_STAGES, error: message, fileIndex: totalChunks + 1, fileTotal: totalChunks + 1, fileName: globalFileName });
+    }
+  }
+
+  const status: ExportStatus = cancelled
+    ? 'cancelled'
+    : failedAtFile !== undefined
+      ? 'critical_failure'
+      : chunkFailures.some(f => f.critical)
+        ? 'partial'
+        : chunkFailures.length > 0
+          ? 'partial'
+          : 'complete';
+
+  sentinelStageLog("export_multiarchivo_fin", { status, filesWritten: filesWritten.length, failedAtFile, cancelled });
+
+  // No existe un único "workbook" en modo paquete — se devuelve un objeto
+  // liviano portador del mismo campo __sentinelExportStatus que Dashboard.tsx
+  // ya sabe leer, enriquecido con la información propia del paquete.
+  return {
+    __sentinelExportStatus: {
+      status,
+      failures: chunkFailures,
+      isMultiFile: true,
+      filesWritten,
+      totalFiles: totalChunks + 1,
+      failedAtFile,
+      writesConfirmed: !!directoryHandle,
+      reconciliacion,
+    } as ExportStatusInfo,
+  };
 }
