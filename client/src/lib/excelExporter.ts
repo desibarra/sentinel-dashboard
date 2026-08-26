@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { ValidationResult } from '@/lib/cfdiEngine';
+import { ValidationResult, contarEstatusSAT } from '@/lib/cfdiEngine';
 import { sentinelStageLog } from '@/lib/stageLog';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1195,12 +1195,14 @@ export const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
   const usables = results.filter(r => r.resultado?.includes("🟢")).length;
   const alertas = results.filter(r => r.resultado?.includes("🟡")).length;
   const noUsables = results.filter(r => r.resultado?.includes("🔴")).length;
-  const noValidadosSAT = results.filter(r => r.resultado === "No validado SAT" || r.resultado?.startsWith("No validado")).length;
   const totalMonto = results.reduce((sum, r) => sum + (r.total || 0), 0);
   const montoRiesgo = results
     .filter(r => r.resultado?.includes("🔴") || r.resultado?.includes("🟡"))
     .reduce((sum, r) => sum + (r.total || 0), 0);
-  const cancelados = results.filter(r => /cancelado/i.test(r.estatusSAT || '')).length;
+  // Conteo central de estatus SAT — misma función que usan RESUMEN EJECUTIVO
+  // y el Dashboard, para que los tres siempre reporten la misma cifra.
+  const conteoSAT = contarEstatusSAT(results);
+  const { vigentes, cancelados, noConfirmados: noValidadosSAT, repExcluidos } = conteoSAT;
 
   // Semáforo Fiscal Preventivo
   const verdes = results.filter(r => r.fiscalRiskLevel === 'VERDE').length;
@@ -1236,10 +1238,14 @@ export const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
     { Metrica: 'Usables', Valor: usables },
     { Metrica: 'Alertas', Valor: alertas },
     { Metrica: 'No usables', Valor: noUsables },
-    { Metrica: 'No validados SAT', Valor: noValidadosSAT },
     { Metrica: 'Monto total', Valor: Math.round(totalMonto * 100) / 100 },
     { Metrica: 'Monto en riesgo', Valor: Math.round(montoRiesgo * 100) / 100 },
+    { Metrica: '', Valor: '' },
+    { Metrica: '=== 1A. ESTATUS SAT (Vigentes + Cancelados + No confirmados + REP excluidos = total) ===', Valor: '' },
+    { Metrica: 'Vigentes', Valor: vigentes },
     { Metrica: 'Cancelados', Valor: cancelados },
+    { Metrica: 'No validados SAT', Valor: noValidadosSAT },
+    { Metrica: 'REP excluidos de validación SAT (Total=0.00, no es error)', Valor: repExcluidos },
     { Metrica: '', Valor: '' },
     { Metrica: '=== 1B. DIRECCION (clasificacion fila por fila) ===', Valor: '' },
     { Metrica: 'Emitidos (empresa vende)', Valor: emitidosDir },
@@ -1278,7 +1284,11 @@ export const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
 
 const buildSummaryRows = (results: ValidationResult[], alerts: any[]) => {
   const total = results.length;
-  const satNo = results.filter(r => getSatExportFields(r).Estatus_SAT === 'ESTATUS SAT NO CONFIRMADO').length;
+  // Conteo central de estatus SAT — misma función que usan la hoja "Resumen"
+  // y el Dashboard (ver cfdiEngine.ts). Corrige un conteo que siempre daba 0
+  // porque comparaba contra un string de respaldo que en la práctica nunca
+  // se produce (ver la nota extensa en contarEstatusSAT).
+  const conteoSAT = contarEstatusSAT(results);
   const cpRows = results.filter(r => getCartaPortePresente(r) === 'SI');
   const tasa0 = results.filter(r => (r.baseIVA0 || 0) > 0).length;
   const ppdSinPago = results.filter(r => r.metodoPago === 'PPD' && normalizeSiNo(r.pagosPresente) !== 'SI').length;
@@ -1289,9 +1299,10 @@ const buildSummaryRows = (results: ValidationResult[], alerts: any[]) => {
     { Metrica: 'Total XML recibidos', Valor: total },
     { Metrica: 'Total XML procesados', Valor: total },
     { Metrica: 'Total errores lectura', Valor: results.filter(r => r.resultado === 'ERROR').length },
-    { Metrica: 'Total CFDI con SAT no confirmado', Valor: satNo },
-    { Metrica: 'Total CFDI vigentes', Valor: results.filter(r => r.estatusSAT === 'Vigente').length },
-    { Metrica: 'Total CFDI cancelados', Valor: results.filter(r => /cancelado/i.test(r.estatusSAT)).length },
+    { Metrica: 'Total CFDI con SAT no confirmado', Valor: conteoSAT.noConfirmados },
+    { Metrica: 'Total CFDI vigentes', Valor: conteoSAT.vigentes },
+    { Metrica: 'Total CFDI cancelados', Valor: conteoSAT.cancelados },
+    { Metrica: 'Total REP excluidos de validación SAT (Total=0.00, no es error)', Valor: conteoSAT.repExcluidos },
     { Metrica: 'Total con Carta Porte', Valor: cpRows.length },
     { Metrica: 'Total con Carta Porte completa', Valor: cpRows.filter(r => r.cartaPorteCompleta === 'SI').length },
     { Metrica: 'Regla de Carta Porte Completa', Valor: 'Simultáneamente Origen, Destino, Mercancías con Peso/Cantidad, Vehículo con Placa/Permiso/Seguro y Figura con RFC/Licencia' },

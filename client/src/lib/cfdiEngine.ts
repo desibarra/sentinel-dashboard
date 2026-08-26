@@ -1521,3 +1521,52 @@ export const classifyCFDI = (
 
     return { resultado, comentarioFiscal, nivelValidacion };
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CONTEO CENTRAL DE ESTATUS SAT — función única, pura, reutilizada por la
+// hoja "Resumen", la hoja "RESUMEN EJECUTIVO" y el Dashboard.
+// ═══════════════════════════════════════════════════════════════════════════
+// Corrección: "RESUMEN EJECUTIVO" contaba "SAT no confirmado" comparando
+// contra el string genérico de respaldo 'ESTATUS SAT NO CONFIRMADO', que
+// getSatExportFields() SOLO produce cuando el estatus viene vacío — algo que
+// en la práctica nunca ocurre (estatusSAT siempre trae un valor concreto:
+// Vigente/Cancelado/No Encontrado/Error Conexión/No verificado). Por eso ese
+// contador siempre daba 0, aunque la hoja "Resumen" y "Diagnostico_CFDI" sí
+// mostraran los mismos registros como "No validado SAT" correctamente.
+//
+// "SAT no confirmado" agrupa: No Encontrado, Error Conexión (incluye
+// timeouts — el tipo EstatusSAT no distingue un timeout de otro fallo de
+// conexión, ambos colapsan a "Error Conexión"), No verificado (pendiente), y
+// como red de seguridad, cualquier fila cuyo "resultado" ya haya sido
+// clasificado como "No validado SAT" por combinarResultadoFinal — cubre el
+// caso en que 69-B tomó precedencia sobre "resultado" (p.ej. 🔴 NO USABLE
+// por 69-B Definitivo) pero el SAT en sí sigue sin confirmarse: esa fila debe
+// seguir contando aquí aunque su "resultado" ya no diga "No validado SAT".
+//
+// Los REP (Tipo P) NUNCA se consultan al SAT por diseño (Total=0.00) — no es
+// un fallo de SAT, es una exclusión legítima. Se cuentan aparte
+// (repExcluidos) y NUNCA se incluyen en noConfirmados, vigentes ni cancelados.
+export interface ConteoEstatusSAT {
+    total: number;
+    vigentes: number;
+    cancelados: number;
+    noConfirmados: number;
+    repExcluidos: number;
+}
+
+export function contarEstatusSAT(results: { tipoCFDI?: string; estatusSAT?: string; resultado?: string }[]): ConteoEstatusSAT {
+    const esREP = (r: { tipoCFDI?: string }) => String(r.tipoCFDI || "").toUpperCase() === "P";
+    const repExcluidos = results.filter(esREP).length;
+    const evaluables = results.filter(r => !esREP(r));
+
+    const vigentes = evaluables.filter(r => r.estatusSAT === "Vigente").length;
+    const cancelados = evaluables.filter(r => r.estatusSAT === "Cancelado").length;
+    const noConfirmados = evaluables.filter(r =>
+        r.estatusSAT === "No Encontrado" ||
+        r.estatusSAT === "Error Conexión" ||
+        r.estatusSAT === "No verificado" ||
+        r.resultado === "No validado SAT"
+    ).length;
+
+    return { total: results.length, vigentes, cancelados, noConfirmados, repExcluidos };
+}

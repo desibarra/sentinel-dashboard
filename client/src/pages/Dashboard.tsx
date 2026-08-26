@@ -8,7 +8,7 @@ import { CheckCircle2, AlertCircle, XCircle, TrendingUp, FileText, DollarSign, D
 import { Button } from "@/components/ui/button";
 import UploadZone, { UploadedFile } from "@/components/UploadZone";
 import { useXMLValidator } from "@/hooks/useXMLValidator";
-import { ValidationResult } from "@/lib/cfdiEngine";
+import { ValidationResult, contarEstatusSAT } from "@/lib/cfdiEngine";
 import { exportToExcel, ExportProgressEvent } from "@/lib/excelExporter";
 import { resolverClasificacionDireccion } from "@/lib/direccionCFDI";
 import { toast } from "sonner";
@@ -345,7 +345,7 @@ export default function Dashboard() {
 
       const noUsable = validationResults.filter((r) => r.resultado.includes("🔴")).length;
 
-      const noValidadosSAT = validationResults.filter((r) => r.resultado === "No validado SAT" || r.resultado?.startsWith("No validado")).length;
+      const noValidadosSAT = contarEstatusSAT(validationResults).noConfirmados;
 
 
 
@@ -533,9 +533,7 @@ export default function Dashboard() {
     const usables = visibleResults.filter(r => r.resultado.includes("🟢")).length;
     const alertas = visibleResults.filter(r => r.resultado.includes("🟡")).length;
     const noUsable = visibleResults.filter(r => r.resultado.includes("🔴")).length;
-    const noValidadosSAT = visibleResults.filter(r =>
-      r.resultado === "No validado SAT" || r.resultado?.startsWith("No validado")
-    ).length;
+    const noValidadosSAT = contarEstatusSAT(visibleResults).noConfirmados;
     // Salud ponderada: 🟢 = 100%, 🟡 = 50%, 🔴 = 0%, No validado excluido
     const totalClasificados = usables + alertas + noUsable;
     const salud = totalClasificados > 0 ? Math.round(((usables + alertas * 0.5) / totalClasificados) * 100) : 100;
