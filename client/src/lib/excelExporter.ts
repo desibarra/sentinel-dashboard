@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { ValidationResult, contarEstatusSAT } from '@/lib/cfdiEngine';
+import { ValidationResult, contarEstatusSAT, reconciliarPagosPPD } from '@/lib/cfdiEngine';
 import { sentinelStageLog } from '@/lib/stageLog';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -226,6 +226,17 @@ export const getSatExportFields = (r: ValidationResult) => {
       Estatus_SAT: 'Vigente',
       Resultado_Validacion_SAT: 'VIGENTE',
       Accion_Recomendada_SAT: 'SIN ACCION (VIGENTE)',
+      ...direccionFields(r),
+    };
+  }
+
+  // REP (Tipo P): excluido por diseño de la consulta SAT (Total=0.00) — NO es
+  // un fallo ni un estatus pendiente. Nunca debe leerse como "NO VALIDADO SAT".
+  if (statusNorm === 'No Aplica (REP)') {
+    return {
+      Estatus_SAT: 'NO APLICA — REP',
+      Resultado_Validacion_SAT: 'EXCLUIDO DE CONSULTA SAT',
+      Accion_Recomendada_SAT: 'NINGUNA (excluido por diseño; validar por estructura/relación/69-B)',
       ...direccionFields(r),
     };
   }
@@ -994,29 +1005,6 @@ const buildCartaPorteFiguras = (results: ValidationResult[]) =>
     }));
   });
 
-// ── Construye índice de UUIDs cubiertos por REPs del lote (para vinculación) ──
-const buildRepCoverageIndex = (results: ValidationResult[], cache?: XmlDocCache): Set<string> => {
-  const covered = new Set<string>();
-  results.forEach(r => {
-    if (r.tipoCFDI !== 'P') return;
-    // Leer desde desglosePagos pre-cargado
-    if (r.desglosePagos && r.desglosePagos.length > 0) {
-      r.desglosePagos.forEach((row: any) => {
-        const uid = String(row.UUID_CFDI_Relacionado || row.IdDocumento || '').trim().toUpperCase();
-        if (uid && uid !== 'NO VIENE EN XML') covered.add(uid);
-      });
-      return;
-    }
-    // Leer desde XML vivo
-    const doc = parseXml(r, cache);
-    nodes(doc, 'DoctoRelacionado').forEach(dr => {
-      const uid = String(dr.getAttribute('IdDocumento') || '').trim().toUpperCase();
-      if (uid) covered.add(uid);
-    });
-  });
-  return covered;
-};
-
 const buildPagosRows = (results: ValidationResult[], cache?: XmlDocCache) => {
   // Índice de UUIDs de CFDIs de ingreso en el lote (para marcar REP vinculado vs sin origen)
   const loteUuids = new Set(results.filter(r => r.tipoCFDI !== 'P').map(r => String(r.uuid || '').toUpperCase()));
@@ -1119,9 +1107,11 @@ const buildAlerts = (results: ValidationResult[], cache?: XmlDocCache) => {
   const seen = new Map<string, number>();
   results.forEach(r => seen.set(r.uuid, (seen.get(r.uuid) || 0) + 1));
 
-  // ── Índice: UUIDs de CFDIs cubiertos por REPs del lote ─────────────────────
-  // Sirve para suprimir PAGO-01 cuando el REP sí existe en el mismo lote.
-  const repCoverage = buildRepCoverageIndex(results, cache);
+  // PAGO-01 usa la MISMA fuente central que Dashboard/Resumen/Excel
+  // (reconciliarPagosPPD, cfdiEngine.ts) — no reimplementa su propia
+  // detección de cobertura REP ni su propia fecha de corte.
+  const conciliacionParaAlertas = reconciliarPagosPPD(results).facturas;
+  const facturaConciliadaPorUuid = new Map(conciliacionParaAlertas.map(f => [String(f.uuid || '').toUpperCase(), f]));
 
   results.forEach(r => {
     const detail = cp(r);
@@ -1145,9 +1135,26 @@ const buildAlerts = (results: ValidationResult[], cache?: XmlDocCache) => {
     if (isSatTechnicalFailure(r.estatusSAT) || isSatTechnicalFailure(r.trazabilidadInfo?.observacionSAT)) addAlert(alerts, r, 'MATERIALIDAD', 'MAT-01', 'NARANJA', 'Estatus SAT no confirmado.', r.estatusSAT, 'Validar manualmente antes de usar en devolución/acreditamiento.');
     if (/cancelado/i.test(r.estatusSAT)) addAlert(alerts, r, 'MATERIALIDAD', 'MAT-02', 'ROJO', 'CFDI cancelado.', r.estatusSAT, 'No usar para acreditamiento/deducción sin revisión.');
     if ((seen.get(r.uuid) || 0) > 1) addAlert(alerts, r, 'MATERIALIDAD', 'MAT-03', 'ROJO', 'UUID duplicado en lote.', r.uuid, 'Depurar duplicados.');
-    // PAGO-01: solo aplica si el UUID del CFDI PPD NO está cubierto por ningún REP del lote
-    if (r.metodoPago === 'PPD' && r.tipoCFDI !== 'P' && !repCoverage.has(String(r.uuid || '').toUpperCase())) {
-      addAlert(alerts, r, 'PAGO', 'PAGO-01', 'NARANJA', 'MetodoPago PPD sin complemento de pago detectado en el lote.', r.metodoPago, 'Integrar complemento de pago para acreditar IVA efectivamente pagado.');
+    // PAGO-01: solo aplica cuando la conciliación central no encontró NINGÚN
+    // REP para este CFDI PPD (estado === 'SIN_EVIDENCIA_REP'). Sin REP no hay
+    // fecha de pago conocida — NUNCA se decide con la fecha de la factura
+    // (evaluarObligacionREP, cfdiEngine.ts), así que esta alerta SIEMPRE se
+    // genera cuando falta evidencia, sin importar qué tan antigua sea la
+    // factura: solo se suprime cuando un REP con FechaPago comprobada
+    // demuestra que el pago fue anterior al 01/09/2018 (pagoHistoricamenteExento),
+    // caso en el cual el estado ya no es SIN_EVIDENCIA_REP.
+    //
+    // Severidad y texto deliberadamente NO acusatorios: Sentinel solo conoce
+    // los XML cargados en este lote, no si el pago se hizo o se documentó
+    // fuera de él. NUNCA usar "impagada", "REP omitido", "incumplimiento
+    // fiscal" ni "complemento obligatorio no emitido" — es una advertencia de
+    // revisión (AMARILLO), no un hallazgo de riesgo crítico (ROJO/NARANJA).
+    const facturaConciliada = facturaConciliadaPorUuid.get(String(r.uuid || '').toUpperCase());
+    if (r.metodoPago === 'PPD' && r.tipoCFDI !== 'P' && facturaConciliada?.estado === 'SIN_EVIDENCIA_REP') {
+      // El texto viene de la MISMA fuente central que Dashboard/Resumen/Excel
+      // (facturaConciliada.observacion === evaluarObligacionREP(...).mensaje)
+      // — no se duplica el copy en dos lugares.
+      addAlert(alerts, r, 'PAGO', 'PAGO-01', 'AMARILLO', facturaConciliada.observacion, r.metodoPago, 'Cargar el complemento de pago (REP) correspondiente para determinar el estado de pago de esta factura.');
     }
   });
   return alerts;
@@ -1292,6 +1299,24 @@ const buildSummaryRows = (results: ValidationResult[], alerts: any[]) => {
   const cpRows = results.filter(r => getCartaPortePresente(r) === 'SI');
   const tasa0 = results.filter(r => (r.baseIVA0 || 0) > 0).length;
   const ppdSinPago = results.filter(r => r.metodoPago === 'PPD' && normalizeSiNo(r.pagosPresente) !== 'SI').length;
+  // Conciliación PPD↔REP (item 4 de la auditoría): totales que deben cuadrar
+  // exactamente con las hojas "CONCILIACION PAGOS PPD" y "CONCILIACION REP".
+  const { facturas: conciliacionFacturas, reps: conciliacionReps } = reconciliarPagosPPD(results);
+  const facturasPPD = conciliacionFacturas.filter(f => f.metodoPago === 'PPD');
+  const ppdSinEvidencia = facturasPPD.filter(f => f.estado === 'SIN_EVIDENCIA_REP').length;
+  const ppdParcial = facturasPPD.filter(f => f.estado === 'PARCIAL').length;
+  const ppdLiquidada = facturasPPD.filter(f => f.estado === 'LIQUIDADA').length;
+  const ppdRevisionMoneda = facturasPPD.filter(f => f.estado === 'REQUIERE_REVISION_MONEDA').length;
+  const ppdRevisionFecha = facturasPPD.filter(f => f.estado === 'REQUIERE_REVISION_FECHA').length;
+  const ppdRequiereRevision = ppdRevisionMoneda + ppdRevisionFecha;
+  // Informativo, NUNCA resta del total PPD: REP con FechaPago comprobada
+  // anterior al 01/09/2018 (evaluarObligacionREP) — el documento ya cuenta
+  // como liquidada/parcial en su bucket correspondiente.
+  const ppdPagoHistoricamenteExento = facturasPPD.filter(f => f.pagoHistoricamenteExento).length;
+  const repRelacionados = conciliacionReps.filter(r => r.estado === 'RELACIONADO').length;
+  const repSinFactura = conciliacionReps.filter(r => r.estado === 'SIN_FACTURA_RELACIONADA').length;
+  const repRechazados = conciliacionReps.filter(r => r.estado === 'RECHAZADO_ERROR').length;
+  const repDuplicados = conciliacionReps.filter(r => r.estado === 'DUPLICADO').length;
   const byRisk = (risk: string) => alerts.filter(a => a.Nivel_Riesgo === risk).length;
   const topAlertas = Object.entries(alerts.reduce((acc: any, a) => { acc[a.Regla] = (acc[a.Regla] || 0) + 1; return acc; }, {})).sort((a: any, b: any) => b[1] - a[1]).slice(0, 5).map(([k, v]) => `${k}: ${v}`).join(' | ') || 'NO APLICA';
   const topEmisores = Object.entries(results.reduce((acc: any, r) => { acc[r.rfcEmisor] = (acc[r.rfcEmisor] || 0) + Number(r.total || 0); return acc; }, {})).sort((a: any, b: any) => b[1] - a[1]).slice(0, 5).map(([k, v]: any) => `${k}: ${Math.round(v * 100) / 100}`).join(' | ') || 'NO APLICA';
@@ -1308,6 +1333,18 @@ const buildSummaryRows = (results: ValidationResult[], alerts: any[]) => {
     { Metrica: 'Regla de Carta Porte Completa', Valor: 'Simultáneamente Origen, Destino, Mercancías con Peso/Cantidad, Vehículo con Placa/Permiso/Seguro y Figura con RFC/Licencia' },
     { Metrica: 'Total sin Carta Porte cuando aplica', Valor: results.filter(r => r.requiereCartaPorte === 'SI' && getCartaPortePresente(r) !== 'SI').length },
     { Metrica: 'Total PPD sin complemento de pago', Valor: ppdSinPago },
+    { Metrica: 'Facturas PPD - sin evidencia REP', Valor: ppdSinEvidencia },
+    { Metrica: 'Facturas PPD - pagadas parcialmente', Valor: ppdParcial },
+    { Metrica: 'Facturas PPD - liquidadas', Valor: ppdLiquidada },
+    { Metrica: 'Facturas PPD - requieren revisión (moneda)', Valor: ppdRevisionMoneda },
+    { Metrica: 'Facturas PPD - requieren revisión (fecha insuficiente)', Valor: ppdRevisionFecha },
+    { Metrica: 'Facturas PPD - pago comprobado antes del 01/09/2018 (informativo, YA incluidas en parciales/liquidadas)', Valor: ppdPagoHistoricamenteExento },
+    { Metrica: 'Facturas PPD total (= sin evidencia + parciales + liquidadas + requieren revisión)', Valor: ppdSinEvidencia + ppdParcial + ppdLiquidada + ppdRequiereRevision },
+    { Metrica: 'REP cargados - relacionados', Valor: repRelacionados },
+    { Metrica: 'REP cargados - sin factura relacionada en este análisis (huérfanos)', Valor: repSinFactura },
+    { Metrica: 'REP cargados - rechazados por error', Valor: repRechazados },
+    { Metrica: 'REP cargados - duplicados', Valor: repDuplicados },
+    { Metrica: 'REP cargados total (= relacionados + huérfanos + rechazados + duplicados)', Valor: repRelacionados + repSinFactura + repRechazados + repDuplicados },
     { Metrica: 'Total CFDI tasa 0%', Valor: tasa0 },
     { Metrica: 'Total alertas rojas', Valor: byRisk('ROJO') },
     { Metrica: 'Total alertas naranjas', Valor: byRisk('NARANJA') },
@@ -1940,7 +1977,63 @@ export function clasificarValidacion69B(bl: any): string {
 // P0-A (requisitos 10, 13): ejecuta la construcción de una hoja con
 // aislamiento de error — si falla, se reporta qué hoja y en qué etapa,
 // se agrega una hoja de aviso visible, y el resto del libro se conserva.
-const TOTAL_EXPORT_STAGES = 24;
+const TOTAL_EXPORT_STAGES = 26;
+
+// Mapea el estado interno de reconciliarPagosPPD a la etiqueta de pantalla/Excel
+// pedida: PUE / sin evidencia REP / parcial / liquidado / REP sin factura.
+const ETIQUETA_ESTADO_PAGO: Record<string, string> = {
+  PUE: 'PUE',
+  SIN_EVIDENCIA_REP: 'SIN EVIDENCIA REP',
+  PARCIAL: 'PARCIAL',
+  LIQUIDADA: 'LIQUIDADO',
+  REQUIERE_REVISION_MONEDA: 'REQUIERE REVISIÓN (MONEDA)',
+  REQUIERE_REVISION_FECHA: 'REQUIERE REVISIÓN (FECHA DE PAGO)',
+};
+
+// Hoja "CONCILIACION PAGOS PPD" (una fila por factura PUE/PPD, item 4 de la
+// auditoría PPD↔REP): reconcilia el pago real contra el complemento(s) de
+// pago (REP) presentes en ESTE MISMO lote — ver limitación de persistencia
+// entre cargas documentada junto a reconciliarPagosPPD (cfdiEngine.ts).
+const buildConciliacionPagosRows = (results: ValidationResult[]) => {
+  const { facturas } = reconciliarPagosPPD(results);
+  return facturas.map(f => ({
+    Tipo_CFDI: f.tipoCFDI,
+    UUID_Factura: f.uuid,
+    UUID_REP: f.repRelacionados.length ? f.repRelacionados.join(' | ') : 'NO APLICA',
+    Metodo_Pago: f.metodoPago,
+    Numero_Parcialidad: f.ultimaParcialidad ?? 'NO APLICA',
+    Fecha_Pago: f.ultimaFechaPago || 'NO APLICA',
+    Importe_Pagado: f.totalPagado,
+    Saldo_Anterior: f.saldoAnterior ?? 'NO APLICA',
+    Saldo_Insoluto: f.saldoInsoluto ?? 'NO APLICA',
+    Estado_Pago: ETIQUETA_ESTADO_PAGO[f.estado] || f.estado,
+    Direccion_CFDI: f.direccionCFDI || 'REQUIERE_REVISION',
+    // "Exento" se evita deliberadamente en el texto visible: no es una
+    // exención fiscal, solo informa que el pago se recibió antes de la
+    // obligatoriedad general del REP (01/09/2018) y no cambia Estado_Pago.
+    Pago_Antes_Obligatoriedad_REP: f.pagoHistoricamenteExento ? 'SI (informativo, no cambia Estado_Pago)' : 'NO',
+    Observacion: f.observacion,
+  }));
+};
+
+// Hoja "CONCILIACION REP" (uno por REP cargado): relacionados / sin factura
+// relacionada en este análisis / rechazados por error (UUID inválido o REP
+// duplicado ya contabilizado una sola vez).
+const buildConciliacionREPRows = (results: ValidationResult[]) => {
+  const { reps } = reconciliarPagosPPD(results);
+  const ETIQUETA_ESTADO_REP: Record<string, string> = {
+    RELACIONADO: 'RELACIONADO',
+    SIN_FACTURA_RELACIONADA: 'SIN FACTURA RELACIONADA',
+    RECHAZADO_ERROR: 'RECHAZADO POR ERROR',
+    DUPLICADO: 'DUPLICADO',
+  };
+  return reps.map(r => ({
+    UUID_REP: r.uuid,
+    Estado_REP: ETIQUETA_ESTADO_REP[r.estado] || r.estado,
+    Facturas_Relacionadas: r.facturasRelacionadas.length ? r.facturasRelacionadas.join(' | ') : 'NO APLICA',
+    Observacion: r.observacion || 'NO APLICA',
+  }));
+};
 const runSheetStage = async (
   wb: any,
   name: string,
@@ -2680,6 +2773,8 @@ export async function buildDiagnosticoWorkbook(results: ValidationResult[], onPr
   await appendJsonSheet(wb, buildCartaPorteUbicaciones(validResults), 'DETALLE CP UBICACIONES', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
   await appendJsonSheet(wb, buildCartaPorteFiguras(validResults), 'DETALLE CARTA PORTE FIGURAS', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
   await appendJsonSheet(wb, buildPagosRows(validResults, xmlDocCache), 'DETALLE COMPLEMENTOS PAGO', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
+  await appendJsonSheet(wb, buildConciliacionPagosRows(validResults), 'CONCILIACION PAGOS PPD', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
+  await appendJsonSheet(wb, buildConciliacionREPRows(validResults), 'CONCILIACION REP', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
   await appendJsonSheet(wb, alertasForenses, 'ALERTAS FORENSES', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
   await appendJsonSheet(wb, buildQualityRows(validResults, xmlDocCache), 'CONTROL CALIDAD XML', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);
   await appendJsonSheet(wb, buildSummaryRows(validResults, alertasForenses), 'RESUMEN EJECUTIVO', onProgress, ++stageIdx, TOTAL_EXPORT_STAGES);

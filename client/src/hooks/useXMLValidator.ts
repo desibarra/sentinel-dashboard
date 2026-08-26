@@ -27,12 +27,18 @@ import {
   validateNominaTotals,
   classifyCFDI,
   extractReceptorInfo,
-  evaluarTrazabilidad
+  evaluarTrazabilidad,
+  extractPagoDetalles
 } from "@/lib/cfdiEngine";
 import { applyFiscalRules, reconcilePaymentComplements } from '@/lib/fiscalRules';
 import { resolverClasificacionDireccion } from '@/lib/direccionCFDI';
 
-export type EstatusSAT = "No verificado" | "Vigente" | "Cancelado" | "No Encontrado" | "Error Conexión";
+// "No Aplica (REP)": los CFDI Tipo P (REP) se excluyen deliberadamente de la
+// consulta individual de estatus SAT (Total=0.00, nada que consultar) — NO
+// es un estatus "no confirmado"/pendiente de reintento como los otros 4
+// valores. Mantenerlo como un valor propio evita que combinarResultadoFinal
+// lo trate como un fallo de SAT (ver su condición "satNoValidado").
+export type EstatusSAT = "No verificado" | "Vigente" | "Cancelado" | "No Encontrado" | "Error Conexión" | "No Aplica (REP)";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PRECEDENCIA SAT × 69-B — función pura de composición.
@@ -143,7 +149,11 @@ export function combinarHallazgo69B(
 //      Error Conexión/No Encontrado/No verificado cuando 69-B es INFO,
 //      NINGUNO o NO_SINCRONIZADO (Desvirtuado/Sentencia Favorable no eleva
 //      el riesgo, pero tampoco puede "limpiar" un SAT no confirmado).
-//   5. SAT Vigente + 69-B sin riesgo elevado → resultado estructural normal.
+//      "No Aplica (REP)" NO entra aquí — un REP nunca se consulta al SAT por
+//      diseño, así que no es un fallo/pendiente; cae directamente a la
+//      regla 5 y su "resultado" se determina solo por estructura/69-B.
+//   5. SAT Vigente, No Aplica (REP) + 69-B sin riesgo elevado → resultado
+//      estructural normal (nunca forzado a "No validado SAT" por REP).
 export function combinarResultadoFinal(
   estructural: ClasificacionEstructural,
   hallazgo69B: Hallazgo69B,
@@ -751,7 +761,9 @@ export function useXMLValidator() {
       const hallazgo69B = combinarHallazgo69B(rfcEmisorBlacklist, rfcReceptorBlacklist);
 
       // ==================== VALIDACIÓN ESTATUS SAT (ONLINE) ====================
-      let finalEstatusSAT: "No verificado" | "Vigente" | "Cancelado" | "No Encontrado" | "Error Conexión" = "No verificado"; // Usamos variables locales para no chocar con las const de arriba
+      // REP (Tipo P): excluido por diseño de la consulta SAT — nunca "No
+      // verificado" (que ahora se reserva para un intento pendiente/fallido).
+      let finalEstatusSAT: EstatusSAT = tipoCFDI === "P" ? "No Aplica (REP)" : "No verificado"; // Usamos variables locales para no chocar con las const de arriba
       let finalEstatusCancelacion = "";
 
       // Validar con SAT si el XML es estructuralmente válido y tiene datos mínimos
@@ -875,6 +887,10 @@ export function useXMLValidator() {
         pagosPresente: pagosInfo.presente,
         versionPagos: pagosInfo.versionPagos,
         pagosValido: pagosInfo.valido,
+        // Detalle de DoctoRelacionado (parcialidad, saldo anterior/insoluto,
+        // fecha, moneda) — solo se extrae para REP (Tipo P). Alimenta la
+        // reconciliación PPD↔REP (reconciliarPagosPPD, cfdiEngine.ts).
+        pagosRelacionados: tipoCFDI === "P" ? extractPagoDetalles(xmlDoc) : undefined,
         encodingDetectado: "UTF-8",
         complementosDetectados: esNomina ? ["Nómina"] : [],
         scoreInformativo: finalScore,

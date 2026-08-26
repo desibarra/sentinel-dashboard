@@ -1,31 +1,8 @@
-import { ValidationResult } from '@/lib/cfdiEngine';
+import { ValidationResult, aplicarConciliacionPagos, DIAS_MAX_COMPLEMENTO } from '@/lib/cfdiEngine';
 
-// Configurable: ventana máxima (días) para considerar complemento dentro de periodo
-export const PAYMENT_COMPLEMENT_MAX_DAYS = 90;
-
-const tryParseCFDIDate = (dateStr?: string): Date | null => {
-  if (!dateStr) return null;
-  const s = String(dateStr).trim();
-  if (!s || s === 'NO VIENE EN XML' || s === 'NO DISPONIBLE') return null;
-
-  // ISO datetime with T
-  const isoMatch = s.match(/^\d{4}-\d{2}-\d{2}T/);
-  if (isoMatch) {
-    const d = new Date(s);
-    return isNaN(d.getTime()) ? null : d;
-  }
-
-  // Date-only YYYY-MM-DD
-  const dateOnlyMatch = s.match(/^\d{4}-\d{2}-\d{2}$/);
-  if (dateOnlyMatch) {
-    const d = new Date(s + 'T00:00:00');
-    return isNaN(d.getTime()) ? null : d;
-  }
-
-  // Try generic Date parse as fallback
-  const d = new Date(s);
-  return isNaN(d.getTime()) ? null : d;
-};
+// Configurable: ventana máxima (días) para considerar complemento dentro de periodo.
+// Reexportada desde la fuente central (cfdiEngine.ts) — no se duplica el valor.
+export const PAYMENT_COMPLEMENT_MAX_DAYS = DIAS_MAX_COMPLEMENTO;
 
 export function applyFiscalRules(r: ValidationResult): ValidationResult {
   const res = { ...r } as ValidationResult;
@@ -139,110 +116,13 @@ export function applyFiscalRules(r: ValidationResult): ValidationResult {
 
 export default applyFiscalRules;
 
+// Adaptador: delega en la función central reconciliarPagosPPD/
+// aplicarConciliacionPagos (cfdiEngine.ts) para que motor, alertas,
+// Dashboard, resúmenes y Excel usen exactamente el mismo resultado — no se
+// mantiene una segunda regla de negocio independiente ni duplicada aquí.
+// Nota de compatibilidad: a diferencia de la versión anterior, esta función
+// NO muta los objetos recibidos; retorna un arreglo nuevo. El único llamador
+// (useXMLValidator.ts) ya usa el valor de retorno, no el arreglo original.
 export function reconcilePaymentComplements(results: ValidationResult[]): ValidationResult[] {
-  const map = new Map<string, ValidationResult>();
-  results.forEach(r => {
-    if (r && r.uuid) map.set(String(r.uuid).toUpperCase(), r);
-  });
-
-  // Inicializar estados en documentos que son posibles origenes (no REP)
-  results.forEach(r => {
-    const tipo = String(r.tipoCFDI || '').toUpperCase();
-    if (tipo !== 'P') {
-      const metodo = String(r.metodoPago || '').toUpperCase();
-      if (metodo === 'PPD') {
-        if (!r.paymentComplementStatus || r.paymentComplementStatus === 'NO APLICA') {
-          r.paymentComplementStatus = 'SIN_COMPLEMENTO';
-        }
-      } else {
-        r.paymentComplementStatus = 'NO APLICA';
-      }
-    }
-  });
-
-  // Procesar complementos (tipo P) y relacionarlos
-  results.forEach(r => {
-    const tipo = String(r.tipoCFDI || '').toUpperCase();
-    if (tipo === 'P') {
-      const related = Array.isArray(r.uuids_relacionados) ? r.uuids_relacionados : (r.uuidRelacionado ? [r.uuidRelacionado] : []);
-      if (!related.length) {
-        r.paymentComplementStatus = 'UUID_RELACIONADO_NO_ENCONTRADO';
-        r.fiscalRuleApplied = (r.fiscalRuleApplied ? r.fiscalRuleApplied + ', ' : '') + 'UUID_RELACIONADO_NO_ENCONTRADO';
-        return;
-      }
-      related.forEach(rel => {
-        if (!rel) return;
-        const key = String(rel).toUpperCase();
-        const origin = map.get(key);
-        if (!origin) {
-          r.paymentComplementStatus = 'UUID_RELACIONADO_NO_ENCONTRADO';
-          r.fiscalRuleApplied = (r.fiscalRuleApplied ? r.fiscalRuleApplied + ', ' : '') + 'UUID_RELACIONADO_NO_ENCONTRADO';
-          return;
-        }
-
-        // Encontrado: marcar origen como COMPLETO o COMPLEMENTO_FUERA_DE_PERIODO
-        // Evaluar diferencia de fechas (si están presentes)
-        // Evaluar fechas con parseo robusto
-        const fechaOrigenDate = tryParseCFDIDate(origin.fechaEmision || origin.fechaEmision);
-        const fechaComplementoDate = tryParseCFDIDate(r.fechaEmision || r.fechaEmision);
-
-        if (!fechaOrigenDate || !fechaComplementoDate) {
-          // Si no se pudo parsear alguna fecha, marcar revisión (AMARILLO) en lugar de ROJO
-          origin.fiscalRiskLevel = origin.fiscalRiskLevel === 'ROJO' ? origin.fiscalRiskLevel : 'AMARILLO';
-          origin.fiscalRiskReason = (origin.fiscalRiskReason ? origin.fiscalRiskReason + ' | ' : '') + 'REVISAR_FECHA';
-          origin.fiscalRuleApplied = (origin.fiscalRuleApplied ? origin.fiscalRuleApplied + ', ' : '') + 'REVISAR_FECHA';
-          origin.paymentComplementStatus = 'REVISAR_FECHA';
-
-          r.fiscalRiskLevel = r.fiscalRiskLevel === 'ROJO' ? r.fiscalRiskLevel : 'AMARILLO';
-          r.fiscalRiskReason = (r.fiscalRiskReason ? r.fiscalRiskReason + ' | ' : '') + 'REVISAR_FECHA';
-          r.fiscalRuleApplied = (r.fiscalRuleApplied ? r.fiscalRuleApplied + ', ' : '') + 'REVISAR_FECHA';
-          r.paymentComplementStatus = 'REVISAR_FECHA';
-          return;
-        }
-
-        const diffDays = Math.floor((fechaComplementoDate.getTime() - fechaOrigenDate.getTime()) / (1000 * 60 * 60 * 24));
-        if (diffDays > PAYMENT_COMPLEMENT_MAX_DAYS) {
-          origin.paymentComplementStatus = 'COMPLEMENTO_FUERA_DE_PERIODO';
-          origin.fiscalRuleApplied = (origin.fiscalRuleApplied ? origin.fiscalRuleApplied + ', ' : '') + 'COMPLEMENTO_FUERA_DE_PERIODO';
-          
-          if (origin.paymentMethodStatus === 'PPD_SIN_COMPLEMENTO' || !origin.paymentMethodStatus || origin.paymentMethodStatus === 'NO APLICA') {
-            origin.paymentMethodStatus = origin.pagosValido === 'NO' ? 'PPD_REVISAR_COMPLEMENTO' : 'PPD_CON_COMPLEMENTO';
-          }
-        } else {
-          origin.paymentComplementStatus = 'COMPLETO';
-          origin.fiscalRuleApplied = (origin.fiscalRuleApplied ? origin.fiscalRuleApplied + ', ' : '') + 'COMPLETO';
-          
-          if (origin.paymentMethodStatus === 'PPD_SIN_COMPLEMENTO' || !origin.paymentMethodStatus || origin.paymentMethodStatus === 'NO APLICA') {
-            origin.paymentMethodStatus = origin.pagosValido === 'NO' ? 'PPD_REVISAR_COMPLEMENTO' : 'PPD_CON_COMPLEMENTO';
-          }
-        }
-
-        // Marcar complemento como relacionado correctamente
-        r.paymentComplementStatus = 'COMPLETO';
-        r.fiscalRuleApplied = (r.fiscalRuleApplied ? r.fiscalRuleApplied + ', ' : '') + 'RELACIONADO_A:' + origin.uuid;
-
-        // Reevaluar IVA acreditable y nivel de riesgo en el origen
-        if ((origin.paymentComplementStatus === 'COMPLETO' || origin.paymentComplementStatus === 'COMPLEMENTO_FUERA_DE_PERIODO') &&
-            origin.pagosValido !== 'NO' && origin.isValid) {
-          if ((origin.ivaTraslado || 0) > 0) {
-            origin.ivaCreditabilityStatus = 'ACREDITABLE';
-          }
-          
-          // Quitar el motivo de falta de complemento del riesgo
-          const originReasons = (origin.fiscalRiskReason || '')
-            .split(' | ')
-            .filter(x => x && x !== 'PPD sin complemento detectado' && x !== 'PPD con complemento presente pero inválido');
-          
-          origin.fiscalRiskReason = originReasons.join(' | ') || 'SIN HALLAZGOS FISCALES';
-          if (originReasons.length > 0) {
-            origin.fiscalRiskLevel = 'AMARILLO';
-          } else {
-            origin.fiscalRiskLevel = 'VERDE';
-          }
-        }
-      });
-    }
-  });
-
-  return results;
+  return aplicarConciliacionPagos(results);
 }

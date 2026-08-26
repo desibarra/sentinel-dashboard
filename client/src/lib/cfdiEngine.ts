@@ -90,6 +90,17 @@ export interface ValidationResult {
     diferenciaTotales: number;
     desglosePorConcepto: ConceptoDesglose[];
     desglosePagos?: any[];
+    // Detalle de DoctoRelacionado extraído del complemento Pagos — solo se
+    // llena para CFDI Tipo P (REP). Ver extractPagoDetalles/reconciliarPagosPPD.
+    pagosRelacionados?: PagoRelacionadoDetalle[];
+    // Resultado de la conciliación central PPD↔REP aplicado por
+    // aplicarConciliacionPagos — misma fuente que Dashboard/Resumen/Excel.
+    pagosRelacionadosEstado?: EstadoPagoFactura | EstadoREP;
+    pagosRelacionadosTotalPagado?: number;
+    pagosRelacionadosSaldoInsoluto?: number | null;
+    pagosRelacionadosObservacion?: string;
+    /** Informativo: REP con FechaPago comprobada anterior al 01/09/2018. No cambia el estado de pago. */
+    pagosRelacionadosHistoricamenteExento?: boolean;
     desglose: string;
     esNomina: string;
     versionNomina: string;
@@ -1569,4 +1580,572 @@ export function contarEstatusSAT(results: { tipoCFDI?: string; estatusSAT?: stri
     ).length;
 
     return { total: results.length, vigentes, cancelados, noConfirmados, repExcluidos };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RELACIÓN FACTURA PPD ↔ COMPLEMENTO DE PAGO (REP) — extracción + reconciliación
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface PagoRelacionadoDetalle {
+    uuidFacturaRelacionada: string;
+    numParcialidad: number | null;
+    impSaldoAnt: number | null;
+    impPagado: number | null;
+    impSaldoInsoluto: number | null;
+    fechaPago: string;
+    monedaP: string;
+    tipoCambioP: number | null;
+    monedaDR: string;
+    equivalenciaDR: number | null;
+}
+
+const parsePagoNumAttr = (el: Element | null, name: string): number | null => {
+    if (!el) return null;
+    const v = el.getAttribute(name);
+    if (v === null || v.trim() === "") return null;
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : null;
+};
+
+// Extrae, por cada nodo DoctoRelacionado del complemento Pagos, los datos que
+// permiten reconciliar el pago contra la factura de origen (parcialidad,
+// saldo anterior/insoluto, fecha, moneda). Tolerante a prefijos de namespace
+// (pago10/pago20/sin prefijo), igual que el resto del motor. Solo tiene
+// sentido llamarla sobre el XML de un CFDI Tipo P (REP).
+export const extractPagoDetalles = (xmlDoc: XMLDocument | null): PagoRelacionadoDetalle[] => {
+    if (!xmlDoc) return [];
+    const todos = Array.from(xmlDoc.getElementsByTagName("*"));
+    const doctos = todos.filter(n => (n.localName || n.nodeName) === "DoctoRelacionado");
+    return doctos.map(dr => {
+        let pago: Element | null = dr.parentElement;
+        while (pago && (pago.localName || pago.nodeName) !== "Pago") {
+            pago = pago.parentElement;
+        }
+        return {
+            uuidFacturaRelacionada: String(dr.getAttribute("IdDocumento") || "").trim().toUpperCase(),
+            numParcialidad: parsePagoNumAttr(dr, "NumParcialidad"),
+            impSaldoAnt: parsePagoNumAttr(dr, "ImpSaldoAnt"),
+            impPagado: parsePagoNumAttr(dr, "ImpPagado"),
+            impSaldoInsoluto: parsePagoNumAttr(dr, "ImpSaldoInsoluto"),
+            fechaPago: pago?.getAttribute("FechaPago") || "NO VIENE EN XML",
+            monedaP: pago?.getAttribute("MonedaP") || "NO VIENE EN XML",
+            tipoCambioP: parsePagoNumAttr(pago, "TipoCambioP"),
+            monedaDR: dr.getAttribute("MonedaDR") || "NO VIENE EN XML",
+            equivalenciaDR: parsePagoNumAttr(dr, "EquivalenciaDR"),
+        };
+    });
+};
+
+const UUID_FORMATO_VALIDO = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
+const TOLERANCIA_SALDO = 0.01; // centavos: redondeo aceptable para considerar liquidada una factura
+export const DIAS_MAX_COMPLEMENTO = 90; // ventana informativa: complemento emitido mucho después del CFDI de origen
+
+// Parseo de fecha tolerante (ISO con hora, solo fecha, o fallback genérico) —
+// única fuente de verdad para fechas de CFDI en el motor. fiscalRules.ts
+// reutiliza esta misma función en vez de mantener su propia copia.
+export function parseFechaCFDI(dateStr?: string | null): Date | null {
+    if (!dateStr) return null;
+    const s = String(dateStr).trim();
+    if (!s || s === 'NO VIENE EN XML' || s === 'NO DISPONIBLE') return null;
+    if (/^\d{4}-\d{2}-\d{2}T/.test(s)) {
+        const d = new Date(s);
+        return isNaN(d.getTime()) ? null : d;
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+        const d = new Date(s + 'T00:00:00');
+        return isNaN(d.getTime()) ? null : d;
+    }
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? null : d;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REGLA HISTÓRICA: ¿este documento requiere evidencia REP?
+// ═══════════════════════════════════════════════════════════════════════════
+// Fuentes:
+// - SAT, "Comprobante de Recepción de Pagos" (portal oficial, ficha 92764):
+//   describe el Complemento para Recepción de Pagos (REP) y su obligatoriedad
+//   para CFDI con MetodoPago=PPD.
+//   https://wwwmat.sat.gob.mx/consultas/92764/comprobante-de-recepcion-de-pagos
+// - Criterio temporal (fecha de corte 01/09/2018), comunicado oficial SAT:
+//   https://www.gob.mx/sat/prensa/com2018_045
+// - Criterio aplicado: la obligación nace cuando se RECIBE el pago diferido o
+//   en parcialidades (la fecha del nodo <Pago FechaPago=.../> del REP), NO en
+//   la fecha de emisión del CFDI de origen. Un CFDI PPD emitido antes del
+//   01/09/2018 cuyo pago se recibe después de esa fecha SÍ requiere REP para
+//   ese pago — y, a la inversa, sin un REP no hay forma de conocer cuándo se
+//   recibió el pago, así que la fecha de la factura NUNCA decide esto por sí
+//   sola.
+// Esta es la ÚNICA fuente de verdad para esa decisión: motor
+// (reconciliarPagosPPD), alertas forenses (buildAlerts/PAGO-01), Dashboard,
+// resúmenes y Excel la consultan; ninguno reimplementa la fecha de corte.
+const FECHA_OBLIGATORIEDAD_REP = new Date('2018-09-01T00:00:00');
+
+export type EstadoObligacionREP =
+    | 'NO_APLICA'               // Tipo P, PUE, o método fuera de esta regla
+    | 'NO_EXIGIBLE_HISTORICO'   // REP existe con FechaPago válida y anterior al corte — comprobado, no exigible en ese momento
+    | 'REQUIERE_EVIDENCIA'      // REP existe con FechaPago válida y posterior (o igual) al corte — la obligación aplicó a ese pago
+    | 'SIN_EVIDENCIA_PAGO'      // No hay REP: no se conoce la fecha de pago, nunca se infiere de la fecha de la factura
+    | 'FECHA_PAGO_INSUFICIENTE'; // REP existe pero su FechaPago no es parseable
+
+export interface ObligacionREPInput {
+    tipoCFDI: string | undefined | null;
+    metodoPago: string | undefined | null;
+    /** Solo diagnóstico/trazabilidad — NUNCA decide la obligación por sí sola. */
+    fechaFactura?: string | undefined | null;
+    /** Fecha real del pago (nodo <Pago FechaPago=.../> del REP relacionado). */
+    fechaPago: string | undefined | null;
+    /** true si se localizó al menos un REP con evidencia de pago para este documento. */
+    existeREP: boolean;
+}
+
+export interface ObligacionREPInfo {
+    estado: EstadoObligacionREP;
+    requiereEvidencia: boolean; // true SOLO cuando estado === 'REQUIERE_EVIDENCIA'
+    mensaje: string;
+}
+
+export function evaluarObligacionREP(input: ObligacionREPInput): ObligacionREPInfo {
+    const tipo = String(input.tipoCFDI || '').toUpperCase();
+    const metodo = String(input.metodoPago || '').toUpperCase();
+
+    if (tipo === 'P') {
+        return { estado: 'NO_APLICA', requiereEvidencia: false, mensaje: 'CFDI Tipo P (REP): no requiere otro REP; es el propio comprobante de pago.' };
+    }
+    if (metodo === 'PUE') {
+        return { estado: 'NO_APLICA', requiereEvidencia: false, mensaje: 'PUE: no requiere REP.' };
+    }
+    if (metodo !== 'PPD') {
+        return { estado: 'NO_APLICA', requiereEvidencia: false, mensaje: 'Método de pago no sujeto a esta regla (no es PPD).' };
+    }
+
+    if (!input.existeREP) {
+        // Sin REP no hay fecha de pago conocida: el pago pudo ocurrir en
+        // cualquier momento, incluso después del 01/09/2018. NUNCA se
+        // determina la obligación con la fecha de la factura, y nunca se
+        // afirma "no exigible" ni "incumplimiento" sin esa evidencia.
+        return { estado: 'SIN_EVIDENCIA_PAGO', requiereEvidencia: false, mensaje: 'Sin evidencia de pago en los XML cargados. Carga el complemento de pago para determinar si fue pagada total o parcialmente.' };
+    }
+
+    const fechaPago = parseFechaCFDI(input.fechaPago);
+    if (!fechaPago) {
+        return { estado: 'FECHA_PAGO_INSUFICIENTE', requiereEvidencia: false, mensaje: 'Requiere revisión: fecha de pago insuficiente.' };
+    }
+
+    if (fechaPago < FECHA_OBLIGATORIEDAD_REP) {
+        return { estado: 'NO_EXIGIBLE_HISTORICO', requiereEvidencia: false, mensaje: 'REP no obligatorio por fecha histórica del pago (anterior al 01/09/2018).' };
+    }
+
+    return { estado: 'REQUIERE_EVIDENCIA', requiereEvidencia: true, mensaje: 'PPD con pago recibido desde el 01/09/2018: requiere REP.' };
+}
+
+// NOTA: NO_EXIGIBLE_HISTORICO NO es un estado de pago independiente — un
+// documento con REP comprobado antes del 01/09/2018 sigue siendo LIQUIDADA/
+// PARCIAL según el dinero reconciliado; la exención histórica es solo
+// informativa y se expone vía el flag `pagoHistoricamenteExento` (ver
+// ReconciliacionFactura), nunca sustituyendo el estado de pago real.
+export type EstadoPagoFactura = 'PUE' | 'SIN_EVIDENCIA_REP' | 'PARCIAL' | 'LIQUIDADA' | 'REQUIERE_REVISION_MONEDA' | 'REQUIERE_REVISION_FECHA';
+
+export interface ReconciliacionFactura {
+    uuid: string;
+    tipoCFDI: string;
+    direccionCFDI?: string;
+    metodoPago: string;
+    estado: EstadoPagoFactura;
+    totalFactura: number;
+    totalPagado: number;
+    saldoAnterior: number | null;
+    saldoInsoluto: number | null;
+    ultimaParcialidad: number | null;
+    ultimaFechaPago: string | null;
+    repRelacionados: string[];
+    observacion: string;
+    fueraDePeriodo?: boolean;
+    /** true si el pago documentado (REP con FechaPago válida) es anterior al
+     *  01/09/2018 — informativo: el REP no era obligatorio en ese momento,
+     *  pero eso NO cambia el estado de pago (LIQUIDADA/PARCIAL sigue siendo
+     *  el real, según el dinero reconciliado). Ver evaluarObligacionREP. */
+    pagoHistoricamenteExento?: boolean;
+}
+
+export type EstadoREP = 'RELACIONADO' | 'SIN_FACTURA_RELACIONADA' | 'RECHAZADO_ERROR' | 'DUPLICADO';
+
+export interface ReconciliacionREP {
+    uuid: string;
+    estado: EstadoREP;
+    facturasRelacionadas: string[];
+    observacion: string;
+}
+
+export interface ReconciliacionPagos {
+    facturas: ReconciliacionFactura[];
+    reps: ReconciliacionREP[];
+}
+
+// Reconcilia facturas PPD contra sus complementos de pago (REP) DENTRO del
+// arreglo `results` recibido — ver limitación de persistencia entre cargas
+// documentada junto a esta función en la auditoría (no reconcilia contra
+// REP/facturas de sesiones o lotes que no estén en este mismo `results`).
+//
+// Reglas aplicadas (auditoría PPD↔REP):
+// - PUE: no requiere REP — se marca pagada conforme a su método de pago.
+// - PPD sin REP encontrado en `results`: "Sin evidencia de pago en los XML
+//   cargados" (NUNCA "impagada" — no se afirma lo que no se puede probar).
+// - PPD con REP que no liquida el total: "PARCIAL" + saldo insoluto (se
+//   toma el ImpSaldoInsoluto de la parcialidad más alta si está disponible;
+//   si no, se calcula total - suma de ImpPagado).
+// - PPD con uno o varios REP que suman el total (o cuyo ImpSaldoInsoluto más
+//   reciente es ~0): "LIQUIDADA".
+// - Un REP duplicado (mismo UUID de REP repetido en `results`, p.ej. el mismo
+//   archivo cargado dos veces) se cuenta UNA sola vez — nunca duplica el
+//   importe pagado.
+// - Un DoctoRelacionado con UUID mal formado se marca como error (no se usa
+//   fecha/importe/RFC como sustituto del UUID).
+// - Un REP cuyo UUID relacionado no está entre las facturas de `results` se
+//   marca "REP sin factura relacionada en este análisis" — nunca se afirma
+//   que la factura no existe en ningún lado.
+// - Las Notas de Crédito (Tipo E) nunca contribuyen como pago: solo los
+//   documentos Tipo P (REP) se acumulan en el saldo pagado.
+// - Funciona igual para EMITIDO y RECIBIDO: el emparejamiento es por UUID,
+//   no por RFC ni por dirección.
+export function reconciliarPagosPPD(results: ValidationResult[]): ReconciliacionPagos {
+    const esREP = (r: ValidationResult) => String(r.tipoCFDI || '').toUpperCase() === 'P';
+
+    // Dedup de REP por UUID — un REP repetido nunca debe sumarse dos veces,
+    // pero SÍ se reporta como "DUPLICADO" (REP cargados = relacionados +
+    // huérfanos + rechazados + duplicados).
+    const repVistos = new Set<string>();
+    const repsUnicos: ValidationResult[] = [];
+    const repsDuplicados: ReconciliacionREP[] = [];
+    for (const r of results) {
+        if (!esREP(r)) continue;
+        const key = String(r.uuid || '').toUpperCase();
+        if (key && repVistos.has(key)) {
+            repsDuplicados.push({ uuid: r.uuid, estado: 'DUPLICADO', facturasRelacionadas: [], observacion: 'REP duplicado: mismo UUID cargado más de una vez; no se contabiliza dos veces.' });
+            continue;
+        }
+        if (key) repVistos.add(key);
+        repsUnicos.push(r);
+    }
+
+    const facturasPorUuid = new Map<string, ValidationResult>();
+    results.forEach(r => {
+        if (!esREP(r) && r.uuid) facturasPorUuid.set(String(r.uuid).toUpperCase(), r);
+    });
+
+    interface Acumulado {
+        total: number;
+        ultimaParcialidad: number;
+        ultimaFecha: string;
+        ultimoSaldoAnterior: number | null;
+        ultimoSaldoInsoluto: number | null;
+        repUuids: Set<string>;
+        monedaIndeterminable: boolean; // true si algún pago no pudo convertirse con seguridad
+        fueraDePeriodo: boolean; // true si algún REP llegó > DIAS_MAX_COMPLEMENTO después de la factura
+    }
+    const pagosPorFactura = new Map<string, Acumulado>();
+    const reps: ReconciliacionREP[] = [];
+
+    for (const rep of repsUnicos) {
+        const detalles = rep.pagosRelacionados || [];
+        if (detalles.length === 0) {
+            reps.push({ uuid: rep.uuid, estado: 'RECHAZADO_ERROR', facturasRelacionadas: [], observacion: 'REP sin nodos DoctoRelacionado detectables en el XML.' });
+            continue;
+        }
+
+        let algunaRelacionada = false;
+        let algunaInvalida = false;
+        const facturasDeEsteRep: string[] = [];
+
+        for (const d of detalles) {
+            const uuidRel = d.uuidFacturaRelacionada;
+            if (!uuidRel || !UUID_FORMATO_VALIDO.test(uuidRel)) {
+                algunaInvalida = true;
+                continue; // nunca se sustituye por fecha/importe/RFC
+            }
+            const factura = facturasPorUuid.get(uuidRel);
+            if (!factura) continue; // se resuelve abajo como "sin factura relacionada en este análisis"
+
+            algunaRelacionada = true;
+            facturasDeEsteRep.push(uuidRel);
+
+            // ── Conversión de moneda: NUNCA se aproxima en silencio. ──
+            // Casos cubiertos:
+            //  a) misma moneda (DR == factura): importe tal cual;
+            //  b) MonedaDR distinta con EquivalenciaDR > 0 válida: se convierte;
+            //  c) EquivalenciaDR ausente, cero o inválida cuando las monedas
+            //     difieren: NO se convierte — se marca monedaIndeterminable;
+            //  d) cadena de conversión no soportada (p.ej. Pago en una tercera
+            //     moneda distinta tanto de la factura como de MXN, sin dato
+            //     directo de equivalencia): se trata igual que (c) — no se
+            //     inventa un cruce de tipos de cambio.
+            const monedaFactura = String(factura.moneda || 'MXN').toUpperCase();
+            const monedaDR = String(d.monedaDR || monedaFactura).toUpperCase();
+            let importe = d.impPagado ?? 0;
+            let indeterminable = false;
+            if (monedaDR !== monedaFactura) {
+                const equivalencia = d.equivalenciaDR;
+                if (equivalencia && Number.isFinite(equivalencia) && equivalencia > 0) {
+                    importe = importe * equivalencia;
+                } else {
+                    indeterminable = true;
+                }
+            }
+
+            const fechaFacturaDate = parseFechaCFDI(factura.fechaEmision);
+            const fechaPagoDate = parseFechaCFDI(d.fechaPago);
+            const fueraDePeriodo = !!(fechaFacturaDate && fechaPagoDate &&
+                Math.floor((fechaPagoDate.getTime() - fechaFacturaDate.getTime()) / (1000 * 60 * 60 * 24)) > DIAS_MAX_COMPLEMENTO);
+
+            const acc: Acumulado = pagosPorFactura.get(uuidRel) || {
+                total: 0, ultimaParcialidad: 0, ultimaFecha: '', ultimoSaldoAnterior: null, ultimoSaldoInsoluto: null,
+                repUuids: new Set<string>(), monedaIndeterminable: false, fueraDePeriodo: false,
+            };
+            if (!indeterminable) acc.total += importe;
+            acc.monedaIndeterminable = acc.monedaIndeterminable || indeterminable;
+            acc.fueraDePeriodo = acc.fueraDePeriodo || fueraDePeriodo;
+            acc.repUuids.add(rep.uuid);
+            if ((d.numParcialidad ?? 0) >= acc.ultimaParcialidad) {
+                acc.ultimaParcialidad = d.numParcialidad ?? acc.ultimaParcialidad;
+                acc.ultimaFecha = d.fechaPago;
+                acc.ultimoSaldoAnterior = d.impSaldoAnt;
+                acc.ultimoSaldoInsoluto = d.impSaldoInsoluto;
+            }
+            pagosPorFactura.set(uuidRel, acc);
+        }
+
+        if (algunaRelacionada) {
+            reps.push({ uuid: rep.uuid, estado: 'RELACIONADO', facturasRelacionadas: facturasDeEsteRep, observacion: '' });
+        } else if (algunaInvalida) {
+            reps.push({ uuid: rep.uuid, estado: 'RECHAZADO_ERROR', facturasRelacionadas: [], observacion: 'UUID de documento relacionado con formato inválido.' });
+        } else {
+            reps.push({ uuid: rep.uuid, estado: 'SIN_FACTURA_RELACIONADA', facturasRelacionadas: [], observacion: 'REP sin factura relacionada en este análisis.' });
+        }
+    }
+
+    const facturas: ReconciliacionFactura[] = [];
+    for (const r of results) {
+        if (esREP(r)) continue;
+        const metodo = String(r.metodoPago || '').toUpperCase();
+        const uuid = String(r.uuid || '').toUpperCase();
+
+        if (metodo === 'PUE') {
+            facturas.push({
+                uuid: r.uuid, tipoCFDI: r.tipoCFDI, direccionCFDI: r.direccionCFDI, metodoPago: 'PUE',
+                estado: 'PUE', totalFactura: r.total || 0, totalPagado: r.total || 0,
+                saldoAnterior: r.total || 0, saldoInsoluto: 0, ultimaParcialidad: null, ultimaFechaPago: null,
+                repRelacionados: [], observacion: 'PUE: no requiere REP para considerarse pagada conforme a su método de pago.',
+            });
+            continue;
+        }
+
+        if (metodo !== 'PPD') continue; // fuera de alcance (Nómina, Traslado, etc.)
+
+        const acc = pagosPorFactura.get(uuid);
+        const total = r.total || 0;
+
+        if (!acc || acc.repUuids.size === 0) {
+            // Sin REP no hay fecha de pago conocida: NUNCA se decide con la
+            // fecha de la factura — ver evaluarObligacionREP. Nunca se afirma
+            // "no exigible" ni "incumplimiento" sin esa evidencia.
+            const obligacion = evaluarObligacionREP({
+                tipoCFDI: r.tipoCFDI, metodoPago: r.metodoPago,
+                fechaFactura: r.fechaEmision, fechaPago: null, existeREP: false,
+            });
+            facturas.push({
+                uuid: r.uuid, tipoCFDI: r.tipoCFDI, direccionCFDI: r.direccionCFDI, metodoPago: 'PPD',
+                estado: 'SIN_EVIDENCIA_REP', totalFactura: total, totalPagado: 0,
+                saldoAnterior: null, saldoInsoluto: null, ultimaParcialidad: null, ultimaFechaPago: null,
+                repRelacionados: [], observacion: obligacion.mensaje,
+            });
+            continue;
+        }
+
+        // Nunca se presenta como liquidada/parcial una factura cuya conversión
+        // de moneda no pudo determinarse con seguridad — no se inventan saldos.
+        if (acc.monedaIndeterminable) {
+            facturas.push({
+                uuid: r.uuid, tipoCFDI: r.tipoCFDI, direccionCFDI: r.direccionCFDI, metodoPago: 'PPD',
+                estado: 'REQUIERE_REVISION_MONEDA', totalFactura: total, totalPagado: Math.round(acc.total * 100) / 100,
+                saldoAnterior: acc.ultimoSaldoAnterior, saldoInsoluto: null,
+                ultimaParcialidad: acc.ultimaParcialidad || null, ultimaFechaPago: acc.ultimaFecha || null,
+                repRelacionados: Array.from(acc.repUuids),
+                observacion: 'Requiere revisión por conversión de moneda.',
+            });
+            continue;
+        }
+
+        // REP presente: se evalúa la obligación con la fecha REAL del pago
+        // (no la de la factura). Si esa fecha no es parseable, se marca para
+        // revisión sin descartar el dinero ya reconciliado (ImpPagado no
+        // depende de FechaPago). Si es histórica, es solo informativo: el
+        // dinero reconciliado (LIQUIDADA/PARCIAL) sigue siendo el real.
+        const obligacion = evaluarObligacionREP({
+            tipoCFDI: r.tipoCFDI, metodoPago: r.metodoPago,
+            fechaFactura: r.fechaEmision, fechaPago: acc.ultimaFecha, existeREP: true,
+        });
+
+        if (obligacion.estado === 'FECHA_PAGO_INSUFICIENTE') {
+            facturas.push({
+                uuid: r.uuid, tipoCFDI: r.tipoCFDI, direccionCFDI: r.direccionCFDI, metodoPago: 'PPD',
+                estado: 'REQUIERE_REVISION_FECHA', totalFactura: total, totalPagado: Math.round(acc.total * 100) / 100,
+                saldoAnterior: acc.ultimoSaldoAnterior, saldoInsoluto: null,
+                ultimaParcialidad: acc.ultimaParcialidad || null, ultimaFechaPago: acc.ultimaFecha || null,
+                repRelacionados: Array.from(acc.repUuids),
+                observacion: obligacion.mensaje,
+            });
+            continue;
+        }
+
+        const saldo = acc.ultimoSaldoInsoluto !== null ? acc.ultimoSaldoInsoluto : Math.max(0, total - acc.total);
+        const liquidada = saldo <= TOLERANCIA_SALDO || acc.total >= (total - TOLERANCIA_SALDO);
+        const notaPeriodo = acc.fueraDePeriodo ? ` Complemento recibido más de ${DIAS_MAX_COMPLEMENTO} días después de la factura — revisar razón de negocio.` : '';
+        const pagoHistoricamenteExento = obligacion.estado === 'NO_EXIGIBLE_HISTORICO';
+        // Texto exacto pedido: evitar "exento" (se puede confundir con una
+        // exención fiscal) — esto es solo informativo sobre CUÁNDO se recibió
+        // el pago, no una exención de ningún tipo.
+        const notaHistorica = pagoHistoricamenteExento ? ' Pago recibido antes de la obligatoriedad general del REP — informativo.' : '';
+        facturas.push({
+            uuid: r.uuid, tipoCFDI: r.tipoCFDI, direccionCFDI: r.direccionCFDI, metodoPago: 'PPD',
+            estado: liquidada ? 'LIQUIDADA' : 'PARCIAL',
+            totalFactura: total, totalPagado: Math.round(acc.total * 100) / 100,
+            saldoAnterior: acc.ultimoSaldoAnterior !== null ? Math.round(acc.ultimoSaldoAnterior * 100) / 100 : null,
+            saldoInsoluto: Math.round(Math.max(0, saldo) * 100) / 100,
+            ultimaParcialidad: acc.ultimaParcialidad || null,
+            ultimaFechaPago: acc.ultimaFecha || null,
+            repRelacionados: Array.from(acc.repUuids),
+            observacion: (liquidada ? 'Pagada mediante uno o varios REP.' : 'Pagada parcialmente; saldo insoluto pendiente.') + notaPeriodo + notaHistorica,
+            fueraDePeriodo: acc.fueraDePeriodo,
+            pagoHistoricamenteExento,
+        });
+    }
+
+    return { facturas, reps: [...reps, ...repsDuplicados] };
+}
+
+// Función de estado productiva usada por el Dashboard (ver Dashboard.tsx,
+// handler principal de validación) para combinar un lote recién validado con
+// el acumulado ya presente en pantalla: (1) deduplica por UUID — una carga
+// sucesiva del mismo REP/factura NUNCA se agrega dos veces; (2) ejecuta la
+// conciliación central UNA sola vez sobre el acumulado COMPLETO, de modo que
+// una factura PPD cargada en un lote anterior se actualice retroactivamente
+// cuando su REP llega en un lote posterior (y viceversa). Se exporta para que
+// las pruebas de integración monten este MISMO flujo — no una función pura
+// aislada — tal como lo exige la auditoría de cargas sucesivas.
+export function mergeAndReconcileResults(
+    previos: ValidationResult[],
+    nuevos: ValidationResult[]
+): { combinado: ValidationResult[]; agregados: number; omitidosPorDuplicado: number } {
+    const existentes = new Set(previos.map(r => String(r.uuid || '').toUpperCase()));
+    const nuevosUnicos = nuevos.filter(r => !existentes.has(String(r.uuid || '').toUpperCase()));
+    const combinadoBruto = [...previos, ...nuevosUnicos];
+    return {
+        combinado: aplicarConciliacionPagos(combinadoBruto),
+        agregados: nuevosUnicos.length,
+        omitidosPorDuplicado: nuevos.length - nuevosUnicos.length,
+    };
+}
+
+// Aplica el resultado de reconciliarPagosPPD (fuente central) sobre cada
+// ValidationResult, incluyendo los campos legados paymentComplementStatus /
+// paymentMethodStatus / ivaCreditabilityStatus / fiscalRiskLevel para que
+// consumidores antiguos (Dashboard, Excel, fiscalRules) sigan funcionando sin
+// mantener una segunda regla de negocio independiente. No muta los objetos
+// recibidos — retorna un arreglo nuevo (necesario para el re-render de React).
+export function aplicarConciliacionPagos(results: ValidationResult[]): ValidationResult[] {
+    const reconciliacion = reconciliarPagosPPD(results);
+    const facturaPorUuid = new Map<string, ReconciliacionFactura>();
+    for (const f of reconciliacion.facturas) facturaPorUuid.set(String(f.uuid || '').toUpperCase(), f);
+    const repPorUuid = new Map<string, ReconciliacionREP>();
+    for (const rep of reconciliacion.reps) repPorUuid.set(String(rep.uuid || '').toUpperCase(), rep);
+
+    const REASONS_GESTIONADAS_AQUI = new Set([
+        'PPD sin complemento detectado',
+        'PPD con complemento presente pero inválido',
+        'REVISAR_FECHA',
+        'REVISAR_MONEDA',
+        'COMPLEMENTO_FUERA_DE_PERIODO',
+        'SIN HALLAZGOS FISCALES',
+    ]);
+
+    return results.map((r) => {
+        const uuid = String(r.uuid || '').toUpperCase();
+        const esRep = String(r.tipoCFDI || '').toUpperCase() === 'P';
+
+        if (esRep) {
+            const repInfo = repPorUuid.get(uuid);
+            if (!repInfo) return r;
+            const legacyStatus = repInfo.estado === 'RELACIONADO' ? 'COMPLETO'
+                : repInfo.estado === 'DUPLICADO' ? 'DUPLICADO'
+                : 'UUID_RELACIONADO_NO_ENCONTRADO';
+            return {
+                ...r,
+                paymentComplementStatus: legacyStatus,
+                pagosRelacionadosEstado: repInfo.estado,
+                pagosRelacionadosObservacion: repInfo.observacion,
+            };
+        }
+
+        const facturaInfo = facturaPorUuid.get(uuid);
+        if (!facturaInfo) return r; // fuera de alcance (Nómina, Traslado, Notas de Crédito, etc.)
+
+        const reasons = (r.fiscalRiskReason || '')
+            .split(' | ')
+            .filter(x => x && !REASONS_GESTIONADAS_AQUI.has(x));
+
+        let paymentComplementStatus: string;
+        let paymentMethodStatus: string | undefined = r.paymentMethodStatus;
+        let ivaCreditabilityStatus = r.ivaCreditabilityStatus;
+        const pagosValidoNo = String(r.pagosValido || '').toUpperCase() === 'NO';
+
+        switch (facturaInfo.estado) {
+            case 'PUE':
+                paymentComplementStatus = 'NO APLICA';
+                break;
+            case 'SIN_EVIDENCIA_REP':
+                paymentComplementStatus = 'SIN_COMPLEMENTO';
+                paymentMethodStatus = 'PPD_SIN_COMPLEMENTO';
+                reasons.push('PPD sin complemento detectado');
+                break;
+            case 'REQUIERE_REVISION_FECHA':
+                paymentComplementStatus = 'REVISAR_FECHA';
+                paymentMethodStatus = 'PPD_REVISAR_COMPLEMENTO';
+                reasons.push('REVISAR_FECHA');
+                break;
+            case 'REQUIERE_REVISION_MONEDA':
+                paymentComplementStatus = 'REVISAR_MONEDA';
+                paymentMethodStatus = 'PPD_REVISAR_COMPLEMENTO';
+                reasons.push('REVISAR_MONEDA');
+                break;
+            case 'PARCIAL':
+            case 'LIQUIDADA':
+            default:
+                paymentComplementStatus = facturaInfo.fueraDePeriodo ? 'COMPLEMENTO_FUERA_DE_PERIODO' : 'COMPLETO';
+                paymentMethodStatus = pagosValidoNo ? 'PPD_REVISAR_COMPLEMENTO' : 'PPD_CON_COMPLEMENTO';
+                if (facturaInfo.fueraDePeriodo) reasons.push('COMPLEMENTO_FUERA_DE_PERIODO');
+                if (r.direccionCFDI !== 'EMITIDO' && !pagosValidoNo && (r.ivaTraslado || 0) > 0 && r.isValid) {
+                    ivaCreditabilityStatus = 'ACREDITABLE';
+                }
+                break;
+        }
+
+        const esNoUsable = String(r.resultado || '').includes('NO USABLE');
+        const isCritical = ivaCreditabilityStatus === 'NO_ACREDITABLE';
+        const fiscalRiskLevel: ValidationResult['fiscalRiskLevel'] =
+            (isCritical || esNoUsable) ? 'ROJO' : (reasons.length > 0 ? 'AMARILLO' : 'VERDE');
+
+        return {
+            ...r,
+            paymentComplementStatus,
+            paymentMethodStatus,
+            ivaCreditabilityStatus,
+            fiscalRiskLevel,
+            fiscalRiskReason: reasons.join(' | ') || 'SIN HALLAZGOS FISCALES',
+            pagosRelacionadosEstado: facturaInfo.estado,
+            pagosRelacionadosTotalPagado: facturaInfo.totalPagado,
+            pagosRelacionadosSaldoInsoluto: facturaInfo.saldoInsoluto,
+            pagosRelacionadosObservacion: facturaInfo.observacion,
+            pagosRelacionadosHistoricamenteExento: facturaInfo.pagoHistoricamenteExento || false,
+        };
+    });
 }

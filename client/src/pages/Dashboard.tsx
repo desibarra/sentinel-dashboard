@@ -8,7 +8,7 @@ import { CheckCircle2, AlertCircle, XCircle, TrendingUp, FileText, DollarSign, D
 import { Button } from "@/components/ui/button";
 import UploadZone, { UploadedFile } from "@/components/UploadZone";
 import { useXMLValidator } from "@/hooks/useXMLValidator";
-import { ValidationResult, contarEstatusSAT } from "@/lib/cfdiEngine";
+import { ValidationResult, contarEstatusSAT, aplicarConciliacionPagos, reconciliarPagosPPD, mergeAndReconcileResults } from "@/lib/cfdiEngine";
 import { exportToExcel, ExportProgressEvent } from "@/lib/excelExporter";
 import { resolverClasificacionDireccion } from "@/lib/direccionCFDI";
 import { toast } from "sonner";
@@ -205,9 +205,14 @@ export default function Dashboard() {
       const cached = await loadSessionCache(currentCompany.id);
       if (cancelled || !cached || cached.results.length === 0) return;
 
-      setResults(cached.results);
+      // Se re-ejecuta la conciliación central sobre el acumulado restaurado:
+      // garantiza que el estado de pago (PPD↔REP) sea el mismo que vería el
+      // usuario si acabara de terminar de cargar estos mismos XML, incluso si
+      // la sesión guardada es de antes de un cambio en las reglas.
+      const resultadosConciliados = aplicarConciliacionPagos(cached.results);
+      setResults(resultadosConciliados);
       setHasValidatedResults(true);
-      setXmlCount(cached.results.length);
+      setXmlCount(resultadosConciliados.length);
 
       const age = await getCacheAge(currentCompany.id);
       if (cancelled) return;
@@ -308,23 +313,24 @@ export default function Dashboard() {
         sentinelStageLog("validacion_fin", { count: validationResults.length });
       setProcessingPhase(null);
 
-      // --- FILTRO DE DESDUPLICACIÓN ---
-      // Evitar que archivos con el mismo UUID se agreguen si ya están en la vista actual
-      const existingUUIDs = new Set(results.map(r => r.uuid));
-      const uniqueNewResults = validationResults.filter(r => !existingUUIDs.has(r.uuid));
-      const skippedCount = validationResults.length - uniqueNewResults.length;
-
-      const newResults = [...results, ...uniqueNewResults];
+      // --- FILTRO DE DESDUPLICACIÓN + CONCILIACIÓN CENTRAL (cargas sucesivas) ---
+      // mergeAndReconcileResults (cfdiEngine.ts) deduplica por UUID contra la
+      // vista actual y luego ejecuta la conciliación central UNA sola vez
+      // sobre el acumulado COMPLETO: esto actualiza retroactivamente facturas
+      // PPD cargadas en lotes anteriores cuando su REP llega en este lote (y
+      // viceversa). No existen dos motores con estados contradictorios — es
+      // la MISMA función que usa el Excel y los resúmenes.
+      const { combinado: newResults, agregados, omitidosPorDuplicado: skippedCount } = mergeAndReconcileResults(results, validationResults);
       setResults(newResults);
       setHasValidatedResults(true);
 
       // Actualizar contador informativo solo con los nuevos reales
-      const newCount = incrementXMLCount(uniqueNewResults.length);
+      const newCount = incrementXMLCount(agregados);
       setXmlCount(newCount);
 
 
 
-      // Persistir en sesión (sin XML crudos)
+      // Persistir en sesión (sin XML crudos) — ya con la conciliación aplicada.
 
       sentinelStageLog("persistencia_indexeddb_inicio", { count: newResults.length });
       saveSessionCache(currentCompany.id, newResults).then(status => {
@@ -413,7 +419,9 @@ export default function Dashboard() {
 
   const handleLoadHistory = (history: ValidationHistory) => {
 
-    setResults(history.results || []);
+    // Se recalcula con la función central al restaurar un histórico, para
+    // que refleje siempre el mismo resultado que vería una carga nueva.
+    setResults(aplicarConciliacionPagos(history.results || []));
 
     setHasValidatedResults(true);
 
@@ -533,7 +541,8 @@ export default function Dashboard() {
     const usables = visibleResults.filter(r => r.resultado.includes("🟢")).length;
     const alertas = visibleResults.filter(r => r.resultado.includes("🟡")).length;
     const noUsable = visibleResults.filter(r => r.resultado.includes("🔴")).length;
-    const noValidadosSAT = contarEstatusSAT(visibleResults).noConfirmados;
+    const conteoSAT = contarEstatusSAT(visibleResults);
+    const noValidadosSAT = conteoSAT.noConfirmados;
     // Salud ponderada: 🟢 = 100%, 🟡 = 50%, 🔴 = 0%, No validado excluido
     const totalClasificados = usables + alertas + noUsable;
     const salud = totalClasificados > 0 ? Math.round(((usables + alertas * 0.5) / totalClasificados) * 100) : 100;
@@ -547,10 +556,46 @@ export default function Dashboard() {
       alertas,
       noUsable,
       noValidadosSAT,
+      repExcluidosSAT: conteoSAT.repExcluidos,
       salud,
       montoRiesgo,
       totalMonto: visibleResults.reduce((sum, r) => sum + r.total, 0),
       totalIVA: visibleResults.reduce((sum, r) => sum + r.ivaTraslado, 0),
+    };
+  })();
+
+  // Conciliación PPD↔REP — MISMA función central que usan Resumen, RESUMEN
+  // EJECUTIVO y Excel (reconciliarPagosPPD, cfdiEngine.ts). La pantalla nunca
+  // calcula sus propios totales de forma independiente.
+  const conciliacionPPD = (() => {
+    const { facturas, reps } = reconciliarPagosPPD(visibleResults);
+    const porEstado = {
+      PUE: facturas.filter(f => f.estado === 'PUE').length,
+      SIN_EVIDENCIA_REP: facturas.filter(f => f.estado === 'SIN_EVIDENCIA_REP').length,
+      PARCIAL: facturas.filter(f => f.estado === 'PARCIAL').length,
+      LIQUIDADA: facturas.filter(f => f.estado === 'LIQUIDADA').length,
+      REQUIERE_REVISION_MONEDA: facturas.filter(f => f.estado === 'REQUIERE_REVISION_MONEDA').length,
+      REQUIERE_REVISION_FECHA: facturas.filter(f => f.estado === 'REQUIERE_REVISION_FECHA').length,
+    };
+    // Informativo, NUNCA un estado de pago propio: REP con FechaPago
+    // comprobada anterior al 01/09/2018 (evaluarObligacionREP). El documento
+    // sigue contando como LIQUIDADA/PARCIAL según el dinero reconciliado.
+    const pagosHistoricamenteExentos = facturas.filter(f => f.pagoHistoricamenteExento).length;
+    const repsPorEstado = {
+      RELACIONADO: reps.filter(r => r.estado === 'RELACIONADO').length,
+      SIN_FACTURA_RELACIONADA: reps.filter(r => r.estado === 'SIN_FACTURA_RELACIONADA').length,
+      RECHAZADO_ERROR: reps.filter(r => r.estado === 'RECHAZADO_ERROR').length,
+      DUPLICADO: reps.filter(r => r.estado === 'DUPLICADO').length,
+    };
+    const requiereRevision = porEstado.REQUIERE_REVISION_MONEDA + porEstado.REQUIERE_REVISION_FECHA;
+    return {
+      porEstado,
+      repsPorEstado,
+      pagosHistoricamenteExentos,
+      // "Facturas PPD = sin evidencia + parciales + liquidadas + requieren revisión"
+      totalFacturasPPD: porEstado.SIN_EVIDENCIA_REP + porEstado.PARCIAL + porEstado.LIQUIDADA + requiereRevision,
+      // "REP cargados = relacionados + huérfanos + rechazados + duplicados"
+      totalREPCargados: repsPorEstado.RELACIONADO + repsPorEstado.SIN_FACTURA_RELACIONADA + repsPorEstado.RECHAZADO_ERROR + repsPorEstado.DUPLICADO,
     };
   })();
 
@@ -1715,6 +1760,76 @@ export default function Dashboard() {
           </Card>
 
         </div>
+
+
+
+        {/* Conciliación PPD ↔ REP — mismo resultado central que Resumen, RESUMEN EJECUTIVO y Excel */}
+        {stats.total > 0 && (
+          <Card className="border-0 shadow-sm dark:bg-slate-800 dark:border-slate-700 mb-8">
+            <CardHeader>
+              <CardTitle className="text-lg dark:text-slate-100">Conciliación de Pagos PPD ↔ REP</CardTitle>
+              <CardDescription className="dark:text-slate-400">
+                Facturas PPD = sin evidencia + parciales + liquidadas + requieren revisión = <strong>{conciliacionPPD.totalFacturasPPD}</strong>
+                {' · '}
+                REP cargados = relacionados + huérfanos + rechazados + duplicados = <strong>{conciliacionPPD.totalREPCargados}</strong>
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+                <div className="rounded-xl border p-3 text-center dark:border-slate-700">
+                  <p className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1">PUE</p>
+                  <p className="text-2xl font-black text-slate-800 dark:text-slate-100">{conciliacionPPD.porEstado.PUE}</p>
+                </div>
+                <div className="rounded-xl border p-3 text-center dark:border-slate-700">
+                  <p className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1">PPD sin evidencia</p>
+                  <p className="text-2xl font-black text-amber-700 dark:text-amber-400">{conciliacionPPD.porEstado.SIN_EVIDENCIA_REP}</p>
+                </div>
+                <div className="rounded-xl border p-3 text-center dark:border-slate-700">
+                  <p className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1">Pago parcial</p>
+                  <p className="text-2xl font-black text-amber-700 dark:text-amber-400">{conciliacionPPD.porEstado.PARCIAL}</p>
+                </div>
+                <div className="rounded-xl border p-3 text-center dark:border-slate-700">
+                  <p className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1">Liquidada</p>
+                  <p className="text-2xl font-black text-emerald-700 dark:text-emerald-400">{conciliacionPPD.porEstado.LIQUIDADA}</p>
+                </div>
+                <div className="rounded-xl border p-3 text-center dark:border-slate-700">
+                  <p className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1">Requiere revisión (moneda)</p>
+                  <p className="text-2xl font-black text-orange-700 dark:text-orange-400">{conciliacionPPD.porEstado.REQUIERE_REVISION_MONEDA}</p>
+                </div>
+                <div className="rounded-xl border p-3 text-center dark:border-slate-700">
+                  <p className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1">Requiere revisión (fecha)</p>
+                  <p className="text-2xl font-black text-orange-700 dark:text-orange-400">{conciliacionPPD.porEstado.REQUIERE_REVISION_FECHA}</p>
+                </div>
+                <div className="rounded-xl border p-3 text-center dark:border-slate-700" title="Pago recibido antes de la obligatoriedad general del REP (01/09/2018) — informativo. No cambia el estado de pago (ya contado como Liquidada/Parcial).">
+                  <p className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1">Pago antes de la obligatoriedad del REP (informativo)</p>
+                  <p className="text-2xl font-black text-slate-500 dark:text-slate-400">{conciliacionPPD.pagosHistoricamenteExentos}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
+                <div className="rounded-xl border p-3 text-center dark:border-slate-700">
+                  <p className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1">REP relacionados</p>
+                  <p className="text-2xl font-black text-emerald-700 dark:text-emerald-400">{conciliacionPPD.repsPorEstado.RELACIONADO}</p>
+                </div>
+                <div className="rounded-xl border p-3 text-center dark:border-slate-700">
+                  <p className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1">REP sin factura en este análisis</p>
+                  <p className="text-2xl font-black text-amber-700 dark:text-amber-400">{conciliacionPPD.repsPorEstado.SIN_FACTURA_RELACIONADA}</p>
+                </div>
+                <div className="rounded-xl border p-3 text-center dark:border-slate-700">
+                  <p className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1">REP rechazados (error)</p>
+                  <p className="text-2xl font-black text-red-700 dark:text-red-400">{conciliacionPPD.repsPorEstado.RECHAZADO_ERROR}</p>
+                </div>
+                <div className="rounded-xl border p-3 text-center dark:border-slate-700">
+                  <p className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1">REP duplicados</p>
+                  <p className="text-2xl font-black text-slate-500 dark:text-slate-400">{conciliacionPPD.repsPorEstado.DUPLICADO}</p>
+                </div>
+                <div className="rounded-xl border p-3 text-center dark:border-slate-700">
+                  <p className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1">REP excluido de consulta SAT</p>
+                  <p className="text-2xl font-black text-slate-500 dark:text-slate-400">{stats.repExcluidosSAT}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
 
 
