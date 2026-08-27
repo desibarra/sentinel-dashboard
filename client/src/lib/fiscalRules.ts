@@ -79,8 +79,20 @@ export function applyFiscalRules(r: ValidationResult): ValidationResult {
   // IVA acreditable heuristic (restricción: solo NO_ACREDITABLE por falta de complemento o pagos inválidos)
   // ✅ CORRECCIÓN DE ESPEJO CONTABLE: la acreditación de IVA solo aplica a CFDI RECIBIDOS.
   // Un CFDI EMITIDO (la empresa vende) genera IVA TRASLADADO a cargo, no acreditable para la empresa.
+  // ✅ FASE 1 — CORRECCIÓN (auditoría multiempresa, bloqueador #1): un CFDI
+  // 'REQUIERE_REVISION' (el RFC de la empresa seleccionada no coincide ni con
+  // el emisor ni con el receptor — p. ej. un CFDI de un tercero cargado por
+  // accidente junto con los de la empresa auditada) NO debe entrar a la
+  // misma cadena que 'RECIBIDO'. Antes, si ese CFDI ajeno tenía IVA
+  // trasladado y era estructuralmente válido, terminaba marcado ACREDITABLE
+  // — como si la empresa pudiera acreditar el IVA de una transacción que no
+  // le pertenece. Se usa la semántica ya existente 'POR_DETERMINAR' (no se
+  // inventa un estado nuevo): nunca se afirma ACREDITABLE ni NO_ACREDITABLE
+  // sobre un documento del que ni siquiera se sabe si es de la empresa.
   if (res.direccionCFDI === 'EMITIDO') {
     res.ivaCreditabilityStatus = (res.ivaTraslado || 0) > 0 ? 'TRASLADADO' : 'NO_APLICA';
+  } else if (res.direccionCFDI !== 'RECIBIDO') {
+    res.ivaCreditabilityStatus = 'POR_DETERMINAR';
   } else if (res.paymentMethodStatus === 'PPD_SIN_COMPLEMENTO' || res.paymentComplementStatus === 'SIN_COMPLEMENTO') {
     res.ivaCreditabilityStatus = 'NO_ACREDITABLE';
   } else if (String(res.pagosValido || '').toUpperCase() === 'NO') {

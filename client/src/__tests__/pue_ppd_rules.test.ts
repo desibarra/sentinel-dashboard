@@ -27,7 +27,9 @@ describe('PUE vs PPD rules', () => {
   });
 
   it('clasifica PPD_REVISAR_COMPLEMENTO cuando pagos presentes pero inválidos', () => {
-    const r = { metodoPago: 'PPD', pagosPresente: 'SI', pagosValido: 'NO', ivaTraslado: 160, isValid: true } as unknown as ValidationResult;
+    // direccionCFDI: 'RECIBIDO' — ver nota FASE 1 en fiscalRules.test.ts:
+    // siempre resuelto antes de applyFiscalRules en el flujo real.
+    const r = { metodoPago: 'PPD', pagosPresente: 'SI', pagosValido: 'NO', ivaTraslado: 160, isValid: true, direccionCFDI: 'RECIBIDO' } as unknown as ValidationResult;
     const out = applyFiscalRules(r);
     expect(out.paymentMethodStatus).toBe('PPD_REVISAR_COMPLEMENTO');
     expect(out.paymentComplementStatus).toBe('SIN_COMPLEMENTO');
@@ -35,7 +37,7 @@ describe('PUE vs PPD rules', () => {
   });
 
   it('clasifica PPD_SIN_COMPLEMENTO cuando no hay pagos presentes', () => {
-    const r = { metodoPago: 'PPD', pagosPresente: 'NO', pagosValido: 'NO', ivaTraslado: 160, isValid: true } as unknown as ValidationResult;
+    const r = { metodoPago: 'PPD', pagosPresente: 'NO', pagosValido: 'NO', ivaTraslado: 160, isValid: true, direccionCFDI: 'RECIBIDO' } as unknown as ValidationResult;
     const out = applyFiscalRules(r);
     expect(out.paymentMethodStatus).toBe('PPD_SIN_COMPLEMENTO');
     expect(out.paymentComplementStatus).toBe('SIN_COMPLEMENTO');
