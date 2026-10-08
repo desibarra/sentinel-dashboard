@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { tokenService, type TokenData, type TokenStatus } from "@/services/tokenService";
+import { tokenService, type CreateAccessTokenInput, type TokenData, type TokenStatus } from "@/services/tokenService";
 import {
     Activity,
     Building2,
@@ -11,6 +11,7 @@ import {
     Flame,
     KeyRound,
     LogOut,
+    MessageCircle,
     MoreHorizontal,
     Pause,
     PauseCircle,
@@ -31,6 +32,14 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
 
 type FilterKey = "all" | TokenStatus | "hot" | "urgent";
 
@@ -175,6 +184,17 @@ export default function AdminTokens() {
     const [copiedId, setCopiedId] = useState<string | null>(null);
     const [search, setSearch] = useState("");
     const [statusFilter, setStatusFilter] = useState<FilterKey>("all");
+    const [createDialogOpen, setCreateDialogOpen] = useState(false);
+    const [createLoading, setCreateLoading] = useState(false);
+    const [createdToken, setCreatedToken] = useState<TokenData | null>(null);
+    const [createForm, setCreateForm] = useState<CreateAccessTokenInput>({
+        name: "",
+        company: "",
+        email: "",
+        phone: "",
+        plan: "Básico",
+        days: 30,
+    });
 
     useEffect(() => {
         if (authenticated) void loadTokens();
@@ -246,6 +266,40 @@ export default function AdminTokens() {
         }
     };
 
+    const openCreateDialog = () => {
+        setCreateForm({ name: "", company: "", email: "", phone: "", plan: "Básico", days: 30 });
+        setCreatedToken(null);
+        setCreateDialogOpen(true);
+    };
+
+    const handleCreateToken = async (event: FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+        setCreateLoading(true);
+        try {
+            const token = await tokenService.createAccessToken(createForm, password);
+            setTokens(previous => [token, ...previous]);
+            setCreatedToken(token);
+            toast.success("Token activo creado.");
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : "No se pudo crear el token.");
+        } finally {
+            setCreateLoading(false);
+        }
+    };
+
+    const copyText = async (text: string, successMessage: string) => {
+        try {
+            await navigator.clipboard.writeText(text);
+            toast.success(successMessage);
+        } catch {
+            toast.error("No se pudo copiar al portapapeles.");
+        }
+    };
+
+    const whatsappMessage = createdToken
+        ? `Hola ${tokenName(createdToken)}, te damos la bienvenida a Sentinel Express.\n\nIngresa a tu acceso aquí: https://sentinel.wibby.cloud/acceso?token=${encodeURIComponent(createdToken.id)}\n\nTu token de acceso: ${createdToken.id}\nVigente hasta: ${formatDate(createdToken.expiresAt)}.`
+        : "";
+
     const copyLink = (tokenCode: string, id: string) => {
         const url = `${window.location.origin}/acceso?token=${tokenCode}`;
         navigator.clipboard.writeText(url);
@@ -301,8 +355,6 @@ export default function AdminTokens() {
         { key: "expired", label: "Vencidos", count: stats.expired, activeClass: "border-rose-400/30 bg-rose-400/10 text-rose-300" },
         { key: "hot", label: "Leads calientes", count: stats.hot, activeClass: "border-orange-400/30 bg-orange-400/10 text-orange-300" },
     ];
-
-    const showCreateNotice = () => toast.info("La creación directa de tokens no está disponible desde este panel.");
 
     const renderActions = (token: TokenData) => (
         <div className="flex items-center gap-1.5">
@@ -410,7 +462,7 @@ export default function AdminTokens() {
                         </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
-                        <button type="button" onClick={showCreateNotice} className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#F5C542] px-3.5 text-xs font-extrabold text-[#0B1F3A] transition-colors duration-150 hover:bg-[#ffda69] sm:px-4 sm:text-sm">
+                        <button type="button" onClick={openCreateDialog} className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#F5C542] px-3.5 text-xs font-extrabold text-[#0B1F3A] transition-colors duration-150 hover:bg-[#ffda69] sm:px-4 sm:text-sm">
                             <Plus className="h-4 w-4" />
                             <span className="hidden sm:inline">Nuevo token</span>
                             <span className="sm:hidden">Nuevo</span>
@@ -513,7 +565,7 @@ export default function AdminTokens() {
                             <h3 className="text-base font-bold text-white">{safeTokens.length === 0 ? "Aún no hay solicitudes de acceso" : "No encontramos resultados"}</h3>
                             <p className="mt-2 max-w-sm text-sm text-slate-400">{safeTokens.length === 0 ? "Cuando llegue una solicitud, podrás revisar y administrar el acceso desde aquí." : "Prueba con otro término o cambia los filtros seleccionados."}</p>
                             {safeTokens.length === 0 ? (
-                                <button type="button" onClick={showCreateNotice} className="mt-6 inline-flex h-10 items-center gap-2 rounded-xl bg-[#F5C542] px-4 text-sm font-extrabold text-[#0B1F3A] transition-colors duration-150 hover:bg-[#ffda69]">
+                                <button type="button" onClick={openCreateDialog} className="mt-6 inline-flex h-10 items-center gap-2 rounded-xl bg-[#F5C542] px-4 text-sm font-extrabold text-[#0B1F3A] transition-colors duration-150 hover:bg-[#ffda69]">
                                     <Plus className="h-4 w-4" /> Crear primer token
                                 </button>
                             ) : (
@@ -625,6 +677,159 @@ export default function AdminTokens() {
                     <span>{stats.pending} solicitudes pendientes de revisión</span>
                 </footer>
             </div>
+
+            <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+                <DialogContent className="max-h-[90vh] overflow-y-auto border-white/[0.08] bg-[#0F2340] text-slate-100 sm:max-w-xl">
+                    {createdToken ? (
+                        <>
+                            <DialogHeader className="pr-8">
+                                <div className="mb-1 flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-400/10 text-emerald-300">
+                                    <CheckCircle2 className="h-6 w-6" />
+                                </div>
+                                <DialogTitle className="text-xl font-bold text-white">Token creado y activo</DialogTitle>
+                                <DialogDescription className="text-slate-400">
+                                    Comparte este token con {tokenName(createdToken)}. Solo se mostrará completo en este momento.
+                                </DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-4">
+                                <div className="rounded-xl border border-[#F5C542]/20 bg-[#0A1628] p-4">
+                                    <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Token de acceso</p>
+                                    <code className="block break-all font-mono text-sm font-bold tracking-wide text-[#F5C542] sm:text-base">{createdToken.id}</code>
+                                    <button
+                                        type="button"
+                                        onClick={() => void copyText(createdToken.id, "Token copiado.")}
+                                        className="mt-3 inline-flex h-9 items-center gap-2 rounded-lg border border-white/[0.08] px-3 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/[0.06]"
+                                    >
+                                        <Copy className="h-3.5 w-3.5" /> Copiar token
+                                    </button>
+                                </div>
+                                <div className="rounded-xl border border-white/[0.06] bg-[#0A1628]/70 p-4 text-xs leading-relaxed text-slate-300">
+                                    <p className="mb-2 font-semibold text-white">Mensaje para WhatsApp</p>
+                                    <p className="whitespace-pre-wrap break-words">{whatsappMessage}</p>
+                                </div>
+                            </div>
+                            <DialogFooter className="gap-2 sm:gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => void copyText(whatsappMessage, "Mensaje de WhatsApp copiado.")}
+                                    className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[#10B981] px-4 text-sm font-bold text-[#06251D] transition-colors hover:bg-emerald-300"
+                                >
+                                    <MessageCircle className="h-4 w-4" /> Copiar mensaje de WhatsApp
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setCreateDialogOpen(false)}
+                                    className="inline-flex h-10 items-center justify-center rounded-xl border border-white/[0.08] px-4 text-sm font-semibold text-slate-200 transition-colors hover:bg-white/[0.06]"
+                                >
+                                    Cerrar
+                                </button>
+                            </DialogFooter>
+                        </>
+                    ) : (
+                        <>
+                            <DialogHeader className="pr-8">
+                                <DialogTitle className="text-xl font-bold text-white">Crear nuevo token</DialogTitle>
+                                <DialogDescription className="text-slate-400">
+                                    El token se generará de forma segura y quedará activo al crearse.
+                                </DialogDescription>
+                            </DialogHeader>
+                            <form onSubmit={event => void handleCreateToken(event)} className="space-y-4">
+                                <div>
+                                    <label htmlFor="new-token-name" className="mb-1.5 block text-xs font-semibold text-slate-300">Nombre <span className="text-rose-300">*</span></label>
+                                    <input
+                                        id="new-token-name"
+                                        required
+                                        autoFocus
+                                        maxLength={160}
+                                        value={createForm.name}
+                                        onChange={event => setCreateForm(form => ({ ...form, name: event.target.value }))}
+                                        className="h-10 w-full rounded-lg border border-white/[0.08] bg-[#0A1628] px-3 text-sm text-white outline-none transition-colors focus:border-[#F5C542]/50"
+                                    />
+                                </div>
+                                <div className="grid gap-4 sm:grid-cols-2">
+                                    <div>
+                                        <label htmlFor="new-token-company" className="mb-1.5 block text-xs font-semibold text-slate-300">Empresa</label>
+                                        <input
+                                            id="new-token-company"
+                                            maxLength={160}
+                                            value={createForm.company}
+                                            onChange={event => setCreateForm(form => ({ ...form, company: event.target.value }))}
+                                            className="h-10 w-full rounded-lg border border-white/[0.08] bg-[#0A1628] px-3 text-sm text-white outline-none transition-colors focus:border-[#F5C542]/50"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label htmlFor="new-token-email" className="mb-1.5 block text-xs font-semibold text-slate-300">Correo</label>
+                                        <input
+                                            id="new-token-email"
+                                            type="email"
+                                            maxLength={254}
+                                            value={createForm.email}
+                                            onChange={event => setCreateForm(form => ({ ...form, email: event.target.value }))}
+                                            className="h-10 w-full rounded-lg border border-white/[0.08] bg-[#0A1628] px-3 text-sm text-white outline-none transition-colors focus:border-[#F5C542]/50"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label htmlFor="new-token-phone" className="mb-1.5 block text-xs font-semibold text-slate-300">Teléfono</label>
+                                        <input
+                                            id="new-token-phone"
+                                            type="tel"
+                                            maxLength={40}
+                                            value={createForm.phone}
+                                            onChange={event => setCreateForm(form => ({ ...form, phone: event.target.value }))}
+                                            className="h-10 w-full rounded-lg border border-white/[0.08] bg-[#0A1628] px-3 text-sm text-white outline-none transition-colors focus:border-[#F5C542]/50"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label htmlFor="new-token-plan" className="mb-1.5 block text-xs font-semibold text-slate-300">Plan</label>
+                                        <select
+                                            id="new-token-plan"
+                                            value={createForm.plan}
+                                            onChange={event => setCreateForm(form => ({ ...form, plan: event.target.value }))}
+                                            className="h-10 w-full rounded-lg border border-white/[0.08] bg-[#0A1628] px-3 text-sm text-white outline-none transition-colors focus:border-[#F5C542]/50"
+                                        >
+                                            <option value="Básico">Básico</option>
+                                            <option value="Pro Professional">Pro Professional</option>
+                                            <option value="Enterprise">Enterprise</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label htmlFor="new-token-days" className="mb-1.5 block text-xs font-semibold text-slate-300">Vigencia en días</label>
+                                        <input
+                                            id="new-token-days"
+                                            type="number"
+                                            min={1}
+                                            max={3650}
+                                            step={1}
+                                            required
+                                            value={createForm.days}
+                                            onChange={event => setCreateForm(form => ({ ...form, days: Number(event.target.value) }))}
+                                            className="h-10 w-full rounded-lg border border-white/[0.08] bg-[#0A1628] px-3 text-sm text-white outline-none transition-colors focus:border-[#F5C542]/50"
+                                        />
+                                    </div>
+                                </div>
+                                <DialogFooter className="gap-2 pt-2 sm:gap-2">
+                                    <button
+                                        type="button"
+                                        disabled={createLoading}
+                                        onClick={() => setCreateDialogOpen(false)}
+                                        className="inline-flex h-10 items-center justify-center rounded-xl border border-white/[0.08] px-4 text-sm font-semibold text-slate-200 transition-colors hover:bg-white/[0.06] disabled:opacity-50"
+                                    >
+                                        Cancelar
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={createLoading || !createForm.name.trim()}
+                                        className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[#F5C542] px-4 text-sm font-extrabold text-[#0B1F3A] transition-colors hover:bg-[#ffda69] disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        {createLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                                        {createLoading ? "Creando…" : "Crear token activo"}
+                                    </button>
+                                </DialogFooter>
+                            </form>
+                        </>
+                    )}
+                </DialogContent>
+            </Dialog>
         </main>
     );
 }

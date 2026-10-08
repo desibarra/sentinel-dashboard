@@ -1,4 +1,4 @@
-import { randomInt } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import express, { Request, Response } from "express";
 import rateLimit from "express-rate-limit";
 import { deleteStoredToken, getStoredToken, insertStoredToken, listStoredTokens, saveStoredToken, updateStoredToken } from "./tokenStore.js";
@@ -57,6 +57,61 @@ router.get("/admin-proxy", async (req: Request, res: Response) => {
 router.post("/admin-proxy", async (req: Request, res: Response) => {
     if (!requireAdminPassword(req, res)) return;
     const { action, tokenId, days, payload } = req.body ?? {};
+
+    if (action === "create-access") {
+        const name = typeof payload?.name === "string" ? payload.name.trim() : "";
+        const company = typeof payload?.company === "string" ? payload.company.trim() : "";
+        const email = typeof payload?.email === "string" ? payload.email.trim() : "";
+        const phone = typeof payload?.phone === "string" ? payload.phone.trim() : "";
+        const plan = typeof payload?.plan === "string" ? payload.plan : "";
+        const validPlans = new Set(["Básico", "Pro Professional", "Enterprise"]);
+        const requestedDays = payload?.days === undefined ? 30 : Number(payload.days);
+
+        if (!name || name.length > 160) {
+            res.status(400).json({ error: "El nombre es obligatorio." });
+            return;
+        }
+        if (company.length > 160 || email.length > 254 || phone.length > 40) {
+            res.status(400).json({ error: "Uno o más campos exceden la longitud permitida." });
+            return;
+        }
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            res.status(400).json({ error: "El correo no tiene un formato válido." });
+            return;
+        }
+        if (!validPlans.has(plan)) {
+            res.status(400).json({ error: "El plan seleccionado no es válido." });
+            return;
+        }
+        if (!Number.isInteger(requestedDays) || requestedDays < 1 || requestedDays > 3650) {
+            res.status(400).json({ error: "La vigencia debe ser un número entero entre 1 y 3650 días." });
+            return;
+        }
+
+        const createdAt = new Date();
+        const expiresAt = new Date(createdAt.getTime() + requestedDays * 86_400_000);
+        const tokenId = randomBytes(24).toString("hex");
+        const accessToken = {
+            id: tokenId,
+            name,
+            company,
+            email,
+            phone,
+            cfdiVolume: "No especificado",
+            plan,
+            status: "active",
+            createdAt: createdAt.toISOString(),
+            activatedAt: createdAt.toISOString(),
+            expiresAt: expiresAt.toISOString()
+        };
+
+        if (!await insertStoredToken(ACCESS_STORE, tokenId, accessToken)) {
+            res.status(409).json({ error: "No se pudo crear un token único. Intenta de nuevo." });
+            return;
+        }
+        res.status(201).json({ success: true, token: accessToken });
+        return;
+    }
 
     if (action === "create" || action === "toggle" || (action === "delete" && payload)) {
         const data = payload ?? {};

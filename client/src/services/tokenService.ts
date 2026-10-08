@@ -21,6 +21,7 @@ export interface TokenData {
     createdAt: string;
     activatedAt?: string;
     expiresAt?: string;
+    plan?: string;
     // --- TELEMETRÍA MÍNIMA VENDIBLE ---
     loginsCount?: number;
     lastLoginAt?: string;
@@ -32,6 +33,29 @@ export interface TokenData {
 const ADMIN_ENDPOINT = "/api/functions/admin-proxy";
 const VALIDATE_ENDPOINT = "/api/functions/validate-token";
 const TRACK_ENDPOINT = "/api/functions/track-event";
+
+export interface CreateAccessTokenInput {
+    name: string;
+    company: string;
+    email: string;
+    phone: string;
+    plan: string;
+    days: number;
+}
+
+function isTokenData(value: unknown): value is TokenData {
+    if (typeof value !== "object" || value === null) return false;
+    const token = value as Record<string, unknown>;
+    return typeof token.id === "string"
+        && typeof token.name === "string"
+        && (token.status === "pending" || token.status === "active" || token.status === "suspended" || token.status === "expired")
+        && typeof token.company === "string"
+        && typeof token.email === "string"
+        && typeof token.phone === "string"
+        && typeof token.cfdiVolume === "string"
+        && typeof token.createdAt === "string"
+        && typeof token.expiresAt === "string";
+}
 
 export const tokenService = {
     /** 
@@ -92,5 +116,28 @@ export const tokenService = {
             throw new Error(`Error: ${res.status}`);
         }
         return await res.json();
+    },
+
+    async createAccessToken(input: CreateAccessTokenInput, password: string): Promise<TokenData> {
+        const res = await fetch(ADMIN_ENDPOINT, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "x-admin-password": password
+            },
+            body: JSON.stringify({ action: "create-access", payload: input })
+        });
+        const response: unknown = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            const errorMessage = typeof response === "object" && response !== null
+                && "error" in response && typeof response.error === "string"
+                ? response.error
+                : `No se pudo crear el acceso (${res.status}).`;
+            throw new Error(errorMessage);
+        }
+        if (typeof response !== "object" || response === null || !("token" in response) || !isTokenData(response.token)) {
+            throw new Error("El servidor devolvió una respuesta de creación inválida.");
+        }
+        return response.token;
     }
 };

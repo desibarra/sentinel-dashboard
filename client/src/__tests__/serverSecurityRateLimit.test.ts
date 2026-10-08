@@ -137,4 +137,49 @@ describe("Express auth and public-route rate limits", () => {
         assert.equal(rateLimitedSat.status, 429);
         assert.equal(satUpstreamCalls, 0);
     });
+
+    it("rejects access-token creation without the admin password and creates active tokens server-side when authorized", async () => {
+        const payload = {
+            name: "Integration Test",
+            company: "Sentinel QA",
+            email: "integration@example.test",
+            phone: "+52 477 000 0000",
+            plan: "Pro Professional",
+            days: 30,
+            id: "client-supplied-id",
+            token: "client-supplied-token"
+        };
+        const unauthorized = await originalFetch(`${baseUrl}/api/functions/admin-proxy`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "create-access", payload })
+        });
+        assert.equal(unauthorized.status, 401);
+
+        const createdResponse = await originalFetch(`${baseUrl}/api/functions/admin-proxy`, {
+            method: "POST",
+            headers: {
+                "content-type": "application/json",
+                "x-admin-password": "temporary-test-admin-password"
+            },
+            body: JSON.stringify({ action: "create-access", payload })
+        });
+        assert.equal(createdResponse.status, 201);
+        const createdBody = await createdResponse.json() as { token: Record<string, unknown> };
+        const createdToken = createdBody.token;
+        assert.equal(typeof createdToken.id, "string");
+        assert.match(createdToken.id as string, /^[a-f0-9]{48}$/);
+        assert.equal(createdToken.status, "active");
+        assert.equal(createdToken.name, payload.name);
+        assert.equal(createdToken.company, payload.company);
+        assert.equal(createdToken.plan, payload.plan);
+        assert.equal(typeof createdToken.expiresAt, "string");
+
+        const stored = await originalFetch(`${baseUrl}/api/functions/admin-proxy`, {
+            headers: { "x-admin-password": "temporary-test-admin-password" }
+        });
+        assert.equal(stored.status, 200);
+        const storedBody = await stored.json() as { tokens: Array<{ id: string }> };
+        assert.ok(storedBody.tokens.some(token => token.id === createdToken.id));
+    });
 });
