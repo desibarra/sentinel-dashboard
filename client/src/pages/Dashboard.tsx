@@ -379,6 +379,13 @@ export default function Dashboard() {
 
       );
 
+      if (skippedCount > 0) {
+        toast.info(
+          `${skippedCount} CFDI duplicado${skippedCount === 1 ? '' : 's'} cargado${skippedCount === 1 ? '' : 's'}; ya existían y no se agregaron nuevamente.`,
+          { duration: 5000 }
+        );
+      }
+
     } catch (error) {
 
       toast.error("Error al validar los archivos XML");
@@ -2880,4 +2887,3 @@ export default function Dashboard() {
     </div>
   );
 }
-

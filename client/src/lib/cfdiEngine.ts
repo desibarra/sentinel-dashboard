@@ -116,6 +116,7 @@ export interface ValidationResult {
     giroEmpresa?: string; // ✅ Nuevo: Giro declarado de la empresa para análisis de materialidad
     deleted?: boolean;
     deletedAt?: string;
+    duplicateLoaded?: boolean;
     trazabilidadInfo?: TrazabilidadFiscalInfo;
     // ✅ FASE 2 - AUDIT FIX: Campos fiscales complementarios extraídos directamente del Comprobante
     descuentoGlobal: number;    // Atributo Descuento del Comprobante (puede diferir de Σ descuentos por concepto en edge cases)
@@ -2035,14 +2036,34 @@ export function reconciliarPagosPPD(results: ValidationResult[]): Reconciliacion
 export function mergeAndReconcileResults(
     previos: ValidationResult[],
     nuevos: ValidationResult[]
-): { combinado: ValidationResult[]; agregados: number; omitidosPorDuplicado: number } {
-    const existentes = new Set(previos.map(r => String(r.uuid || '').toUpperCase()));
-    const nuevosUnicos = nuevos.filter(r => !existentes.has(String(r.uuid || '').toUpperCase()));
+): {
+    combinado: ValidationResult[];
+    agregados: number;
+    omitidosPorDuplicado: number;
+    duplicadosCargados: ValidationResult[];
+} {
+    const uuidKey = (result: ValidationResult): string => {
+        const uuid = String(result.uuid || '').trim().toUpperCase();
+        return ['', 'NO DISPONIBLE', 'NO_DISPONIBLE', 'NO VIENE EN XML'].includes(uuid) ? '' : uuid;
+    };
+    const existentes = new Set(previos.map(uuidKey).filter(Boolean));
+    const nuevosUnicos: ValidationResult[] = [];
+    const duplicadosCargados: ValidationResult[] = [];
+    for (const result of nuevos) {
+        const uuid = uuidKey(result);
+        if (uuid && existentes.has(uuid)) {
+            duplicadosCargados.push({ ...result, duplicateLoaded: true });
+            continue;
+        }
+        nuevosUnicos.push(result);
+        if (uuid) existentes.add(uuid);
+    }
     const combinadoBruto = [...previos, ...nuevosUnicos];
     return {
         combinado: aplicarConciliacionPagos(combinadoBruto),
         agregados: nuevosUnicos.length,
         omitidosPorDuplicado: nuevos.length - nuevosUnicos.length,
+        duplicadosCargados,
     };
 }
 

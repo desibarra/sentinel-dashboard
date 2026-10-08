@@ -237,6 +237,21 @@ describe('reconciliarPagosPPD — matriz de 15 casos (auditoría PPD↔REP)', ()
     expect(reps[0].observacion).toContain('formato inválido');
   });
 
+  it('muestra como duplicado cargado el UUID repetido dentro del mismo lote y no lo agrega dos veces', () => {
+    const uuid = 'F0000000-0000-0000-0000-00000000D001';
+    const first = baseResult(uuid);
+    const repeated = { ...baseResult(uuid), fileName: 'repetido.xml' };
+
+    const result = mergeAndReconcileResults([], [first, repeated]);
+
+    expect(result.combinado).toHaveLength(1);
+    expect(result.combinado[0].fileName).toBe(first.fileName);
+    expect(result.omitidosPorDuplicado).toBe(1);
+    expect(result.duplicadosCargados).toMatchObject([
+      { fileName: 'repetido.xml', duplicateLoaded: true },
+    ]);
+  });
+
   it('9. Factura RECIBIDA con REP → reconciliación funciona igual que para emitidas', () => {
     const uuidFactura = 'F0000000-0000-0000-0000-000000000009';
     const factura = baseResult(uuidFactura, { metodoPago: 'PPD', total: 1160, direccionCFDI: 'RECIBIDO' as any, rfcEmisor: 'PROV010101PRO', rfcReceptor: EMPRESA });
