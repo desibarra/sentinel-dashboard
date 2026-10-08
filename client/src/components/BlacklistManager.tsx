@@ -253,9 +253,10 @@ export function BlacklistManager() {
 
     // Verificar si la fecha oficial de la lista SAT está obsoleta
     const isOfficiallyStale = (() => {
-        if (!localMeta.fechaOficial) return false;
+        if (!hasData) return false;
+        if (!localMeta.fechaOficial) return true;
         const diffDays = (Date.now() - new Date(localMeta.fechaOficial + 'T00:00:00').getTime()) / (1000 * 60 * 60 * 24);
-        return diffDays > 45; // umbral de 45 días para avisar que la fuente está desactualizada
+        return diffDays > STALE_THRESHOLD_DAYS;
     })();
 
     return (
@@ -299,7 +300,7 @@ export function BlacklistManager() {
                         )}
                         {hasData && (
                             <p className="text-[10px] text-slate-600 dark:text-slate-400 font-mono">
-                                Fecha oficial: {localMeta.fechaOficial ? new Date(localMeta.fechaOficial + 'T00:00:00').toLocaleDateString('es-MX') : 'No verificada'}
+                                Lista actualizada al: {localMeta.fechaOficial ? new Date(localMeta.fechaOficial + 'T00:00:00').toLocaleDateString('es-MX') : 'fecha de corte no verificada'}
                             </p>
                         )}
                         {localMeta.cargadoEl ? (
@@ -332,12 +333,14 @@ export function BlacklistManager() {
                 </div>
             )}
 
-            {/* Advertencia de fecha de corte oficial desactualizada */}
+            {/* Advertencia de fecha de corte oficial desactualizada o no verificada */}
             {isOfficiallyStale && (
                 <div className="flex items-center gap-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl px-4 py-3">
                     <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
                     <p className="text-xs text-amber-700 dark:text-amber-400 font-medium">
-                        La fuente oficial disponible tiene fecha de corte <strong>{localMeta.fechaOficial ? new Date(localMeta.fechaOficial + 'T00:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' }) : ''}</strong>.
+                        {localMeta.fechaOficial
+                            ? <>La lista está actualizada al <strong>{new Date(localMeta.fechaOficial + 'T00:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' })}</strong> y tiene más de {STALE_THRESHOLD_DAYS} días. <strong>Se recomienda actualizarla.</strong></>
+                            : <>La fecha de corte de la lista no está verificada. <strong>No se puede confirmar que los datos estén actualizados.</strong></>}
                     </p>
                 </div>
             )}
@@ -383,7 +386,7 @@ export function BlacklistManager() {
                                 </h3>
                                 <p className="text-[10px] text-slate-500 mb-4 italic font-medium">
                                     {localMeta.fechaOficial
-                                        ? `Fecha oficial del listado SAT: ${new Date(localMeta.fechaOficial + 'T00:00:00').toLocaleDateString('es-MX')}`
+                                        ? `Lista actualizada al: ${new Date(localMeta.fechaOficial + 'T00:00:00').toLocaleDateString('es-MX')}`
                                         : DATA_SOURCE_NOTE}
                                 </p>
 

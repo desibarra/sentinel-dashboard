@@ -1,14 +1,16 @@
 import os
 import re
 import csv
+import io
 import json
-import ssl
 import shutil
+import tempfile
 import urllib.request
 from datetime import datetime
 
 # Fuentes oficiales del Servicio de Administración Tributaria (SAT)
-SAT_69B_URL = "http://omawww.sat.gob.mx/cifras_sat/Documents/Listado_Completo_69-B.csv"
+SAT_69B_URL = "https://omawww.sat.gob.mx/cifras_sat/Documents/Listado_Completo_69-B.csv"
+MINIMUM_VALID_RECORDS = 1000
 
 PUBLIC_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "client", "public"))
 CSV_FILE = os.path.join(PUBLIC_DIR, "blacklists", "Listado_69-B.csv")
@@ -105,15 +107,32 @@ def dedupe_records(records):
     return out
 
 
-def write_outputs(records, fecha_oficial, force_csv=True):
-    os.makedirs(os.path.join(PUBLIC_DIR, "blacklists"), exist_ok=True)
+def validate_download(text: str, today=None):
+    """Reject missing, future-dated, or implausibly incomplete official lists."""
+    fecha_oficial = extract_official_date(text)
+    if not fecha_oficial:
+        raise ValueError("No se detectó una fecha oficial de actualización en la lista del SAT.")
 
-    if force_csv or not os.path.exists(CSV_FILE):
-        with open(CSV_FILE, "w", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["RFC", "Razon Social", "Situacion", "FechaPublicacion"])
-            for rfc, razon, situ, fecha in records:
-                writer.writerow([rfc, razon, situ, fecha or ""])
+    cutoff = datetime.strptime(fecha_oficial, "%Y-%m-%d").date()
+    current_date = today or datetime.now().date()
+    if cutoff > current_date:
+        raise ValueError(f"La fecha oficial de corte {fecha_oficial} está en el futuro.")
+
+    records = dedupe_records(parse_blacklist(text))
+    if len(records) < MINIMUM_VALID_RECORDS:
+        raise ValueError(
+            f"La lista contiene {len(records)} registros válidos; "
+            f"se requieren al menos {MINIMUM_VALID_RECORDS} para considerarla completa."
+        )
+    return records, fecha_oficial
+
+
+def _build_outputs(records, fecha_oficial):
+    csv_buffer = io.StringIO(newline="")
+    writer = csv.writer(csv_buffer)
+    writer.writerow(["RFC", "Razon Social", "Situacion", "FechaPublicacion"])
+    for rfc, razon, situ, fecha in records:
+        writer.writerow([rfc, razon, situ, fecha or ""])
 
     registros = []
     for rfc, razon, situ, fecha in records:
@@ -127,68 +146,81 @@ def write_outputs(records, fecha_oficial, force_csv=True):
         "fuente": "SAT - Listado 69-B (Art. 69-B CFF)",
         "registros": registros,
     }
-    with open(JSON_FILE, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+    json_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return csv_buffer.getvalue(), json_text
+
+
+def write_outputs(records, fecha_oficial):
+    os.makedirs(os.path.join(PUBLIC_DIR, "blacklists"), exist_ok=True)
+    csv_text, json_text = _build_outputs(records, fecha_oficial)
+    staged_paths = {}
+    backup_paths = {}
+    replaced_paths = []
+
+    try:
+        for target, content in ((CSV_FILE, csv_text), (JSON_FILE, json_text)):
+            directory = os.path.dirname(target)
+            fd, staged_path = tempfile.mkstemp(prefix=".69b-", suffix=".tmp", dir=directory)
+            staged_paths[target] = staged_path
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as output:
+                output.write(content)
+
+        backup_paths = backup_existing()
+        for target in (CSV_FILE, JSON_FILE):
+            os.replace(staged_paths[target], target)
+            replaced_paths.append(target)
+    except Exception:
+        for target in replaced_paths:
+            backup = backup_paths.get(target)
+            if backup and os.path.exists(backup):
+                shutil.copy2(backup, target)
+            elif os.path.exists(target):
+                os.remove(target)
+        raise
+    finally:
+        for staged_path in staged_paths.values():
+            if os.path.exists(staged_path):
+                os.remove(staged_path)
 
 
 def backup_existing():
     os.makedirs(BACKUP_DIR, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    backups = {}
     if os.path.exists(JSON_FILE):
-        shutil.copy2(JSON_FILE, os.path.join(BACKUP_DIR, f"69b.json.{stamp}.bak"))
+        backup = os.path.join(BACKUP_DIR, f"69b.json.{stamp}.bak")
+        shutil.copy2(JSON_FILE, backup)
+        backups[JSON_FILE] = backup
     if os.path.exists(CSV_FILE):
-        shutil.copy2(CSV_FILE, os.path.join(BACKUP_DIR, f"Listado_69-B.csv.{stamp}.bak"))
+        backup = os.path.join(BACKUP_DIR, f"Listado_69-B.csv.{stamp}.bak")
+        shutil.copy2(CSV_FILE, backup)
+        backups[CSV_FILE] = backup
+    return backups
 
 
 def download():
     print(f"[*] Descargando listado 69-B del SAT desde: {SAT_69B_URL}")
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-
     req = urllib.request.Request(SAT_69B_URL, headers={
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     })
 
-    with urllib.request.urlopen(req, context=ctx, timeout=60) as response:
+    with urllib.request.urlopen(req, timeout=60) as response:
         return response.read().decode('latin-1')
 
 
 def main():
-    print("[*] Creando respaldo de archivos actuales...")
-    backup_existing()
-
-    try:
-        text = download()
-        fecha_oficial = extract_official_date(text)
-        print(f"[*] Fecha oficial detectada en el archivo: {fecha_oficial or 'no encontrada'}")
-        records = dedupe_records(parse_blacklist(text))
-        source = "descarga oficial del SAT"
-        force_csv = True
-    except Exception as e:
-        print(f"[-] Error descargando el archivo del SAT: {e}")
-        if not os.path.exists(CSV_FILE):
-            print("[-] No existe un CSV local previo. Abortando.")
-            return
-        print("[!] Usando el CSV local existente como respaldo (última copia válida).")
-        with open(CSV_FILE, encoding="utf-8") as f:
-            records = dedupe_records(parse_blacklist(f.read()))
-        fecha_oficial = None
-        source = "CSV local previo (fecha oficial no comprobada)"
-        force_csv = False
-
-    if not records:
-        print("[-] Error: No se encontraron RFCs válidos en el documento.")
-        return
+    text = download()
+    records, fecha_oficial = validate_download(text)
+    print(f"[*] Fecha oficial detectada en el archivo: {fecha_oficial}")
 
     unique_rfcs = len({r for r, _, _, _ in records})
     con_fecha = sum(1 for _, _, _, f in records if f)
-    print(f"[*] {source}")
+    print("[*] Descarga oficial del SAT validada")
     print(f"[*] Filas normalizadas (con multi-situación): {len(records)}")
     print(f"[*] RFC únicos: {unique_rfcs}")
     print(f"[*] Registros con fecha de publicación oficial: {con_fecha} / {len(records)}")
 
-    write_outputs(records, fecha_oficial, force_csv=force_csv)
+    write_outputs(records, fecha_oficial)
 
     if os.path.exists(JSON_FILE):
         with open(JSON_FILE, encoding="utf-8") as f:
