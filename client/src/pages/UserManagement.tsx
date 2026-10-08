@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLocation } from "wouter";
+import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Trash2, Plus, UserCircle, KeyRound, ShieldAlert, ServerOff } from "lucide-react";
 import { toast } from "sonner";
@@ -15,29 +16,6 @@ import {
     DialogTitle,
     DialogTrigger,
 } from "@/components/ui/dialog";
-
-// Base URL del backend. Si VITE_API_URL está definido en .env / Netlify,
-// las llamadas van al backend real. Si está vacío, son rutas relativas
-// (solo funcionan cuando Express está corriendo en el mismo origen).
-const API_BASE = import.meta.env.VITE_API_URL ?? "";
-
-/**
- * Hace fetch y lanza un error descriptivo si el servidor devuelve HTML
- * en lugar de JSON (típico cuando no hay backend o el proxy falla).
- */
-async function apiFetch(path: string, options?: RequestInit) {
-    const url = `${API_BASE}${path}`;
-    const res = await fetch(url, options);
-    const contentType = res.headers.get("content-type") ?? "";
-    if (!contentType.includes("application/json")) {
-        // El servidor devolvió HTML (página de error de Netlify / Express)
-        throw new Error(
-            `El backend no está disponible (se recibió HTML en lugar de JSON). ` +
-            `Verifica que VITE_API_URL apunte al backend correcto o que el servidor esté corriendo.`
-        );
-    }
-    return res;
-}
 
 interface SystemUser {
     id: string;

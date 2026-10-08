@@ -9,15 +9,13 @@ import fs from "fs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Ensure the DB is saved in a writable path in production, like a data directory
-const dataDir = process.env.NODE_ENV === "production" ? path.resolve(__dirname, "..", "data") : path.resolve(__dirname, "..", "data");
-const dbPath = process.env.DB_PATH || path.join(dataDir, "sentinel.db");
+const dbPath = process.env.DB_PATH || path.resolve(__dirname, "..", "data", "sentinel.db");
 
 let dbInstance: Database | null = null;
 
 export async function getDB() {
   if (!dbInstance) {
-    fs.mkdirSync(dataDir, { recursive: true });
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     dbInstance = await open({
       filename: dbPath,
       driver: sqlite3.Database
@@ -60,6 +58,13 @@ export async function getDB() {
         global_notes TEXT,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
         FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS application_tokens (
+        store_name TEXT NOT NULL,
+        token_key TEXT NOT NULL,
+        data TEXT NOT NULL,
+        PRIMARY KEY (store_name, token_key)
       );
     `);
 

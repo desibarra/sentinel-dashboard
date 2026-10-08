@@ -5,6 +5,9 @@
   "license": "MIT",
   "scripts": {
     "dev": "concurrently \"tsx watch server/index.ts\" \"vite --host\"",
+    "reset-admin": "tsx scripts/reset-admin.ts",
+    "create-admin": "tsx scripts/create-admin.ts",
+    "import:legacy-tokens": "tsx scripts/import-legacy-token-stores.ts",
     "update-blacklist": "python scripts/update_efos_blacklist.py",
     "build": "vite build && node -e \"require('fs').copyFileSync('sentinel-express-landing.html', 'dist/public/sentinel-express-landing.html')\" && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
     "start": "NODE_ENV=production node dist/index.js",
@@ -56,6 +59,7 @@
     "embla-carousel-react": "^8.6.0",
     "express": "^4.21.2",
     "express-async-errors": "^3.1.1",
+    "express-rate-limit": "^8.7.1",
     "framer-motion": "^12.23.22",
     "idb": "^8.0.3",
     "input-otp": "^1.4.2",

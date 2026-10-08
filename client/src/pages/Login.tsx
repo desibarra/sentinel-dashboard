@@ -1,11 +1,26 @@
 import React, { useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
+import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Shield } from "lucide-react";
 import { toast } from "sonner";
+
+interface LoginUser {
+    id: string;
+    username: string;
+    role: string;
+}
+
+function isLoginUser(value: unknown): value is LoginUser {
+    if (typeof value !== "object" || value === null) return false;
+    const user = value as Record<string, unknown>;
+    return typeof user.id === "string"
+        && typeof user.username === "string"
+        && typeof user.role === "string";
+}
 
 export default function Login() {
     const [, setLocation] = useLocation();
@@ -18,13 +33,36 @@ export default function Login() {
         e.preventDefault();
         setLoading(true);
 
-        // Simulamos un retraso de red
-        await new Promise(resolve => setTimeout(resolve, 800));
+        try {
+            const response = await apiFetch("/api/auth/login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ username, password }),
+            });
+            const payload: unknown = await response.json();
 
-        // MOCK LOGIN REMOVIDO POR SEGURIDAD.
-        // En producción Serverless, el acceso al dashboard se hace vía Token Mágico.
-        toast.error("Acceso denegado. Utiliza tu Token de Acceso seguro para ingresar al sistema.");
-        setLoading(false);
+            if (!response.ok) {
+                const errorMessage =
+                    typeof payload === "object" && payload !== null
+                        && "error" in payload && typeof payload.error === "string"
+                        ? payload.error
+                        : "No se pudo iniciar sesión.";
+                toast.error(response.status === 401 ? "Usuario o contraseña incorrectos." : errorMessage);
+                return;
+            }
+
+            if (!isLoginUser(payload)) {
+                throw new Error("El servidor devolvió una respuesta de inicio de sesión inválida.");
+            }
+
+            login(payload);
+            setPassword("");
+            setLocation("/dashboard");
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Error al conectar con el servidor.");
+        } finally {
+            setLoading(false);
+        }
     };
 
     return (

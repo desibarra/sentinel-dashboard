@@ -25,7 +25,7 @@ export const jsonbinService = {
     /** Obtiene todos los tokens. Retorna también si JSONBin está deshabilitado. */
     async getTokens(password: string): Promise<{ tokens: ManagedToken[], disabled?: boolean }> {
         const res = await fetch(ADMIN_ENDPOINT, {
-            headers: { "x-admin-password": password }
+            headers: { "x-admin-password": password, "x-token-store": "jsonbin-tokens" }
         });
         if (!res.ok) {
             const errBody = await res.json().catch(() => ({}));

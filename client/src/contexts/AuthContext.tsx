@@ -62,6 +62,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setDemoTokenData(demoToken);
             sessionStorage.setItem("demo_token", JSON.stringify(demoToken));
         } else {
+            setIsDemoMode(false);
+            setDemoTokenData(null);
+            sessionStorage.removeItem("demo_token");
             localStorage.setItem("sentinel_user", JSON.stringify(userData));
         }
     };
@@ -89,4 +92,3 @@ export function useAuth() {
     }
     return context;
 }
-

@@ -21,13 +21,8 @@ Este documento detalla los cambios realizados para alinear el Dashboard de Senti
 - `client/public/site.webmanifest`: Manifiesto de la aplicación.
 - `client/index.html`: Vinculación de todos los metadatos de iconos y manifest.
 
-## Proceso de Despliegue en Netlify
+## Despliegue en VPS
 
-La aplicación está configurada para **Despliegue Continuo**. Para aplicar los cambios en producción:
+La aplicación completa se compila con `npm run build` y Express sirve el frontend desde `dist/public`, además de sus rutas API. PM2 usa `ecosystem.config.cjs`; Nginx termina TLS y reenvía a `127.0.0.1:3187`. La base persistente se configura con `DB_PATH=/var/lib/sentinel/sentinel.db`.
 
-1. Realizar commit de los cambios locales.
-2. Hacer **push** a la rama principal (main/master) del repositorio conectado.
-3. Netlify detectará el push y generará automáticamente un nuevo despliegue en:
-   [https://leafy-longma-cc440e.netlify.app/](https://leafy-longma-cc440e.netlify.app/)
-
-No es necesario realizar ninguna configuración adicional en el panel de Netlify.
+Antes de apagar el despliegue antiguo, importa los tokens de Netlify Blobs y JSONBin con `npm run import:legacy-tokens`. Consulta el procedimiento de operación y variables secretas con el administrador del VPS.

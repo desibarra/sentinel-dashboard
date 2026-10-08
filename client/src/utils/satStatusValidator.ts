@@ -49,7 +49,7 @@ async function checkCFDIStatusSATRaw(
     let response: Response;
     try {
         // Llamada a nuestro backend seguro (sat-proxy)
-        response = await fetch("/.netlify/functions/sat-proxy", {
+        response = await fetch("/api/functions/sat-proxy", {
             method: "POST",
             headers: {
                 "Content-Type": "text/xml; charset=utf-8",
@@ -117,7 +117,7 @@ const classifySatOutcome = (value: CFDIStatusSAT): SatOutcomeKind => {
  * Consulta el estatus de un CFDI en el Web Service público del SAT
  * Utiliza un proxy para evitar CORS:
  * - Local: Vite proxy (/api/sat) -> https://consultaqr.facturaelectronica.sat.gob.mx
- * - Prod: Netlify redirect (/api/sat) -> https://consultaqr.facturaelectronica.sat.gob.mx
+ * - Prod: Express proxy (/api/functions/sat-proxy) -> SAT SOAP service
  *
  * P0-C: la llamada real pasa por satQueue — concurrencia acotada (5 por
  * defecto, configurable), timeout de 12s (antes: 5s fijo) y hasta 2

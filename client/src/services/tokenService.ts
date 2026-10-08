@@ -31,7 +31,7 @@ export interface TokenData {
 
 const ADMIN_ENDPOINT = "/api/functions/admin-proxy";
 const VALIDATE_ENDPOINT = "/api/functions/validate-token";
-const TRACK_ENDPOINT = "/.netlify/functions/track-event";
+const TRACK_ENDPOINT = "/api/functions/track-event";
 
 export const tokenService = {
     /** 

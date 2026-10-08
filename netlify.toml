@@ -5,9 +5,10 @@
   force = true
 
 [[redirects]]
-  from = "/api/functions/*"
-  to = "/.netlify/functions/:splat"
+  from = "/api/*"
+  to = "https://sentinel.wibby.cloud/api/:splat"
   status = 200
+  force = true
 
 [[redirects]]
   from = "/*"
@@ -17,10 +18,8 @@
 [build]
   command = "npm run build"
   publish = "dist/public"
-  functions = "netlify/functions"
 
 [build.environment]
   PNPM_FLAGS = "--no-frozen-lockfile"
   NODE_VERSION = "20"
   VITE_API_URL = ""
-  JSONBIN_BIN_ID = "69a5f1cdd0ea881f40e85bf9"

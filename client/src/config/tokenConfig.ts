@@ -10,7 +10,7 @@
  * 4. Guarda el archivo y haz git push
  *
  * Ejemplo de URL para el cliente:
- *   https://leafy-longma-cc440e.netlify.app/?token=DEMO2026
+ *   https://sentinel.wibby.cloud/?token=DEMO2026
  *
  * ============================================================
  */

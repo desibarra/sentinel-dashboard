@@ -11,7 +11,7 @@ El núcleo del modelo de negocio depende de que los archivos XML altamente sensi
 * **Frontend**: React 18, TypeScript, Tailwind CSS, shadcn/ui.
 * **Backend**: Node.js, Express, `axios`.
 * **Database**: SQLite (archivos locales, `sqlite3`).
-* **Deploy/Hosting**: Netlify (`netlify.toml` para serverless functions o frontend hosting) + VPS / Local para el backend PM2.
+* **Deploy/Hosting**: VPS con Express, PM2, Nginx y SQLite persistente.
 
 ---
 
@@ -40,9 +40,10 @@ El backend actúa principalmente como un **proxy transaccional** ligero y maneja
   - Tokens de invitación y acceso (`?token=XYZ`) que otorgan a la sesión un "Company ID" asociado, verificados a través del hook local.
   - JWT Tokens y Auth Middleware para las consultas administradoras a la API REST.
 
-* **Despliegues (Netlify + PM2)**:
-  - Frontend: Generado vía `vite build`. Las directivas de `netlify.toml` garantizan que todos los endpoints SPA como `/dashboard` reescriban correctamente a `index.html`. Las variables de entorno `NODE_VERSION` controlan la compilación estándar UTF-8 de la UI.
-  - Backend: El servidor (`server/index.ts`) integra la base de SQLite local y es instanciado en entornos VPS a través del orquestador PM2 (`ecosystem.config.cjs`) configurado para variables de producción y escuchando en el puerto designado (ej. `:3002`).
+* **Despliegue (VPS)**:
+  - Express sirve los recursos de Vite desde `dist/public` y usa `index.html` como fallback de rutas SPA. Las rutas `/api/*` y los endpoints de compatibilidad se registran antes del fallback.
+  - Nginx termina TLS y envía tráfico a Express en `127.0.0.1:3187`; PM2 configura `ecosystem.config.cjs`, `DB_PATH=/var/lib/sentinel/sentinel.db`, `JWT_SECRET` y `ADMIN_TOKENS_PASSWORD`.
+  - La migración única `npm run import:legacy-tokens` copia los registros de Netlify Blobs y JSONBin a SQLite; después de verificarla se pueden retirar sus credenciales externas.
 
 * **Consideraciones de Encoding (UTF-8)**:
   - La interacción multiplataforma maneja forzosos correctores `TextDecoder("windows-1252")` en caso de errores legacy con codificación local para preservar símbolos (ej. Copyright © o tildes) si los XML vienen de sistemas contables arcaicos.

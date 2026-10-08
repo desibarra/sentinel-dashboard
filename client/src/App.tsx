@@ -92,7 +92,7 @@ function Router() {
             <Switch>
               <Route path="/">
                 {() => {
-                  // Si React intenta navegar a /, forzamos recarga para que Netlify sirva la landing
+                  // Reload so Express serves the public landing page at /.
                   window.location.href = '/';
                   return null;
                 }}

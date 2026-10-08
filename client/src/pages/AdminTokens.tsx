@@ -53,7 +53,7 @@ export default function AdminTokens() {
             if (err.code === "INVALID_PASSWORD") {
                 setLoginErrorMsg("Contraseña incorrecta.");
             } else if (err.code === "MISSING_ADMIN_PASSWORD") {
-                setLoginErrorMsg("Falta ADMIN_TOKENS_PASSWORD en Netlify.");
+                setLoginErrorMsg("Falta ADMIN_TOKENS_PASSWORD en el servidor.");
             } else {
                 setLoginErrorMsg("Error de conexión al verificar credenciales.");
             }
@@ -215,7 +215,7 @@ export default function AdminTokens() {
                     <div className="flex items-center gap-3">
                         <Shield className="w-5 h-5 text-yellow-400" />
                         <div>
-                            <h1 className="text-sm font-black uppercase tracking-tighter">Panel de Accesos (Netlify Blobs)</h1>
+                            <h1 className="text-sm font-black uppercase tracking-tighter">Panel de Accesos</h1>
                         </div>
                     </div>
                     <div className="flex items-center gap-2">

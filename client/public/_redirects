@@ -1,4 +1,1 @@
-/  /sentinel-express-landing.html  200!
-/api/functions/*  /.netlify/functions/:splat  200
-/api/sat/*  https://consultaqr.facturaelectronica.sat.gob.mx/:splat  200
-/*  /index.html  200
+/* https://sentinel.wibby.cloud/:splat 301

@@ -468,7 +468,7 @@ export function BlacklistManager() {
                             <li>Ejecuta el script <span className="font-mono text-indigo-400">scripts/update_efos_blacklist.py</span></li>
                             <li>El script descarga el listado oficial del SAT, extrae la fecha oficial del propio encabezado y regenera <span className="font-mono text-indigo-400">client/public/69b.json</span> conservando múltiples situaciones por RFC</li>
                             <li>Deja un respaldo automático en <span className="font-mono text-indigo-400">scripts/backups/</span></li>
-                            <li>Redeploy a Netlify y vuelve a dar clic a "Cargar listas en este dispositivo"</li>
+                            <li>Actualiza la aplicación del VPS y vuelve a dar clic a "Cargar listas en este dispositivo"</li>
                         </ol>
                         <p className="text-slate-500 italic pt-2">
                             Fuente oficial SAT (69-B): <span className="font-mono">omawww.sat.gob.mx/cifras_sat/Documents/Listado_Completo_69-B.csv</span>

@@ -3,12 +3,21 @@ import bcrypt from "bcryptjs";
 import { getDB } from "./db.js";
 import { generateToken, authMiddleware, requireRole } from "./auth.js";
 import { nanoid } from "nanoid";
+import rateLimit from "express-rate-limit";
 
 import axios from "axios";
 export const apiRouter = express.Router();
 
+const loginRateLimit = rateLimit({
+    windowMs: 60_000,
+    limit: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (_req, res) => res.status(429).json({ error: "Demasiados intentos. Intenta de nuevo en un minuto." })
+});
+
 // -- AUTH ROUTES --
-apiRouter.post("/auth/login", async (req: Request, res: Response) => {
+apiRouter.post("/auth/login", loginRateLimit, async (req: Request, res: Response) => {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: "Missing fields" });
 
