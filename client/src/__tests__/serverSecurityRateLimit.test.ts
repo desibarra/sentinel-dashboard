@@ -16,6 +16,7 @@ describe("Express auth and public-route rate limits", () => {
     let server: ReturnType<express.Application["listen"]> | undefined;
     let baseUrl = "";
     let closeDB: (() => Promise<void>) | undefined;
+    let resetSatProxyMinuteWindow: ((token: string) => void) | undefined;
 
     beforeAll(async () => {
         process.env.DB_PATH = path.join(tempDirectory, "test.db");
@@ -24,7 +25,8 @@ describe("Express auth and public-route rate limits", () => {
         process.env.NODE_ENV = "production";
 
         const { apiRouter } = await import("../../../server/api.js");
-        const { functionRoutes } = await import("../../../server/functionRoutes.js");
+        const { functionRoutes, satProxyTokenMinuteRateLimit } = await import("../../../server/functionRoutes.js");
+        resetSatProxyMinuteWindow = token => satProxyTokenMinuteRateLimit.resetKey(`sat-token:${token}`);
         const { getDB } = await import("../../../server/db.js");
         const db = await getDB();
         closeDB = () => db.close();
@@ -110,33 +112,112 @@ describe("Express auth and public-route rate limits", () => {
         assert.equal(rateLimitedLead.status, 429);
 
         let satUpstreamCalls = 0;
+        let upstreamSatStatus = 200;
         globalThis.fetch = async () => {
             satUpstreamCalls += 1;
-            return new Response("<soap/>", { status: 200 });
+            return new Response("<soap/>", {
+                status: upstreamSatStatus,
+                headers: upstreamSatStatus === 429 ? { "Retry-After": "2" } : undefined
+            });
         };
-        const invalidSat = await originalFetch(`${baseUrl}/api/functions/sat-proxy`, {
-            method: "POST",
-            headers: { "content-type": "text/xml; charset=utf-8", "x-sentinel-token": "NOT-A-VALID-TOKEN" },
-            body: "<soap-request/>"
-        });
-        assert.equal(invalidSat.status, 403);
-        assert.equal(satUpstreamCalls, 0);
-        for (let attempt = 1; attempt < 30; attempt += 1) {
+        for (let attempt = 0; attempt < 30; attempt += 1) {
             const response = await originalFetch(`${baseUrl}/api/functions/sat-proxy`, {
                 method: "POST",
-                headers: { "content-type": "text/xml; charset=utf-8", "x-sentinel-token": "NOT-A-VALID-TOKEN" },
+                headers: {
+                    "content-type": "text/xml; charset=utf-8",
+                    ...(attempt % 2 === 0 ? { "x-sentinel-token": "NOT-A-VALID-TOKEN" } : {})
+                },
                 body: "<soap-request/>"
             });
-            assert.equal(response.status, 403);
+            assert.equal(response.status, 401);
         }
         const rateLimitedSat = await originalFetch(`${baseUrl}/api/functions/sat-proxy`, {
             method: "POST",
-            headers: { "content-type": "text/xml; charset=utf-8", "x-sentinel-token": "NOT-A-VALID-TOKEN" },
+            headers: { "content-type": "text/xml; charset=utf-8" },
             body: "<soap-request/>"
         });
         assert.equal(rateLimitedSat.status, 429);
+        assert.match(rateLimitedSat.headers.get("retry-after") ?? "", /^\d+$/);
         assert.equal(satUpstreamCalls, 0);
-    });
+
+        const createdTokenResponse = await originalFetch(`${baseUrl}/api/functions/admin-proxy`, {
+            method: "POST",
+            headers: {
+                "content-type": "application/json",
+                "x-admin-password": "temporary-test-admin-password"
+            },
+            body: JSON.stringify({
+                action: "create-access",
+                payload: { name: "SAT rate limit integration", plan: "Básico", days: 30 }
+            })
+        });
+        assert.equal(createdTokenResponse.status, 201);
+        const createdTokenBody = await createdTokenResponse.json() as { token: { id: string } };
+        const token = createdTokenBody.token.id;
+
+        const sendValidQueries = async (count: number) => {
+            const responses = await Promise.all(Array.from({ length: count }, () => originalFetch(`${baseUrl}/api/functions/sat-proxy`, {
+                method: "POST",
+                headers: {
+                    "content-type": "text/xml; charset=utf-8",
+                    "x-sentinel-token": token
+                },
+                body: "<soap-request/>"
+            })));
+            assert.ok(
+                responses.every(response => response.status === 200),
+                `Unexpected SAT response statuses: ${responses.map(response => response.status).filter(status => status !== 200).join(", ")}`
+            );
+        };
+
+        let remaining = 4_000;
+        while (remaining > 0) {
+            const windowQueries = Math.min(600, remaining);
+            for (let sent = 0; sent < windowQueries; sent += 100) {
+                await sendValidQueries(Math.min(100, windowQueries - sent));
+            }
+            remaining -= windowQueries;
+            if (remaining > 0) resetSatProxyMinuteWindow?.(token);
+        }
+
+        resetSatProxyMinuteWindow?.(token);
+        for (let sent = 0; sent < 600; sent += 100) await sendValidQueries(100);
+        const overLimit = await originalFetch(`${baseUrl}/api/functions/sat-proxy`, {
+            method: "POST",
+            headers: {
+                "content-type": "text/xml; charset=utf-8",
+                "x-sentinel-token": token
+            },
+            body: "<soap-request/>"
+        });
+        assert.equal(overLimit.status, 429);
+        assert.match(overLimit.headers.get("retry-after") ?? "", /^\d+$/);
+
+        const secondTokenResponse = await originalFetch(`${baseUrl}/api/functions/admin-proxy`, {
+            method: "POST",
+            headers: {
+                "content-type": "application/json",
+                "x-admin-password": "temporary-test-admin-password"
+            },
+            body: JSON.stringify({
+                action: "create-access",
+                payload: { name: "SAT upstream 429 integration", plan: "Básico", days: 30 }
+            })
+        });
+        const secondTokenBody = await secondTokenResponse.json() as { token: { id: string } };
+        upstreamSatStatus = 429;
+        const upstreamLimited = await originalFetch(`${baseUrl}/api/functions/sat-proxy`, {
+            method: "POST",
+            headers: {
+                "content-type": "text/xml; charset=utf-8",
+                "x-sentinel-token": secondTokenBody.token.id
+            },
+            body: "<soap-request/>"
+        });
+        assert.equal(upstreamLimited.status, 429);
+        assert.equal(upstreamLimited.headers.get("retry-after"), "2");
+        assert.equal(satUpstreamCalls, 4_601);
+    }, 30_000);
 
     it("rejects access-token creation without the admin password and creates active tokens server-side when authorized", async () => {
         const payload = {

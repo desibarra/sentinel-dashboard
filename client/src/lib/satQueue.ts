@@ -27,11 +27,13 @@ export type SatRetryKind = 'timeout' | 'http_429' | 'http_5xx' | 'network';
 export class SatRetryableError extends Error {
   kind: SatRetryKind;
   status?: number;
-  constructor(kind: SatRetryKind, message: string, status?: number) {
+  retryAfterMs?: number;
+  constructor(kind: SatRetryKind, message: string, status?: number, retryAfterMs?: number) {
     super(message);
     this.name = 'SatRetryableError';
     this.kind = kind;
     this.status = status;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -49,6 +51,8 @@ export const DEFAULT_SAT_QUEUE_CONFIG: SatQueueConfig = {
   baseBackoffMs: 800,
 };
 
+const MAX_AUTOMATIC_RETRY_AFTER_MS = 60_000;
+
 export interface SatQueueCounts {
   total: number;
   processed: number;
@@ -57,14 +61,15 @@ export interface SatQueueCounts {
   cancelados: number;
   noEncontrados: number;
   timeoutOrError: number;
+  rateLimited: number;
   reintentos: number;
 }
 
-export type SatOutcomeKind = 'vigente' | 'cancelado' | 'no_encontrado' | 'timeout_o_error';
+export type SatOutcomeKind = 'vigente' | 'cancelado' | 'no_encontrado' | 'timeout_o_error' | 'rate_limited';
 export type SatCountsListener = (counts: Readonly<SatQueueCounts>) => void;
 
 function freshCounts(): SatQueueCounts {
-  return { total: 0, processed: 0, pending: 0, vigentes: 0, cancelados: 0, noEncontrados: 0, timeoutOrError: 0, reintentos: 0 };
+  return { total: 0, processed: 0, pending: 0, vigentes: 0, cancelados: 0, noEncontrados: 0, timeoutOrError: 0, rateLimited: 0, reintentos: 0 };
 }
 
 function jitter(ms: number): number {
@@ -173,21 +178,26 @@ export class SatQueue {
           if (kind === 'vigente') this.counts.vigentes++;
           else if (kind === 'cancelado') this.counts.cancelados++;
           else if (kind === 'no_encontrado') this.counts.noEncontrados++;
+          else if (kind === 'rate_limited') this.counts.rateLimited++;
           else this.counts.timeoutOrError++;
           this.emit();
           return value;
         } catch (err) {
           const retryable = err instanceof SatRetryableError;
-          if (retryable && attempt < this.config.maxRetries) {
+          const retryAfterIsShortEnough = err instanceof SatRetryableError
+            && (err.kind !== 'http_429' || err.retryAfterMs === undefined || err.retryAfterMs <= MAX_AUTOMATIC_RETRY_AFTER_MS);
+          if (retryable && retryAfterIsShortEnough && attempt < this.config.maxRetries) {
             attempt++;
             this.counts.reintentos++;
             this.emit();
-            await sleep(jitter(this.config.baseBackoffMs * Math.pow(2, attempt - 1)));
+            const backoffMs = jitter(this.config.baseBackoffMs * Math.pow(2, attempt - 1));
+            await sleep(Math.max(backoffMs, err.retryAfterMs ?? 0));
             continue;
           }
           this.counts.processed++;
           this.counts.pending = Math.max(0, this.counts.pending - 1);
-          this.counts.timeoutOrError++;
+          if (retryable && err.kind === 'http_429') this.counts.rateLimited++;
+          else this.counts.timeoutOrError++;
           this.emit();
           throw err;
         }

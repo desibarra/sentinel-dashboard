@@ -38,7 +38,7 @@ import { resolverClasificacionDireccion } from '@/lib/direccionCFDI';
 // es un estatus "no confirmado"/pendiente de reintento como los otros 4
 // valores. Mantenerlo como un valor propio evita que combinarResultadoFinal
 // lo trate como un fallo de SAT (ver su condición "satNoValidado").
-export type EstatusSAT = "No verificado" | "Vigente" | "Cancelado" | "No Encontrado" | "Error Conexión" | "No Aplica (REP)";
+export type EstatusSAT = "No verificado" | "Vigente" | "Cancelado" | "No Encontrado" | "Error Conexión" | "Rate Limited" | "No Aplica (REP)";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PRECEDENCIA SAT × 69-B — función pura de composición.
@@ -187,6 +187,15 @@ export function combinarResultadoFinal(
   // 3) 69-B Presunto o situación múltiple — advertencia, se conserva aunque el SAT no responda.
   if (hallazgo69B.severidad === 'ALERTA') {
     return armar('', '🟡 ALERTA', 'ALERTA', estructural.score);
+  }
+
+  if (estatusSAT === 'Rate Limited') {
+    return armar(
+      '[AVISO] Consulta SAT temporalmente pendiente por límite de frecuencia. No es un estatus definitivo; reintenta más tarde.',
+      '🟡 CONSULTA SAT PENDIENTE',
+      'PENDIENTE SAT',
+      estructural.score
+    );
   }
 
   // 4) SAT no validado y 69-B sin riesgo elevado — nunca mostrar USABLE.

@@ -41,7 +41,7 @@ type SortDirection = 'asc' | 'desc' | null;
 // El handler handleRevalidateSAT la aplica vía setResults(...map por UUID) para
 // actualizar SOLO la fila correspondiente y dejar el resto intactas.
 export type SATRevalidationStatus = {
-  estado: 'Vigente' | 'Cancelado' | 'No Encontrado' | 'Error Conexión';
+  estado: 'Vigente' | 'Cancelado' | 'No Encontrado' | 'Error Conexión' | 'Rate Limited';
   estatusCancelacion?: string;
   validatedAt: Date;
 };
@@ -67,6 +67,9 @@ export function revalidarFilaSAT(
   } else if (status.estado === "Error Conexión") {
     nuevoResultado = "No validado SAT";
     nuevoComentario = `No validado: no se pudo confirmar el estatus del CFDI ante el SAT. Reintenta la consulta. ` + comBase;
+  } else if (status.estado === "Rate Limited") {
+    nuevoResultado = "🟡 CONSULTA SAT PENDIENTE";
+    nuevoComentario = `Consulta SAT temporalmente pendiente por límite de frecuencia. No es un estatus definitivo; reintenta más tarde. ` + comBase;
   }
 
   // ✅ Recalcular la dirección del CFDI tras revalidar (usa el RFC de la empresa,
@@ -81,7 +84,7 @@ export function revalidarFilaSAT(
   // ✅ Coherencia de riesgo: un hallazgo (NO USABLE / no validado) nunca queda VERDE.
   const nuevoRiskLevel: 'VERDE' | 'AMARILLO' | 'ROJO' =
     nuevoResultado.includes('NO USABLE') ? 'ROJO'
-    : nuevoResultado === 'No validado SAT' ? 'AMARILLO'
+    : nuevoResultado === 'No validado SAT' || nuevoResultado === '🟡 CONSULTA SAT PENDIENTE' ? 'AMARILLO'
     : (row.fiscalRiskLevel || 'VERDE');
 
   return {
@@ -1045,6 +1048,10 @@ export default function Dashboard() {
 
         toast.error("No se pudo conectar con el SAT (Timeout)", { id: `rev-${uuid}` });
 
+      } else if (status.estado === "Rate Limited") {
+
+        toast.message("La consulta al SAT quedó pendiente por límite de frecuencia. Puedes reintentar más tarde.", { id: `rev-${uuid}` });
+
       } else {
 
         toast.success(`Estatus SAT actualizado: ${status.estado}`, { id: `rev-${uuid}` });
@@ -1077,9 +1084,9 @@ export default function Dashboard() {
 
   // P0-C: reintento masivo de SAT. Objetivo explícito: un timeout/error SAT no
   // debe dejar un CFDI huérfano esperando un reintento manual fila por fila.
-  // Solo toca registros en estado NO concluyente ("No validado SAT" — cubre
-  // Timeout, Error de conexión y No Encontrado); Vigente y Cancelado NUNCA se
-  // tocan aquí. Las llamadas reales pasan por satQueue (useXMLValidator.ts /
+  // Solo toca registros en estado NO concluyente ("No validado SAT" o consulta
+  // pendiente por límite de frecuencia); Vigente y Cancelado NUNCA se tocan
+  // aquí. Las llamadas reales pasan por satQueue (useXMLValidator.ts /
   // satStatusValidator.ts), que ya acota la concurrencia — por eso es seguro
   // lanzarlas todas juntas en vez de trocearlas manualmente aquí.
   const handleRevalidateAllPending = async () => {
@@ -1087,7 +1094,7 @@ export default function Dashboard() {
 
     const pendientes = results.filter(r =>
       r.uuid && r.uuid !== 'NO DISPONIBLE' &&
-      String(r.resultado || '').startsWith('No validado')
+      (String(r.resultado || '').startsWith('No validado') || r.estatusSAT === 'Rate Limited')
     );
     if (pendientes.length === 0) {
       toast.info('No hay CFDI pendientes de validar con el SAT.');
@@ -2122,7 +2129,7 @@ export default function Dashboard() {
                 size="sm"
                 title={
                   satBulkCounts
-                    ? `Procesados ${satBulkCounts.processed}/${satBulkCounts.total} — Vigentes: ${satBulkCounts.vigentes}, Cancelados: ${satBulkCounts.cancelados}, No encontrados: ${satBulkCounts.noEncontrados}, Timeout/Error: ${satBulkCounts.timeoutOrError}, Reintentos: ${satBulkCounts.reintentos}`
+                    ? `Procesados ${satBulkCounts.processed}/${satBulkCounts.total} — Vigentes: ${satBulkCounts.vigentes}, Cancelados: ${satBulkCounts.cancelados}, No encontrados: ${satBulkCounts.noEncontrados}, Limitadas: ${satBulkCounts.rateLimited}, Timeout/Error: ${satBulkCounts.timeoutOrError}, Reintentos: ${satBulkCounts.reintentos}`
                     : 'Reintenta ante el SAT únicamente los CFDI en estado "No validado SAT" (Timeout, Error o No Encontrado). Vigente y Cancelado nunca se tocan.'
                 }
               >

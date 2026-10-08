@@ -26,6 +26,7 @@ const SAT_CANCELADO: EstatusSAT = 'Cancelado';
 const SAT_NO_ENCONTRADO: EstatusSAT = 'No Encontrado';
 const SAT_ERROR: EstatusSAT = 'Error Conexión';
 const SAT_NO_VERIFICADO: EstatusSAT = 'No verificado';
+const SAT_LIMITED: EstatusSAT = 'Rate Limited';
 
 describe('combinarResultadoFinal — matriz completa de precedencia SAT × 69-B', () => {
   it('1. Error SAT + Definitivo → NO USABLE; el estatus SAT en sí sigue siendo "no validado" (dimensiones separadas)', () => {
@@ -90,6 +91,13 @@ describe('combinarResultadoFinal — matriz completa de precedencia SAT × 69-B'
     expect(r.resultado).not.toContain('🟢');
   });
 
+  it('una consulta limitada permanece pendiente, no como fallo definitivo ni resultado usable', () => {
+    const r = combinarResultadoFinal(estructuralUsable, sin69B, SAT_LIMITED);
+    expect(r.resultado).toBe('🟡 CONSULTA SAT PENDIENTE');
+    expect(r.nivelValidacion).toBe('PENDIENTE SAT');
+    expect(r.resultado).not.toBe('No validado SAT');
+  });
+
   it('nunca muestra USABLE cuando el SAT no fue validado, sin importar el hallazgo 69-B', () => {
     for (const satStatus of [SAT_ERROR, SAT_NO_ENCONTRADO, SAT_NO_VERIFICADO]) {
       for (const hallazgo of [sin69B, sentenciaFavorable69B, desvirtuado69B]) {
@@ -110,8 +118,8 @@ describe('combinarResultadoFinal — matriz completa de precedencia SAT × 69-B'
     }
   });
 
-  it('contadores: de los 5 estatus SAT posibles sin hallazgo 69-B, solo Vigente es USABLE, Cancelado es NO USABLE, y los 3 restantes son "No validado SAT"', () => {
-    const estados: EstatusSAT[] = [SAT_VIGENTE, SAT_CANCELADO, SAT_ERROR, SAT_NO_ENCONTRADO, SAT_NO_VERIFICADO];
+  it('los estatus SAT pendientes se mantienen distintos de los definitivos', () => {
+    const estados: EstatusSAT[] = [SAT_VIGENTE, SAT_CANCELADO, SAT_ERROR, SAT_NO_ENCONTRADO, SAT_NO_VERIFICADO, SAT_LIMITED];
     const resultados = estados.map(e => combinarResultadoFinal(estructuralUsable, sin69B, e).resultado);
 
     const usables = resultados.filter(r => r.includes('🟢')).length;
@@ -120,7 +128,7 @@ describe('combinarResultadoFinal — matriz completa de precedencia SAT × 69-B'
     const noValidadosSAT = resultados.filter(r => r === 'No validado SAT').length;
 
     expect(usables).toBe(1);
-    expect(alertas).toBe(0);
+    expect(alertas).toBe(1);
     expect(noUsable).toBe(1);
     expect(noValidadosSAT).toBe(3);
   });

@@ -221,4 +221,14 @@ describe('Flujo real de reintento SAT (revalidarFilaSAT + reducer por UUID + rec
     expect(trasExito.resultado).toBe('🟢 USABLE');
     expect(trasExito.comentarioFiscal).toBe('motor ok');
   });
+
+  it('una limitación SAT deja la fila pendiente y permite incluirla en reintentos posteriores', () => {
+    const row = makeRow('RATE-LIMITED-5555-4555-8555-EEEEEEEEEEEE', { estatusSAT: 'Vigente' });
+    const pending = revalidarFilaSAT(row, { estado: 'Rate Limited', validatedAt: new Date() }, 'GIRO');
+
+    expect(pending.estatusSAT).toBe('Rate Limited');
+    expect(pending.resultado).toBe('🟡 CONSULTA SAT PENDIENTE');
+    expect(pending.resultado).not.toBe('No validado SAT');
+    expect(pending.fiscalRiskLevel).toBe('AMARILLO');
+  });
 });

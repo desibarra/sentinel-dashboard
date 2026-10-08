@@ -1,10 +1,14 @@
 import { randomBytes, randomInt } from "node:crypto";
-import express, { Request, Response } from "express";
+import express, { NextFunction, Request, Response } from "express";
 import rateLimit from "express-rate-limit";
 import { deleteStoredToken, getStoredToken, insertStoredToken, listStoredTokens, saveStoredToken, updateStoredToken } from "./tokenStore.js";
 
 const ACCESS_STORE = "sentinel-tokens";
 const MANAGED_STORE = "jsonbin-tokens";
+export const SAT_TOKEN_RATE_LIMIT_PER_MINUTE = 600;
+export const SAT_TOKEN_RATE_LIMIT_PER_DAY = 50_000;
+const SAT_PROXY_MINUTE_WINDOW_MS = 60_000;
+const SAT_PROXY_DAILY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const router = express.Router();
 
 const leadCaptureRateLimit = rateLimit({
@@ -14,13 +18,70 @@ const leadCaptureRateLimit = rateLimit({
     legacyHeaders: false,
     handler: (_req, res) => res.status(429).json({ error: "Demasiados registros. Intenta de nuevo en un minuto." })
 });
-const satProxyRateLimit = rateLimit({
-    windowMs: 60_000,
+function sendRateLimitResponse(req: Request, res: Response, message: string, windowMs: number): void {
+    const rateLimitInfo = (req as Request & { rateLimit?: { resetTime?: Date } }).rateLimit;
+    const resetTime = rateLimitInfo?.resetTime?.getTime() ?? Date.now() + windowMs;
+    const retryAfterSeconds = Math.max(1, Math.ceil((resetTime - Date.now()) / 1000));
+    res.setHeader("Retry-After", String(retryAfterSeconds));
+    res.status(429).json({ error: message, retryAfter: retryAfterSeconds });
+}
+
+const satProxyInvalidTokenRateLimit = rateLimit({
+    windowMs: SAT_PROXY_MINUTE_WINDOW_MS,
     limit: 30,
     standardHeaders: true,
     legacyHeaders: false,
-    handler: (_req, res) => res.status(429).json({ error: "Demasiadas consultas. Intenta de nuevo en un minuto." })
+    handler: (req, res) => sendRateLimitResponse(req, res, "Demasiados intentos de autorización. Intenta de nuevo en un minuto.", SAT_PROXY_MINUTE_WINDOW_MS)
 });
+export const satProxyTokenMinuteRateLimit = rateLimit({
+    windowMs: SAT_PROXY_MINUTE_WINDOW_MS,
+    limit: SAT_TOKEN_RATE_LIMIT_PER_MINUTE,
+    keyGenerator: (_req, res) => `sat-token:${res.locals.satProxyTokenId}`,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req, res) => sendRateLimitResponse(req, res, "Límite de 600 consultas al SAT por minuto alcanzado.", SAT_PROXY_MINUTE_WINDOW_MS)
+});
+const satProxyTokenDailyRateLimit = rateLimit({
+    windowMs: SAT_PROXY_DAILY_WINDOW_MS,
+    limit: SAT_TOKEN_RATE_LIMIT_PER_DAY,
+    keyGenerator: (_req, res) => `sat-token:${res.locals.satProxyTokenId}`,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req, res) => sendRateLimitResponse(req, res, "Límite diario de 50,000 consultas al SAT alcanzado.", SAT_PROXY_DAILY_WINDOW_MS)
+});
+
+function rejectSatToken(req: Request, res: Response, status: number, error: string): void {
+    satProxyInvalidTokenRateLimit(req, res, () => {
+        res.status(status).json({ error });
+    });
+}
+
+async function authenticateSatProxyToken(req: Request, res: Response, next: NextFunction): Promise<void> {
+    const token = req.get("x-sentinel-token");
+    if (!token) {
+        rejectSatToken(req, res, 401, "No autorizado. Token faltante.");
+        return;
+    }
+
+    const tokenData = await getStoredToken(ACCESS_STORE, token);
+    if (!tokenData) {
+        rejectSatToken(req, res, 401, "Acceso denegado. Token inválido.");
+        return;
+    }
+    if (tokenData.status !== "active") {
+        rejectSatToken(req, res, 401, "Acceso denegado. Token inactivo.");
+        return;
+    }
+
+    const expiry = tokenData.expiresAt ? new Date(tokenData.expiresAt) : null;
+    if (!expiry || Number.isNaN(expiry.getTime()) || Date.now() > expiry.getTime()) {
+        rejectSatToken(req, res, 401, "Acceso denegado. El periodo de acceso ha finalizado.");
+        return;
+    }
+
+    res.locals.satProxyTokenId = token;
+    next();
+}
 
 function requireAdminPassword(req: Request, res: Response): boolean {
     const expectedPassword = process.env.ADMIN_TOKENS_PASSWORD;
@@ -295,31 +356,7 @@ router.post("/track-event", async (req: Request, res: Response) => {
     res.json({ success: true });
 });
 
-router.post("/sat-proxy", satProxyRateLimit, async (req: Request, res: Response) => {
-    const token = req.get("x-sentinel-token");
-    if (!token) {
-        res.status(401).json({ error: "No autorizado. Token faltante." });
-        return;
-    }
-    const tokenData = await getStoredToken(ACCESS_STORE, token);
-    if (!tokenData) {
-        res.status(403).json({ error: "Acceso denegado. Token inválido." });
-        return;
-    }
-    if (tokenData.status === "pending" || tokenData.status === "suspended" || tokenData.status === "expired") {
-        res.status(403).json({ error: `Acceso denegado. Token ${tokenData.status === "pending" ? "pendiente de activación" : tokenData.status === "suspended" ? "suspendido" : "expirado"}.` });
-        return;
-    }
-    const expiry = tokenData.expiresAt ? new Date(tokenData.expiresAt) : null;
-    if (expiry && Date.now() > expiry.getTime()) {
-        res.status(403).json({ error: "Acceso denegado. El periodo de prueba ha finalizado." });
-        return;
-    }
-    if (tokenData.status !== "active") {
-        res.status(403).json({ error: "Acceso denegado. Estado de token no válido." });
-        return;
-    }
-
+router.post("/sat-proxy", authenticateSatProxyToken, satProxyTokenMinuteRateLimit, satProxyTokenDailyRateLimit, async (req: Request, res: Response) => {
     const satResponse = await fetch("https://consultaqr.facturaelectronica.sat.gob.mx/ConsultaCFDIService.svc", {
         method: "POST",
         headers: {
@@ -329,11 +366,18 @@ router.post("/sat-proxy", satProxyRateLimit, async (req: Request, res: Response)
         body: typeof req.body === "string" ? req.body : ""
     });
     if (!satResponse.ok) {
+        if (satResponse.status === 429) {
+            const retryAfter = satResponse.headers.get("retry-after");
+            if (retryAfter) res.setHeader("Retry-After", retryAfter);
+            res.status(429).json({ error: "El servicio del SAT solicitó reducir la frecuencia de consultas." });
+            return;
+        }
         res.status(502).json({ error: `El servicio del SAT no está disponible (HTTP ${satResponse.status}).` });
         return;
     }
 
     const xmlText = await satResponse.text();
+    const token = res.locals.satProxyTokenId as string;
     await updateStoredToken(ACCESS_STORE, token, current => ({
         ...current,
         satQueriesCount: (current.satQueriesCount || 0) + 1,

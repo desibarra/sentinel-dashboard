@@ -1548,7 +1548,8 @@ export const classifyCFDI = (
 //
 // "SAT no confirmado" agrupa: No Encontrado, Error Conexión (incluye
 // timeouts — el tipo EstatusSAT no distingue un timeout de otro fallo de
-// conexión, ambos colapsan a "Error Conexión"), No verificado (pendiente), y
+// conexión, ambos colapsan a "Error Conexión"), Rate Limited (pendiente de
+// reintento, no un fallo definitivo), No verificado (pendiente), y
 // como red de seguridad, cualquier fila cuyo "resultado" ya haya sido
 // clasificado como "No validado SAT" por combinarResultadoFinal — cubre el
 // caso en que 69-B tomó precedencia sobre "resultado" (p.ej. 🔴 NO USABLE
@@ -1576,6 +1577,7 @@ export function contarEstatusSAT(results: { tipoCFDI?: string; estatusSAT?: stri
     const noConfirmados = evaluables.filter(r =>
         r.estatusSAT === "No Encontrado" ||
         r.estatusSAT === "Error Conexión" ||
+        r.estatusSAT === "Rate Limited" ||
         r.estatusSAT === "No verificado" ||
         r.resultado === "No validado SAT"
     ).length;

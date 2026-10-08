@@ -1,11 +1,19 @@
 import { satQueue, SatRetryableError, SatOutcomeKind } from "@/lib/satQueue";
 
 interface CFDIStatusSAT {
-    estado: 'Vigente' | 'Cancelado' | 'No Encontrado' | 'Error Conexión';
+    estado: 'Vigente' | 'Cancelado' | 'No Encontrado' | 'Error Conexión' | 'Rate Limited';
     esCancelable: string;
     estatusCancelacion: string;
     codigoEstatus: string;
     validatedAt: Date;
+}
+
+function parseRetryAfterMs(value: string | null): number | undefined {
+    if (!value?.trim()) return undefined;
+    const seconds = Number(value);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+    const retryAt = Date.parse(value);
+    return Number.isFinite(retryAt) ? Math.max(0, retryAt - Date.now()) : undefined;
 }
 
 /**
@@ -69,7 +77,12 @@ async function checkCFDIStatusSATRaw(
             throw new Error(errData.error || `Acceso denegado (HTTP ${response.status})`);
         }
         if (response.status === 429) {
-            throw new SatRetryableError('http_429', 'SAT: demasiadas solicitudes (429)', 429);
+            throw new SatRetryableError(
+                'http_429',
+                'SAT: demasiadas solicitudes (429)',
+                429,
+                parseRetryAfterMs(response.headers.get('Retry-After'))
+            );
         }
         if (response.status >= 500) {
             throw new SatRetryableError('http_5xx', `SAT/proxy no disponible (HTTP ${response.status})`, response.status);
@@ -110,6 +123,7 @@ const classifySatOutcome = (value: CFDIStatusSAT): SatOutcomeKind => {
     if (value.estado === 'Vigente') return 'vigente';
     if (value.estado === 'Cancelado') return 'cancelado';
     if (value.estado === 'No Encontrado') return 'no_encontrado';
+    if (value.estado === 'Rate Limited') return 'rate_limited';
     return 'timeout_o_error';
 };
 
@@ -123,9 +137,10 @@ const classifySatOutcome = (value: CFDIStatusSAT): SatOutcomeKind => {
  * defecto, configurable), timeout de 12s (antes: 5s fijo) y hasta 2
  * reintentos con backoff+jitter SOLO ante timeout/429/5xx/red. Un estatus
  * definitivo (Vigente/Cancelado/No Encontrado) se acepta en el primer
- * intento y nunca se reintenta. El contrato externo de esta función no
- * cambia: nunca lanza, siempre resuelve a un CFDIStatusSAT — un fallo tras
- * agotar reintentos se reporta como "Error Conexión", igual que antes.
+ * intento y nunca se reintenta. El contrato externo de esta función nunca
+ * lanza: un 429 agotado se conserva como "Rate Limited" (pendiente, no
+ * definitivo), mientras que fallas reales agotadas se reportan como
+ * "Error Conexión".
  */
 export async function checkCFDIStatusSAT(
     uuid: string,
@@ -139,6 +154,15 @@ export async function checkCFDIStatusSAT(
             classifySatOutcome
         );
     } catch (error) {
+        if (error instanceof SatRetryableError && error.kind === 'http_429') {
+            return {
+                estado: "Rate Limited",
+                esCancelable: "N/A",
+                estatusCancelacion: "N/A",
+                codigoEstatus: "N/A",
+                validatedAt: new Date()
+            };
+        }
         console.warn("[SAT_VALIDATOR] Falla en consulta (tras agotar reintentos si aplicaban):", error);
         return {
             estado: "Error Conexión",

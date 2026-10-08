@@ -2,7 +2,7 @@ import React from 'react';
 import { BlacklistValidation } from "@/utils/blacklistValidator";
 
 interface Props {
-    estatusSAT: "No verificado" | "Vigente" | "Cancelado" | "No Encontrado" | "Error Conexión";
+    estatusSAT: "No verificado" | "Vigente" | "Cancelado" | "No Encontrado" | "Error Conexión" | "Rate Limited";
     isCheckingSAT?: boolean;
     estatusCancelacion?: string;
     rfcEmisorBlacklist?: BlacklistValidation;
@@ -74,6 +74,12 @@ export function CFDISATStatus({
                 Error SAT
             </span>
         );
+    } else if (estatusSAT === 'Rate Limited') {
+        badges.push(
+            <span key="sat-rate-limited" title="La consulta quedó pendiente; no representa un estatus definitivo del CFDI." className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-[9px]' : 'px-3 py-1 text-sm'} font-black bg-amber-500/10 text-amber-600 border border-amber-500/20 rounded-lg uppercase tracking-widest`}>
+                Consulta pendiente
+            </span>
+        );
     } else if (!estatusSAT || estatusSAT === 'No verificado') {
         badges.push(
             <span key="sat-pending" className={`inline-flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 text-[9px]' : 'px-3 py-1 text-sm'} font-black bg-blue-500/10 text-blue-600 border border-blue-500/20 rounded-lg uppercase tracking-widest`}>
@@ -141,6 +147,14 @@ export function CFDISATStatus({
                 <div className="flex items-center gap-3 p-4 bg-emerald-50 border-2 border-emerald-500 rounded-lg text-emerald-800 font-bold shadow-sm">
                     <span className="text-xl">✅</span>
                     <span>CFDI Vigente en SAT</span>
+                </div>
+            ) : estatusSAT === 'Rate Limited' ? (
+                <div className="flex items-center gap-3 p-4 bg-amber-50 border-2 border-amber-500 rounded-lg text-amber-900 shadow-sm">
+                    <span className="text-xl">⏳</span>
+                    <div>
+                        <strong className="block font-bold">Consulta al SAT pendiente</strong>
+                        <p className="text-sm opacity-90">El servicio limitó temporalmente las consultas. Este estado no es definitivo; puedes reintentar más tarde.</p>
+                    </div>
                 </div>
             ) : null}
 

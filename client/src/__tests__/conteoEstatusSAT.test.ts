@@ -145,6 +145,15 @@ describe('contarEstatusSAT — función central (39 Vigentes + 1 Cancelado + 3 N
     expect(conteo.noConfirmados).toBe(3);
   });
 
+  it('cuenta una consulta limitada como no confirmada, sin tratarla como fallo definitivo', () => {
+    const results = [baseResult('u-rate-limited', {
+      estatusSAT: 'Rate Limited',
+      resultado: '🟡 CONSULTA SAT PENDIENTE'
+    })];
+    const conteo = contarEstatusSAT(results);
+    expect(conteo.noConfirmados).toBe(1);
+  });
+
   it('NUNCA cuenta REP (Tipo P) como SAT no confirmado — se identifican por separado', () => {
     const results = [
       ...buildMatriz43(),

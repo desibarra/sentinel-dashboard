@@ -15,6 +15,7 @@ beforeEach(() => {
 
 afterEach(() => {
   satQueue.configure(originalConfig);
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -75,6 +76,69 @@ describe('checkCFDIStatusSAT — clasificación de reintentos (mock, sin red rea
 
     expect(result.estado).toBe('Vigente');
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('respeta Retry-After en segundos antes de reintentar HTTP 429', async () => {
+    vi.useFakeTimers();
+    satQueue.configure({ timeoutMs: 5000, baseBackoffMs: 5, maxRetries: 1, concurrency: 1 });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        headers: { get: (name: string) => name.toLowerCase() === 'retry-after' ? '3' : '' },
+        json: async () => ({})
+      })
+      .mockResolvedValueOnce(okXmlResponse('Vigente'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const resultPromise = checkCFDIStatusSAT('uuid-429-retry-after', 'EMI010101EMI', 'REC010101REC', 100);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    const result = await resultPromise;
+    expect(result.estado).toBe('Vigente');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('no clasifica un 429 persistente agotado como fallo definitivo del SAT', async () => {
+    satQueue.configure({ timeoutMs: 500, baseBackoffMs: 1, maxRetries: 1, concurrency: 1 });
+    satQueue.resetCounts(1);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: { get: (name: string) => name.toLowerCase() === 'retry-after' ? '0' : '' },
+      json: async () => ({})
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await checkCFDIStatusSAT('uuid-429-exhausted', 'EMI010101EMI', 'REC010101REC', 100);
+
+    expect(result.estado).toBe('Rate Limited');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(satQueue.getCounts().rateLimited).toBe(1);
+    expect(satQueue.getCounts().timeoutOrError).toBe(0);
+  });
+
+  it('deja como pendiente inmediata una cuota diaria con Retry-After largo, sin bloquear la cola', async () => {
+    satQueue.configure({ timeoutMs: 500, baseBackoffMs: 1, maxRetries: 2, concurrency: 1 });
+    satQueue.resetCounts(1);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: { get: (name: string) => name.toLowerCase() === 'retry-after' ? '86400' : '' },
+      json: async () => ({})
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await checkCFDIStatusSAT('uuid-429-daily-limit', 'EMI010101EMI', 'REC010101REC', 100);
+
+    expect(result.estado).toBe('Rate Limited');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(satQueue.getCounts().rateLimited).toBe(1);
+    expect(satQueue.getCounts().timeoutOrError).toBe(0);
   });
 
   it('un fallo de red (fetch rechaza) se reintenta como transitorio', async () => {
