@@ -208,3 +208,7 @@ El script guarda en `/var/backups/sentinel/`, usa SQLite `.backup` para una copi
 [`client/public/_redirects`](./client/public/_redirects) está listo para devolver una redirección permanente `301` de todo el tráfico a `https://sentinel.wibby.cloud/:splat`. Úsalo solo si se mantiene un dominio de Netlify que deba redirigir; para dejar de usar Netlify por completo, actualiza el DNS/dominio y desactiva deploys automáticos, Functions y Forms en Netlify cuando la verificación post-corte esté completa.
 
 Tras el segundo import y la validación, Netlify Blobs, sus Functions y JSONBin ya no participan en runtime. Puedes retirar sus credenciales. Conserva la base SQLite del VPS y su carpeta de backups.
+
+## Pendientes post-despliegue
+
+- Migrar a sqlite3@6 en rama aparte.
