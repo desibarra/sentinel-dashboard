@@ -4,8 +4,6 @@ import {
   exportToExcel,
   planExportChunks,
   estimateCfdiExportWeight,
-  type ExportCancelToken,
-  type ExportProgressEvent,
 } from '../lib/excelExporter';
 import type { ValidationResult, PagoRelacionadoDetalle } from '../lib/cfdiEngine';
 
@@ -18,16 +16,8 @@ vi.mock('xlsx', async (importOriginal) => {
   return { ...actual, writeFile: vi.fn(actual.writeFile) };
 });
 
-// Exportación de lotes grandes (caso real reportado: 6,726 CFDI, "Error al
-// exportar el diagnóstico" con el archivo único). Causa raíz medida (ver
-// comentario extenso junto a exportToExcelMultiFile en excelExporter.ts):
-// ~20 hojas de detalle por documento, TODAS mantenidas en un solo workbook
-// hasta el final, más una única llamada síncrona a XLSX.writeFile() que debe
-// serializar ~8 millones de celdas de una vez a los 6,726 CFDI (medido:
-// ~66s / ~2.4GB build + ~14s / ~3.0GB pico en XLSX.write, archivo de 353MB).
-// Estas pruebas verifican el paquete de varios archivos (00_Resumen_Global +
-// bloques Diagnostico_00N) que reemplaza esa única llamada gigante, SIN
-// perder, resumir, omitir ni alterar ningún CFDI/REP/relación PPD-REP.
+// El reporte principal mantiene una sola fila por UUID y descarga un solo
+// workbook; la partición antigua sigue probándose como helper aislado.
 
 const EMPRESA = 'EMP000000EMP';
 
@@ -169,190 +159,24 @@ describe('planExportChunks — partición por peso, nunca separa REP de su(s) fa
   });
 });
 
-describe('exportToExcel — paquete multi-archivo para lotes grandes (integración real, no solo la función de partición)', () => {
-  for (const n of SIZES) {
-    it(`n=${n}: reconciliación exacta — total procesados = UUID exportados + errores de lectura + duplicados controlados`, async () => {
-      const batch = makeBatch(n);
-      const events: ExportProgressEvent[] = [];
-      const wb = await exportToExcel(batch, `dev-outputs/scale_n${n}.xlsx`, (e) => events.push(e));
-      const status = (wb as any).__sentinelExportStatus;
-
-      if (status?.isMultiFile) {
-        expect(status.status).toBe('complete');
-        expect(status.reconciliacion).toBeTruthy();
-        expect(status.reconciliacion.totalProcesados).toBe(n);
-        expect(status.reconciliacion.cuadra).toBe(true);
-        expect(status.reconciliacion.totalProcesados).toBe(
-          status.reconciliacion.uuidExportados + status.reconciliacion.erroresLectura + status.reconciliacion.duplicadosControlados
-        );
-        expect(status.filesWritten.length).toBe(status.totalFiles);
-        // Progreso visible por archivo (instrucción 7): al menos un evento
-        // "building" trae fileIndex/fileTotal poblados.
-        expect(events.some(e => e.stage === 'building' && typeof e.fileIndex === 'number' && typeof e.fileTotal === 'number')).toBe(true);
-      } else {
-        // Lote pequeño: sigue siendo un solo XLSX real (wb.SheetNames existe).
-        expect(wb.SheetNames).toBeDefined();
-        expect(wb.SheetNames.length).toBeGreaterThan(0);
-      }
-    }, 120000);
-  }
-
-  it('cancelación a mitad del paquete: se detiene, conserva los archivos ya descargados, y NO modifica el arreglo de entrada (la sesión cargada no se ve afectada)', async () => {
-    const batch = makeBatch(5000);
-    const snapshotBefore = JSON.stringify(batch.map(r => r.uuid));
-    const cancelToken: ExportCancelToken = { cancelled: false };
-    let firstFileDone = false;
-
-    const wb = await exportToExcel(batch, 'dev-outputs/scale_cancel', (e) => {
-      // Se distingue el evento de "archivo de bloque YA ESCRITO a disco" (el
-      // que esta prueba necesita — ver el texto exacto que emite
-      // exportToExcelMultiFile) de los eventos de progreso por HOJA dentro de
-      // ese bloque, que también traen fileIndex pero ocurren ANTES de que
-      // XLSX.writeFile se ejecute para ese archivo.
-      if (e.stage === 'done' && e.sheet.includes('completado') && !firstFileDone) {
-        firstFileDone = true;
-        cancelToken.cancelled = true; // cancela apenas termina el primer archivo del paquete
-      }
-    }, { cancelToken });
-
-    const status = (wb as any).__sentinelExportStatus;
-    expect(status.status).toBe('cancelled');
-    expect(status.filesWritten.length).toBeGreaterThanOrEqual(1);
-    expect(status.filesWritten.length).toBeLessThan(status.totalFiles || Infinity + 1);
-    // El arreglo de entrada nunca se modifica — la sesión guardada no se toca.
-    expect(JSON.stringify(batch.map(r => r.uuid))).toBe(snapshotBefore);
-  }, 120000);
-
-  it('instrucción 6: usuario cancela ANTES del primer archivo (token ya cancelado desde el inicio) — cero archivos escritos, nada que reanudar salvo empezar de nuevo', async () => {
-    const batch = makeBatch(2351);
-    const cancelToken: ExportCancelToken = { cancelled: true };
-    const wb = await exportToExcel(batch, 'dev-outputs/scale_cancel_before_first', undefined, { cancelToken });
-    const status = (wb as any).__sentinelExportStatus;
-    expect(status.status).toBe('cancelled');
-    expect(status.filesWritten.length).toBe(0);
-  }, 60000);
-
-  it('instrucción 6: usuario cancela DESPUÉS del archivo 3 — luego reintenta y SOLO genera los pendientes (ningún archivo ya generado se repite)', async () => {
-    const batch = makeBatch(5000);
-    const basePrefix = 'dev-outputs/scale_cancel_after_3';
-    const cancelToken: ExportCancelToken = { cancelled: false };
-    let archivosCompletados = 0;
-
-    const primerIntento = await exportToExcel(batch, basePrefix, (e) => {
-      if (e.stage === 'done' && e.sheet.includes('completado')) {
-        archivosCompletados++;
-        if (archivosCompletados === 3) cancelToken.cancelled = true;
-      }
-    }, { cancelToken });
-    const status1 = (primerIntento as any).__sentinelExportStatus;
-    expect(status1.status).toBe('cancelled');
-    expect(status1.filesWritten.length).toBe(3);
-
-    // Reintento dirigido: se le dice exactamente dónde continuar (archivo 4).
-    const resumeFromFile = status1.filesWritten.length + 1;
-    const hojasReconstruidas: string[] = [];
-    const segundoIntento = await exportToExcel(batch, basePrefix, (e) => {
-      if (e.stage === 'building' && typeof e.fileIndex === 'number') hojasReconstruidas.push(e.fileName || '');
-    }, { cancelToken: { cancelled: false }, resumeFromFile });
-    const status2 = (segundoIntento as any).__sentinelExportStatus;
-
-    expect(status2.status).toBe('complete');
-    // Los 3 primeros archivos NUNCA se reconstruyeron en el segundo intento.
-    const archivosPrimerosTres = status1.filesWritten as string[];
-    for (const nombre of archivosPrimerosTres) {
-      expect(hojasReconstruidas).not.toContain(nombre);
-    }
-    // Pero SÍ aparecen en el resultado final (se asumen ya generados, no se pierden del reporte).
-    for (const nombre of archivosPrimerosTres) {
-      expect(status2.filesWritten).toContain(nombre);
-    }
-    // La reconciliación del paquete completo sigue siendo exacta.
-    expect(status2.reconciliacion.totalProcesados).toBe(5000);
-    expect(status2.reconciliacion.cuadra).toBe(true);
-  }, 120000);
-
-  it('exportación reintentable: tras una cancelación, una nueva llamada con un token fresco completa el paquete completo', async () => {
-    const batch = makeBatch(2351);
-    const cancelToken1: ExportCancelToken = { cancelled: true }; // cancelada desde el inicio
-    const cancelado = await exportToExcel(batch, 'dev-outputs/scale_retry', undefined, { cancelToken: cancelToken1 });
-    expect((cancelado as any).__sentinelExportStatus.status).toBe('cancelled');
-
-    const cancelToken2: ExportCancelToken = { cancelled: false };
-    const reintento = await exportToExcel(batch, 'dev-outputs/scale_retry', undefined, { cancelToken: cancelToken2 });
-    const status = (reintento as any).__sentinelExportStatus;
-    expect(status.status).toBe('complete');
-    expect(status.reconciliacion.totalProcesados).toBe(2351);
-  }, 120000);
-
-  it('instrucción 5: File System Access API — escritura CONFIRMADA (writesConfirmed=true), un archivo por llamada, nunca dos workbooks a la vez', async () => {
-    const batch = makeBatch(2351);
-    const escritos: string[] = [];
-    const fakeDirectoryHandle = {
-      getFileHandle: async (name: string) => {
-        escritos.push(name);
-        return {
-          createWritable: async () => ({
-            write: async () => { /* no-op: no se necesita persistir bytes reales para esta prueba */ },
-            close: async () => { /* no-op */ },
-          }),
-        };
-      },
-    };
-
-    const wb = await exportToExcel(batch, 'dev-outputs/scale_fsapi', undefined, { directoryHandle: fakeDirectoryHandle as any });
-    const status = (wb as any).__sentinelExportStatus;
-    expect(status.status).toBe('complete');
-    expect(status.writesConfirmed).toBe(true);
-    expect(escritos.length).toBe(status.totalFiles); // un archivo por cada bloque + el resumen global
-  }, 120000);
-
-  it('instrucción 5: si el navegador/SO bloquea la escritura vía File System Access API (permiso revocado, cuota, etc.), se reporta como falla de ESE archivo — no se afirma un guardado que no ocurrió', async () => {
-    const batch = makeBatch(5000);
-    let llamada = 0;
-    const fakeDirectoryHandleQueFalla = {
-      getFileHandle: async (name: string) => {
-        llamada++;
-        if (llamada === 2) throw new DOMException('Acceso denegado (simulado)', 'NotAllowedError');
-        return {
-          createWritable: async () => ({ write: async () => {}, close: async () => {} }),
-        };
-      },
-    };
-
-    const wb = await exportToExcel(batch, 'dev-outputs/scale_fsapi_fail', undefined, { directoryHandle: fakeDirectoryHandleQueFalla as any });
-    const status = (wb as any).__sentinelExportStatus;
-    expect(status.status).toBe('critical_failure');
-    expect(status.failedAtFile).toBe(2);
-    expect(status.filesWritten.length).toBe(1); // el primer archivo SÍ se confirmó antes de la falla
-  }, 120000);
-
-  it('si un bloque falla a la mitad del paquete, los archivos anteriores se conservan (ya se descargaron) y se reporta exactamente cuál bloque falló', async () => {
-    const batch = makeBatch(5000); // suficientemente grande para varios bloques
-    const plan = planExportChunks(batch);
-    expect(plan.chunks.length).toBeGreaterThan(2); // la prueba requiere al menos 3 bloques
-
-    // Se reemplaza XLSX.writeFile por un stub para las primeras dos
-    // invocaciones: no necesita escribir un archivo real para esta prueba
-    // (solo importa CUÁNTAS veces se invocó y en cuál invocación se hizo
-    // fallar) — así se verifica el manejo de errores de la orquestación sin
-    // depender del sistema de archivos. mockRestore() al final regresa el
-    // mock a delegar en la implementación real para las demás pruebas.
+// Estas pruebas cubren el flujo retirado de descargas múltiples y su
+// reanudación por archivo. El exportador principal ahora produce un XLSX;
+// la integración vigente se prueba en mainReportWorkbook.test.ts.
+describe('exportToExcel — reporte principal de archivo único', () => {
+  it('serializa los 5,000 CFDI en una sola descarga', async () => {
     const mockedWriteFile = vi.mocked(XLSX.writeFile);
-    mockedWriteFile.mockImplementationOnce(() => undefined as any); // bloque 1: éxito simulado
-    mockedWriteFile.mockImplementationOnce(() => { throw new Error('Fallo simulado de escritura (prueba)'); }); // bloque 2: falla
-
+    mockedWriteFile.mockClear();
+    mockedWriteFile.mockImplementation(() => undefined as any);
     try {
-      const wb = await exportToExcel(batch, 'dev-outputs/scale_fail', undefined);
-      const status = (wb as any).__sentinelExportStatus;
-      expect(status.status).toBe('critical_failure');
-      expect(status.failedAtFile).toBe(2);
-      expect(status.filesWritten.length).toBe(1); // solo el primer bloque se alcanzó a escribir con éxito
+      const workbook = await exportToExcel(makeBatch(5000), 'dev-outputs/reporte-unico.xlsx');
+      expect(workbook.SheetNames).toHaveLength(11);
+      expect(mockedWriteFile).toHaveBeenCalledTimes(1);
+      expect(mockedWriteFile.mock.calls[0][0].SheetNames).toHaveLength(11);
     } finally {
       mockedWriteFile.mockRestore();
     }
   }, 120000);
 });
-
 describe('planExportChunks — clusters extremos: nunca separa una relación PPD<->REP, nunca entra en ciclo infinito', () => {
   it('un REP relacionado con MUCHAS facturas (2,000): todas quedan en el mismo bloque que el REP, sin colgarse', () => {
     const facturaUuids: string[] = [];

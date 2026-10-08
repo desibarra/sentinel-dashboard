@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import * as XLSX from 'xlsx';
-import { exportToExcel } from '../lib/excelExporter';
+import { buildMainReportWorkbook } from '../lib/excelExporter';
 import { reconciliarPagosPPD, contarEstatusSAT } from '../lib/cfdiEngine';
 import type { ValidationResult, PagoRelacionadoDetalle } from '../lib/cfdiEngine';
 
@@ -208,118 +208,16 @@ describe('Reproducción EXACTA del caso reportado (6,726 CFDI) — bloqueador: n
   });
 });
 
-// Instrucción 8: reabrir programáticamente TODOS los .xlsx generados (no solo
-// confiar en el objeto de estado en memoria) y demostrar que lo que
-// realmente quedó en disco es correcto. Se exporta UNA sola vez en
-// beforeAll — todas las pruebas de este bloque leen los mismos archivos.
-describe('Reapertura de los archivos generados (instrucción 8): lo que quedó en disco es correcto, no solo el estado en memoria', () => {
-  let status: any;
-  let chunkFiles: string[];
-  let globalFile: string;
-  let chunkWorkbooks: XLSX.WorkBook[];
-  let globalWorkbook: XLSX.WorkBook;
+describe('reporte principal único para lote histórico 6,726', () => {
+  it('genera un único workbook con UUID sin duplicar y las hojas acordadas', async () => {
+    const workbook = await buildMainReportWorkbook(batch, { name: 'Empresa de prueba', rfc: 'AAA010101AAA' });
+    const issuedRows = XLSX.utils.sheet_to_json<any>(workbook.Sheets['CFDI Emitidos']);
+    const serialized = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
 
-  beforeAll(async () => {
-    const wb = await exportToExcel(batch, 'dev-outputs/exact_case_6726.xlsx');
-    status = (wb as any).__sentinelExportStatus;
-    expect(status.isMultiFile).toBe(true);
-    expect(status.status).toBe('complete');
-
-    globalFile = status.filesWritten.find((f: string) => f.includes('00_Resumen_Global'));
-    chunkFiles = status.filesWritten.filter((f: string) => f !== globalFile);
-    expect(globalFile).toBeTruthy();
-    expect(chunkFiles.length).toBeGreaterThan(1);
-
-    globalWorkbook = XLSX.readFile(globalFile);
-    chunkWorkbooks = chunkFiles.map(f => XLSX.readFile(f));
-  }, 180000);
-
-  it('BLOQUEADOR: el manifiesto (INDICE_CONCILIACION, reabierto desde disco) reporta 69 duplicados — NUNCA 0', () => {
-    expect(status.reconciliacion.duplicadosControlados).toBe(NUM_REP_DUPLICADOS);
-    expect(status.reconciliacion.uuidExportados).toBe(TOTAL - NUM_REP_DUPLICADOS);
-    expect(status.reconciliacion.erroresLectura).toBe(0);
-    expect(status.reconciliacion.totalProcesados).toBe(
-      status.reconciliacion.uuidExportados + status.reconciliacion.duplicadosControlados + status.reconciliacion.erroresLectura
-    );
-    expect(status.reconciliacion.cuadra).toBe(true);
-
-    // El propio archivo global (no solo el objeto en memoria) contiene la
-    // hoja INDICE_CONCILIACION con esa misma cifra.
-    const indice = XLSX.utils.sheet_to_json<any>(globalWorkbook.Sheets['INDICE_CONCILIACION'], { header: 1 });
-    const textoCompleto = JSON.stringify(indice);
-    expect(textoCompleto).toContain('Duplicados controlados');
-    const filaDuplicados = indice.find((row: any[]) => String(row[0] || '').includes('Duplicados controlados'));
-    expect(filaDuplicados?.[1]).toBe(NUM_REP_DUPLICADOS);
-  });
-
-  it('suma exacta de 6,726 entradas across TODOS los archivos de bloque reabiertos (Diagnostico_CFDI), sin pérdidas', () => {
-    let totalFilas = 0;
-    const todosLosUuids: string[] = [];
-    for (const wb of chunkWorkbooks) {
-      const sheetNames = wb.SheetNames.filter(n => n.startsWith('Diagnostico_CFDI'));
-      expect(sheetNames.length).toBeGreaterThan(0); // hoja crítica presente en CADA archivo de bloque
-      for (const name of sheetNames) {
-        const rows = XLSX.utils.sheet_to_json<any>(wb.Sheets[name]);
-        totalFilas += rows.length;
-        for (const row of rows) todosLosUuids.push(String(row.UUID));
-      }
-    }
-    expect(totalFilas).toBe(TOTAL);
-    expect(todosLosUuids.length).toBe(TOTAL);
-
-    // Ningún UUID se pierde: el multiset de UUIDs reabiertos desde disco
-    // coincide EXACTAMENTE con el del lote original (mismas repeticiones,
-    // ni una fila de más ni de menos).
-    const uuidsOriginales = batch.map(r => r.uuid).sort();
-    expect(todosLosUuids.sort()).toEqual(uuidsOriginales);
-  });
-
-  it('69 duplicados identificados al reabrir los archivos (mismo UUID aparece exactamente 2 veces en el conjunto reabierto)', () => {
-    const conteoPorUuid = new Map<string, number>();
-    for (const wb of chunkWorkbooks) {
-      for (const name of wb.SheetNames.filter(n => n.startsWith('Diagnostico_CFDI'))) {
-        for (const row of XLSX.utils.sheet_to_json<any>(wb.Sheets[name])) {
-          const uuid = String(row.UUID);
-          conteoPorUuid.set(uuid, (conteoPorUuid.get(uuid) || 0) + 1);
-        }
-      }
-    }
-    const duplicados = Array.from(conteoPorUuid.entries()).filter(([, count]) => count > 1);
-    expect(duplicados.length).toBe(NUM_REP_DUPLICADOS);
-    expect(duplicados.every(([, count]) => count === 2)).toBe(true);
-  });
-
-  it('hojas críticas presentes en CADA archivo de bloque (nunca "EXPORTACIÓN INCOMPLETA" — la exportación fue exitosa)', () => {
-    const HOJAS_CRITICAS = ['Resumen', 'Diagnostico_CFDI', 'CEDULA INGRESOS SAT', 'CEDULA IVA TRASLADADO', 'CEDULA IVA ACREDITABLE', 'CEDULA NO CLASIFICADOS'];
-    for (const wb of chunkWorkbooks) {
-      expect(wb.SheetNames.some(n => n === 'EXPORTACION INCOMPLETA')).toBe(false);
-      for (const hoja of HOJAS_CRITICAS) {
-        expect(wb.SheetNames.some(n => n === hoja || n.startsWith(`${hoja}_`))).toBe(true);
-      }
-    }
-    expect(globalWorkbook.SheetNames.some(n => n === 'EXPORTACION INCOMPLETA')).toBe(false);
-    expect(globalWorkbook.SheetNames).toContain('Resumen');
-    expect(globalWorkbook.SheetNames).toContain('RESUMEN EJECUTIVO');
-    expect(globalWorkbook.SheetNames).toContain('INDICE_CONCILIACION');
-  });
-
-  it('SAT/69-B/dirección/IVA/PPD-REP del resumen global (reabierto) coinciden EXACTAMENTE con la fuente central (contarEstatusSAT/reconciliarPagosPPD)', () => {
-    const ejecutivo = XLSX.utils.sheet_to_json<any>(globalWorkbook.Sheets['RESUMEN EJECUTIVO']);
-    const buscar = (m: string) => ejecutivo.find((r: any) => r.Metrica === m)?.Valor;
-
-    const conteoSAT = contarEstatusSAT(batch);
-    expect(buscar('Total CFDI vigentes')).toBe(conteoSAT.vigentes);
-    expect(buscar('Total CFDI cancelados')).toBe(conteoSAT.cancelados);
-    expect(buscar('Total CFDI con SAT no confirmado')).toBe(conteoSAT.noConfirmados);
-    expect(buscar('Total REP excluidos de validación SAT (Total=0.00, no es error)')).toBe(conteoSAT.repExcluidos);
-
-    const { facturas: facturasReales, reps: repsReales } = reconciliarPagosPPD(batch);
-    const facturasPPD = facturasReales.filter(f => f.metodoPago === 'PPD');
-    expect(buscar('Facturas PPD - sin evidencia REP')).toBe(facturasPPD.filter(f => f.estado === 'SIN_EVIDENCIA_REP').length);
-    expect(buscar('Facturas PPD - pagadas parcialmente')).toBe(facturasPPD.filter(f => f.estado === 'PARCIAL').length);
-    expect(buscar('Facturas PPD - liquidadas')).toBe(facturasPPD.filter(f => f.estado === 'LIQUIDADA').length);
-    expect(buscar('REP cargados - relacionados')).toBe(repsReales.filter(r => r.estado === 'RELACIONADO').length);
-    expect(buscar('REP cargados - sin factura relacionada en este análisis (huérfanos)')).toBe(repsReales.filter(r => r.estado === 'SIN_FACTURA_RELACIONADA').length);
-    expect(buscar('REP cargados - duplicados')).toBe(repsReales.filter(r => r.estado === 'DUPLICADO').length);
-  });
+    expect(workbook.SheetNames).toHaveLength(11);
+    expect(workbook.SheetNames).toContain('CFDI Emitidos');
+    expect(workbook.SheetNames).toContain('CFDI Recibidos');
+    expect(issuedRows).toHaveLength(TOTAL - NUM_REP_DUPLICADOS);
+    expect(serialized.byteLength).toBeGreaterThan(0);
+  }, 120000);
 });

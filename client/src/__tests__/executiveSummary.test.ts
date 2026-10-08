@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { exportToExcel } from '../lib/excelExporter';
+import { buildMainReportWorkbook } from '../lib/excelExporter';
 import { ValidationResult } from '../lib/cfdiEngine';
 import * as XLSX from 'xlsx';
-import * as fs from 'fs';
 
 describe('Executive Summary (Hoja Resumen)', () => {
   it('genera la hoja Resumen como la primera hoja con cálculos correctos', async () => {
@@ -102,18 +101,13 @@ describe('Executive Summary (Hoja Resumen)', () => {
       } as unknown as ValidationResult,
     ];
 
-    const outputPath = 'dev-outputs/sentinel_test_summary_test.xlsx';
-    
-    // Si existe el archivo, borrarlo para asegurar una prueba limpia
-    if (fs.existsSync(outputPath)) {
-      fs.unlinkSync(outputPath);
-    }
-
-    await exportToExcel(cfdis, outputPath);
-
-    expect(fs.existsSync(outputPath)).toBe(true);
-
-    const workbook = XLSX.readFile(outputPath);
+    const company = { name: 'Empresa de prueba', rfc: 'EMP010101EMP' };
+    const companyCfdis = cfdis.map(cfdi => ({
+      ...cfdi,
+      rfcEmisor: company.rfc,
+      rfcReceptor: 'CLI010101CLI',
+    }));
+    const workbook = await buildMainReportWorkbook(companyCfdis, company);
     
     // Verificar que Resumen sea la primera hoja
     expect(workbook.SheetNames[0]).toBe('Resumen');
@@ -122,35 +116,18 @@ describe('Executive Summary (Hoja Resumen)', () => {
     const ws = workbook.Sheets['Resumen'];
     const rows = XLSX.utils.sheet_to_json(ws) as any[];
 
-    console.log('Métricas en la hoja Resumen generada:', rows);
+    const emittedSection = rows.findIndex(row => row.Indicador === '=== CFDI EMITIDAS ===');
+    const emittedMetrics = rows.slice(emittedSection + 1, rows.findIndex((row, index) =>
+      index > emittedSection && String(row.Indicador).startsWith('=== CFDI ')
+    ));
+    const getEmittedValue = (metricName: string) => emittedMetrics.find(row => row.Indicador === metricName)?.Valor;
 
-    const getVal = (metricName: string) => {
-      const match = rows.find(r => r.Metrica === metricName);
-      return match ? match.Valor : undefined;
-    };
-
-    // 1. Resumen Operativo
-    expect(getVal('CFDI procesados')).toBe(6);
-    expect(getVal('Usables')).toBe(2); // Verde: UUID-VERDE-PUE and UUID-SIN-RIESGO
-    expect(getVal('Alertas')).toBe(1);  // Amarillo: UUID-AMARILLO-PUE
-    expect(getVal('No usables')).toBe(3); // Rojo: PPD-SIN, PPD-FUERA, CANCELADO
-    expect(getVal('Monto total')).toBe(11500);
-    expect(getVal('Monto en riesgo')).toBe(9500); // 2000 (Amarillo) + 3000 (Rojo) + 4000 (Rojo) + 500 (Rojo - Cancelado)
-    expect(getVal('Cancelados')).toBe(1);
-
-    // 2. Semáforo Fiscal Preventivo
-    expect(getVal('CFDI sin riesgo fiscal preventivo')).toBe(2);
-    expect(getVal('CFDI con revisión fiscal preventiva')).toBe(1);
-    expect(getVal('CFDI con riesgo fiscal preventivo')).toBe(2);
-    expect(getVal('PPD sin complemento')).toBe(1);
-    expect(getVal('PUE revisar cobro')).toBe(1);
-    expect(getVal('Complementos fuera de periodo')).toBe(1);
-    expect(getVal('UUID relacionado no encontrado')).toBe(0);
-    expect(getVal('IVA potencialmente no acreditable')).toBe(300);
-    expect(getVal('IVA acreditable')).toBe(700);
-    expect(getVal('IVA en revisión')).toBe(250);
-
-    // Limpieza
-    fs.unlinkSync(outputPath);
+    expect(rows.find(row => row.Indicador === 'Empresa')?.Valor).toBe(company.name);
+    expect(getEmittedValue('Cantidad')).toBe(6);
+    expect(getEmittedValue('Usables')).toBe(2);
+    expect(getEmittedValue('Alertas')).toBe(1);
+    expect(getEmittedValue('No usables')).toBe(3);
+    expect(getEmittedValue('Importe total')).toBe(11500);
+    expect(getEmittedValue('Semáforo de riesgo')).toBe('ROJO');
   });
 });

@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { ValidationResult, contarEstatusSAT, reconciliarPagosPPD } from '@/lib/cfdiEngine';
+import { normalizarRFC } from '@/lib/direccionCFDI';
 import { sentinelStageLog } from '@/lib/stageLog';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -3291,6 +3292,7 @@ export interface MinimalFileSystemDirectoryHandle {
 
 export interface ExportToExcelOptions {
   cancelToken?: ExportCancelToken;
+  company?: { name?: string; rfc?: string };
   // Si se provee (usuario concedió acceso a una carpeta vía
   // window.showDirectoryPicker()), cada archivo se escribe ahí con
   // confirmación real de escritura (File System Access API) en vez de una
@@ -3306,41 +3308,354 @@ export interface ExportToExcelOptions {
   resumeFromFile?: number;
 }
 
+const MAIN_REPORT_SHEETS = [
+  'Resumen',
+  'CFDI Emitidos',
+  'CFDI Recibidos',
+  'Alertas',
+  '69-B - EFOS',
+  'Clientes',
+  'Proveedores',
+  'Cédula IVA',
+  'Conciliación PPD-REP emitidas',
+  'Conciliación PPD-REP recibidas',
+  'Errores de lectura',
+] as const;
+
+const isExportableUuid = (uuid: string | undefined): boolean => {
+  const value = String(uuid || '').trim().toUpperCase();
+  return Boolean(value) && !['NO DISPONIBLE', 'NO_DISPONIBLE', 'NO VIENE EN XML'].includes(value);
+};
+
+const roundCurrency = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+
+const classifyForCompany = (result: ValidationResult, companyRfc: string): 'EMITIDO' | 'RECIBIDO' | 'AJENO' | 'REVISION' => {
+  const company = normalizarRFC(companyRfc);
+  const issuer = normalizarRFC(result.rfcEmisor);
+  const receiver = normalizarRFC(result.rfcReceptor);
+  if (!company) {
+    if (result.direccionCFDI === 'EMITIDO') return 'EMITIDO';
+    if (result.direccionCFDI === 'RECIBIDO') return 'RECIBIDO';
+    return 'REVISION';
+  }
+  const isIssuer = issuer === company;
+  const isReceiver = receiver === company;
+  if (isIssuer && !isReceiver) return 'EMITIDO';
+  if (isReceiver && !isIssuer) return 'RECIBIDO';
+  return isIssuer && isReceiver ? 'REVISION' : 'AJENO';
+};
+
+const appendMainReportSheet = async (
+  workbook: any,
+  name: string,
+  data: PlainRow[],
+  onProgress: ExportProgressCallback | undefined,
+  sheetIndex: number,
+  cancelToken?: ExportCancelToken
+): Promise<void> => {
+  if (cancelToken?.cancelled) throw new Error('Exportación cancelada por el usuario.');
+  if (data.length > EXCEL_MAX_DATA_ROWS) {
+    throw new Error(`La hoja "${name}" excede el límite de ${EXCEL_MAX_DATA_ROWS.toLocaleString()} filas de Excel. El reporte principal no se fragmenta.`);
+  }
+  onProgress?.({ sheet: name, stage: 'building', sheetIndex, totalSheets: MAIN_REPORT_SHEETS.length, affectedRows: data.length });
+  await yieldToMain();
+  const rows = data.length ? data : [{ Estado: 'SIN REGISTROS' }];
+  const headers = collectHeaders(rows);
+  const sheet = (XLSX as any).utils.aoa_to_sheet(rowsToAOA(rows, headers));
+  applySheetDefaults(sheet);
+  (XLSX as any).utils.book_append_sheet(workbook, sheet, name);
+  onProgress?.({ sheet: name, stage: 'done', sheetIndex, totalSheets: MAIN_REPORT_SHEETS.length, affectedRows: data.length });
+};
+
+function buildReadErrorRows(results: ValidationResult[]): PlainRow[] {
+  return results.filter(result => !isExportableUuid(result.uuid)).map(result => {
+    const xml = String(result.xmlContent || '');
+    const reason = String(result.comentarioFiscal || result.comentarioMotor || 'No fue posible extraer un UUID válido.');
+    let classification = 'XML incompleto o UUID no localizado';
+    if (/timeout|excedido/i.test(reason)) classification = 'Timeout de procesamiento';
+    else if (xml && !xml.includes('Comprobante')) classification = 'El archivo no contiene un Comprobante CFDI';
+    else if (xml && !xml.includes('TimbreFiscalDigital')) classification = 'CFDI sin Timbre Fiscal Digital';
+    else if (/versión no soportada/i.test(reason)) classification = 'Versión CFDI no soportada';
+    return { Archivo: result.fileName, UUID_Extraido: result.uuid || 'NO DISPONIBLE', Motivo: classification, Detalle: reason };
+  });
+}
+
+export async function buildMainReportWorkbook(
+  results: ValidationResult[],
+  company: { name?: string; rfc?: string } = {},
+  onProgress?: ExportProgressCallback,
+  cancelToken?: ExportCancelToken
+): Promise<any> {
+  const rowsByUuid = new Map<string, ValidationResult>();
+  results.filter(result => isExportableUuid(result.uuid)).forEach(result => {
+    const key = String(result.uuid).trim().toUpperCase();
+    if (!rowsByUuid.has(key)) rowsByUuid.set(key, result);
+  });
+  const companyRfc = normalizarRFC(company.rfc || results.find(result => result.rfcEmpresaEvaluada)?.rfcEmpresaEvaluada || '');
+  const companyName = company.name || 'No especificada';
+  const validResults: ValidationResult[] = Array.from(rowsByUuid.values()).map(result => {
+    const direction = classifyForCompany(result, companyRfc);
+    return {
+      ...result,
+      direccionCFDI: (direction === 'EMITIDO' ? 'EMITIDO' : direction === 'RECIBIDO' ? 'RECIBIDO' : 'REQUIERE_REVISION') as NonNullable<ValidationResult['direccionCFDI']>,
+      rfcEmpresaEvaluada: companyRfc,
+    };
+  });
+  const issued = validResults.filter(result => result.direccionCFDI === 'EMITIDO');
+  const received = validResults.filter(result => result.direccionCFDI === 'RECIBIDO');
+  const foreign = validResults.filter(result => classifyForCompany(result, companyRfc) === 'AJENO');
+  const workbook = (XLSX as any).utils.book_new();
+  const dateValues = validResults.map(result => result.fechaEmision).filter(Boolean).sort();
+  const period = dateValues.length ? `${dateValues[0]} — ${dateValues[dateValues.length - 1]}` : 'Sin fechas de emisión';
+
+  const summaryRows: PlainRow[] = [
+    { Indicador: 'Empresa', Valor: companyName },
+    { Indicador: 'RFC de la empresa', Valor: companyRfc || 'No especificado' },
+    { Indicador: 'Periodo analizado', Valor: period },
+    { Indicador: 'Fecha del análisis', Valor: new Date().toISOString() },
+  ];
+  for (const [label, directionRows] of [['Emitidas', issued], ['Recibidas', received]] as const) {
+    const usable = directionRows.filter(result => result.resultado?.includes('🟢')).length;
+    const alerts = directionRows.filter(result => result.resultado?.includes('🟡')).length;
+    const notUsable = directionRows.filter(result => result.resultado?.includes('🔴')).length;
+    const risk = notUsable > 0 ? 'ROJO' : alerts > 0 ? 'AMARILLO' : 'VERDE';
+    summaryRows.push(
+      { Indicador: `=== CFDI ${label.toUpperCase()} ===`, Valor: '' },
+      { Indicador: 'Cantidad', Valor: directionRows.length },
+      { Indicador: 'Importe total', Valor: roundCurrency(directionRows.reduce((sum, result) => sum + (result.total || 0), 0)) },
+      { Indicador: 'Usables', Valor: usable },
+      { Indicador: 'Alertas', Valor: alerts },
+      { Indicador: 'No usables', Valor: notUsable },
+      { Indicador: 'Semáforo de riesgo', Valor: risk }
+    );
+  }
+  summaryRows.push(
+    { Indicador: 'CFDI ajenos a la empresa', Valor: foreign.length },
+    { Indicador: 'CFDI con UUID único en detalle', Valor: validResults.length },
+    { Indicador: 'XML sin UUID válido', Valor: results.filter(result => !isExportableUuid(result.uuid)).length }
+  );
+  await appendMainReportSheet(workbook, 'Resumen', summaryRows, onProgress, 1, cancelToken);
+
+  const detailRow = (result: ValidationResult): PlainRow => ({
+    UUID: result.uuid,
+    Archivo: result.fileName,
+    Fecha: result.fechaEmision,
+    Serie: result.serie,
+    Folio: result.folio,
+    Tipo: result.tipoCFDI,
+    RFC_Emisor: result.rfcEmisor,
+    Nombre_Emisor: result.nombreEmisor,
+    RFC_Receptor: result.rfcReceptor,
+    Nombre_Receptor: result.nombreReceptor,
+    Subtotal: result.subtotal,
+    Descuento: result.descuentoGlobal,
+    Base_IVA_16: result.baseIVA16,
+    Base_IVA_8: result.baseIVA8,
+    Base_IVA_0: result.baseIVA0,
+    Base_Exenta: result.baseIVAExento,
+    IVA_Trasladado: result.ivaTraslado,
+    IVA_Retenido: result.ivaRetenido,
+    ISR_Retenido: result.isrRetenido,
+    Total: result.total,
+    Moneda: result.moneda,
+    Tipo_Cambio: result.tipoCambio,
+    Metodo_Pago: result.metodoPago,
+    Forma_Pago: result.formaPago,
+    Estatus_SAT: result.estatusSAT,
+    Resultado: result.resultado,
+    Comentario: result.comentarioFiscal,
+    Estado_Pago: result.pagosRelacionadosEstado || result.paymentComplementStatus || 'NO DETERMINADO',
+  });
+
+  await appendMainReportSheet(workbook, 'CFDI Emitidos', issued.map(detailRow), onProgress, 2, cancelToken);
+  await appendMainReportSheet(workbook, 'CFDI Recibidos', received.map(detailRow), onProgress, 3, cancelToken);
+
+  const alerts = buildAlerts(validResults);
+  foreign.forEach(result => alerts.push({
+    UUID: result.uuid,
+    Archivo_XML: result.fileName,
+    Tipo_Alerta: 'DIRECCIÓN',
+    Regla: 'CFDI_AJENO',
+    Nivel_Riesgo: 'AMARILLO',
+    Descripcion_Tecnica: 'El RFC de la empresa no coincide con el emisor ni con el receptor.',
+    Fundamento_Referencia: `RFC seleccionado ${companyRfc || 'no especificado'}; comparación normalizada contra RFC_Emisor y RFC_Receptor.`,
+    Evidencia_XML: `Emisor ${result.rfcEmisor}; receptor ${result.rfcReceptor}`,
+    Recomendacion: 'Verificar que el CFDI pertenezca a la empresa seleccionada o cambiar la empresa del análisis.',
+    Motivo: 'CFDI ajeno a la empresa',
+    Fundamento: `RFC seleccionado ${companyRfc || 'no especificado'}; comparación normalizada contra emisor y receptor.`,
+    Severidad: 'Media',
+  }));
+  const seen = new Set<string>();
+  const alertRows = alerts.map(alert => ({
+    UUID: alert.UUID || '',
+    Severidad: alert.Severidad || (alert.Nivel_Riesgo === 'ROJO' ? 'Alta' : alert.Nivel_Riesgo === 'NARANJA' ? 'Media-alta' : alert.Nivel_Riesgo === 'AMARILLO' ? 'Media' : 'Informativa'),
+    Tipo: alert.Tipo_Alerta || alert.Tipo || '',
+    Motivo: alert.Motivo || alert.Descripcion_Tecnica || '',
+    Fundamento: alert.Fundamento || alert.Fundamento_Referencia || 'Regla preventiva Sentinel Express; requiere revisión con documentación soporte.',
+    Evidencia: alert.Evidencia_XML || '',
+    Recomendación: alert.Recomendacion || '',
+  })).filter(alert => {
+    const key = `${alert.UUID}|${alert.Tipo}|${alert.Motivo}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  await appendMainReportSheet(workbook, 'Alertas', alertRows, onProgress, 4, cancelToken);
+
+  const blacklistRows: PlainRow[] = [];
+  validResults.forEach(result => {
+    const direction = result.direccionCFDI;
+    const parties = direction === 'EMITIDO'
+      ? [{ role: 'Cliente', rfc: result.rfcReceptor, blacklist: result.rfcReceptorBlacklist }]
+      : direction === 'RECIBIDO'
+        ? [{ role: 'Proveedor', rfc: result.rfcEmisor, blacklist: result.rfcEmisorBlacklist }]
+        : [
+          { role: 'Emisor', rfc: result.rfcEmisor, blacklist: result.rfcEmisorBlacklist },
+          { role: 'Receptor', rfc: result.rfcReceptor, blacklist: result.rfcReceptorBlacklist },
+        ];
+    parties.forEach(party => {
+      if (!party.blacklist?.found && !party.blacklist?.notSynced) return;
+      blacklistRows.push({
+        UUID: result.uuid,
+        Dirección: direction,
+        Contraparte: party.role,
+        RFC: party.rfc,
+        Coincidencia: party.blacklist.found ? 'SI' : 'LISTA NO SINCRONIZADA',
+        Situación: party.blacklist.situacion || 'No especificada',
+        Fecha_Publicación: party.blacklist.fechaPublicacion || '',
+        Fuente: party.blacklist.source || '',
+      });
+    });
+  });
+  await appendMainReportSheet(workbook, '69-B - EFOS', blacklistRows, onProgress, 5, cancelToken);
+
+  const buildCounterpartyRows = (directionRows: ValidationResult[], role: 'Cliente' | 'Proveedor') => {
+    const groups = new Map<string, { nombre: string; cantidad: number; subtotal: number; iva: number; total: number }>();
+    directionRows.forEach(result => {
+      const rfc = role === 'Cliente' ? result.rfcReceptor : result.rfcEmisor;
+      const nombre = role === 'Cliente' ? result.nombreReceptor : result.nombreEmisor;
+      const group = groups.get(rfc) || { nombre, cantidad: 0, subtotal: 0, iva: 0, total: 0 };
+      const sign = String(result.tipoCFDI || '').toUpperCase() === 'E' ? -1 : 1;
+      group.cantidad++;
+      group.subtotal += (result.subtotal || 0) * sign;
+      group.iva += (result.ivaTraslado || 0) * sign;
+      group.total += (result.total || 0) * sign;
+      groups.set(rfc, group);
+    });
+    return Array.from(groups, ([rfc, group]) => ({
+      RFC: rfc,
+      Nombre: group.nombre,
+      CFDI: group.cantidad,
+      Subtotal: roundCurrency(group.subtotal),
+      IVA: roundCurrency(group.iva),
+      Total: roundCurrency(group.total),
+    }));
+  };
+  await appendMainReportSheet(workbook, 'Clientes', buildCounterpartyRows(issued, 'Cliente'), onProgress, 6, cancelToken);
+  await appendMainReportSheet(workbook, 'Proveedores', buildCounterpartyRows(received, 'Proveedor'), onProgress, 7, cancelToken);
+
+  const reconciliation = reconciliarPagosPPD(validResults);
+  const paymentByInvoice = new Map(reconciliation.facturas.map(invoice => [invoice.uuid.toUpperCase(), invoice]));
+  const ivaRows = validResults.flatMap(result => {
+    const direction = result.direccionCFDI;
+    if (direction !== 'EMITIDO' && direction !== 'RECIBIDO') return [];
+    const sign = String(result.tipoCFDI || '').toUpperCase() === 'E' ? -1 : 1;
+    const creditableVatBeforePayment = result.trazabilidadInfo?.ivaAcreditable || result.ivaTraslado || 0;
+    const grossVat = (direction === 'RECIBIDO' ? creditableVatBeforePayment : result.ivaTraslado || 0) * sign;
+    let paidVat = direction === 'EMITIDO' ? 0 : 0;
+    if (direction === 'RECIBIDO') {
+      const payment = paymentByInvoice.get(String(result.uuid).toUpperCase());
+      if (payment?.estado === 'PUE') paidVat = grossVat;
+      else if ((payment?.estado === 'LIQUIDADA' || payment?.estado === 'PARCIAL') && (payment.totalFactura || 0) > 0) {
+        paidVat = grossVat * Math.min(1, Math.max(0, payment.totalPagado / payment.totalFactura));
+      }
+    }
+    paidVat = roundCurrency(paidVat);
+    const pendingVat = direction === 'RECIBIDO' ? roundCurrency(grossVat - paidVat) : 0;
+    const withholding = (result.ivaRetenido || 0) + (result.isrRetenido || 0);
+    return [{
+      UUID: result.uuid,
+      Fecha: result.fechaEmision,
+      Dirección: direction,
+      Tipo_CFDI: result.tipoCFDI,
+      IVA_trasladado_emitidas: direction === 'EMITIDO' ? roundCurrency(grossVat) : 0,
+      IVA_acreditable_pagado_recibidas: direction === 'RECIBIDO' ? roundCurrency(paidVat) : 0,
+      IVA_recibido_pendiente_de_pago: direction === 'RECIBIDO' ? roundCurrency(pendingVat) : 0,
+      IVA_retenido: roundCurrency((result.ivaRetenido || 0) * sign),
+      ISR_retenido: roundCurrency((result.isrRetenido || 0) * sign),
+      Estado_pago: paymentByInvoice.get(String(result.uuid).toUpperCase())?.estado || 'NO DETERMINADO',
+    }];
+  });
+  const ivaTotals = ivaRows.map(row => ({
+      Concepto: `${row.Dirección} · ${row.Tipo_CFDI} · ${row.UUID}`,
+      'IVA trasladado emitidas': row.IVA_trasladado_emitidas,
+      'IVA acreditable pagado recibidas': row.IVA_acreditable_pagado_recibidas,
+      'IVA recibido pendiente de pago': row.IVA_recibido_pendiente_de_pago,
+      IVA_retenido: row.IVA_retenido,
+      ISR_retenido: row.ISR_retenido,
+      Estado_pago: row.Estado_pago,
+      Fecha: row.Fecha,
+    }));
+  await appendMainReportSheet(workbook, 'Cédula IVA', ivaTotals, onProgress, 8, cancelToken);
+
+  const reconciliationRows = (direction: 'EMITIDO' | 'RECIBIDO') => [
+    ...buildConciliacionPagosRows(validResults).filter(row => row.Direccion_CFDI === direction).map(row => ({ Tipo: 'Factura', ...row })),
+    ...buildConciliacionREPRows(validResults).filter(row => {
+      const rep = validResults.find(result => result.uuid === row.UUID_REP);
+      return rep?.direccionCFDI === direction;
+    }).map(row => ({ Tipo: 'REP', ...row })),
+  ];
+  await appendMainReportSheet(workbook, 'Conciliación PPD-REP emitidas', reconciliationRows('EMITIDO'), onProgress, 9, cancelToken);
+  await appendMainReportSheet(workbook, 'Conciliación PPD-REP recibidas', reconciliationRows('RECIBIDO'), onProgress, 10, cancelToken);
+  await appendMainReportSheet(workbook, 'Errores de lectura', buildReadErrorRows(results), onProgress, 11, cancelToken);
+
+  const unexpectedSheetNames = workbook.SheetNames.filter((name: string) => !MAIN_REPORT_SHEETS.includes(name as typeof MAIN_REPORT_SHEETS[number]));
+  if (unexpectedSheetNames.length || workbook.SheetNames.length !== MAIN_REPORT_SHEETS.length) {
+    throw new Error('Error de integridad: el reporte principal debe contener exclusivamente las 11 hojas acordadas.');
+  }
+  return workbook;
+}
+
 export async function exportToExcel(
   results: ValidationResult[],
   fileNameOverride?: string,
   onProgress?: ExportProgressCallback,
   options?: ExportToExcelOptions
 ): Promise<any> {
-  const plan = planExportChunks(results);
+  if (options?.cancelToken?.cancelled) throw new Error('Exportación cancelada antes de generar el reporte.');
+  const wb = await buildMainReportWorkbook(results, options?.company, onProgress, options?.cancelToken);
+  if (options?.cancelToken?.cancelled) throw new Error('Exportación cancelada antes de escribir el reporte principal.');
+  const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
+  const fileName = fileNameOverride || `SentinelExpress_Reporte_${dateStr}.xlsx`;
+  sentinelStageLog('serializacion_descarga_inicio', { fileName, sheets: wb.SheetNames.length, records: results.length });
+  (XLSX as any).writeFile(wb, fileName);
+  sentinelStageLog('serializacion_descarga_fin', { fileName });
+  return wb;
+}
 
-  // Lotes pequeños/medianos (la inmensa mayoría de los casos reales): se
-  // conserva EXACTAMENTE el comportamiento actual — un solo XLSX, sin ningún
-  // cambio de nombre de archivo ni de contrato de retorno.
-  if (plan.singleFile) {
-    const wb = await buildDiagnosticoWorkbook(results, onProgress);
-    const status: ExportStatusInfo | undefined = wb.__sentinelExportStatus;
-    const today = new Date();
-    const dateStr = today.toISOString().split('T')[0].replace(/-/g, '');
-    let fileName = fileNameOverride || `SentinelExpress_Diagnostico_${dateStr}.xlsx`;
-    if (!fileNameOverride && status?.status === 'critical_failure') {
-      fileName = `DIAGNOSTICO_INCOMPLETO_${dateStr}.xlsx`;
-    } else if (!fileNameOverride && status?.status === 'partial') {
-      fileName = `INCOMPLETO_SentinelExpress_Diagnostico_${dateStr}.xlsx`;
-    }
-    sentinelStageLog("serializacion_descarga_inicio", { fileName });
-    (XLSX as any).writeFile(wb, fileName);
-    sentinelStageLog("serializacion_descarga_fin", { fileName });
-    return wb;
+const TECHNICAL_ANNEX_SHEETS = new Set([
+  'DETALLE CONCEPTOS XML',
+  'DETALLE CARTA PORTE MERCANCIAS',
+  'DETALLE CP UBICACIONES',
+  'DETALLE CARTA PORTE FIGURAS',
+  'EXTRACCION CRUDA XML',
+]);
+
+export async function exportTechnicalAnnex(
+  results: ValidationResult[],
+  onProgress?: ExportProgressCallback
+): Promise<void> {
+  const fullWorkbook = await buildDiagnosticoWorkbook(results, onProgress);
+  const workbook = (XLSX as any).utils.book_new();
+  fullWorkbook.SheetNames.filter((name: string) => TECHNICAL_ANNEX_SHEETS.has(name)).forEach((name: string) => {
+    (XLSX as any).utils.book_append_sheet(workbook, fullWorkbook.Sheets[name], name);
+  });
+  if (workbook.SheetNames.length !== TECHNICAL_ANNEX_SHEETS.size) {
+    const missing = Array.from(TECHNICAL_ANNEX_SHEETS).filter(name => !workbook.SheetNames.includes(name));
+    throw new Error(`No se pudieron generar todas las hojas del anexo técnico: ${missing.join(', ')}`);
   }
-
-  // Lotes grandes: paquete de varios archivos, generados y descargados UNO A
-  // LA VEZ — nunca se mantienen dos workbooks completos en memoria
-  // simultáneamente (instrucción 3). Cada archivo se descarga tan pronto se
-  // termina de construir, así que si un bloque posterior falla, los
-  // anteriores YA están en el disco del usuario — no hay nada que "perder"
-  // (instrucción 7).
-  return exportToExcelMultiFile(results, plan, fileNameOverride, onProgress, options);
+  const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
+  (XLSX as any).writeFile(workbook, `SentinelExpress_Anexo_Tecnico_${dateStr}.xlsx`);
 }
 
 // Escribe UN workbook a disco/descarga. Si se proveyó `directoryHandle`
