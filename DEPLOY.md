@@ -56,29 +56,14 @@ sudo ss -ltnp | grep ':3187' || echo 'No aparece ningún listener en 3187'
 
 Si `3187` está ocupado, elige otro puerto y actualízalo tanto en `ecosystem.config.cjs` como en `deploy/nginx/sentinel.wibby.cloud.conf` antes de continuar.
 
-## 4. Crear almacenamiento persistente y copiar la base existente
+## 4. Crear almacenamiento persistente vacío
 
 ```bash
 sudo install -d -o "$USER" -g "$USER" -m 750 /var/lib/sentinel
 sudo install -d -o "$USER" -g "$USER" -m 750 /var/backups/sentinel
 ```
 
-Si la base local `data/sentinel.db` es la base que se debe conservar, crea una copia consistente con SQLite y transfiérela. Estos comandos se ejecutan primero en Windows/PowerShell desde la raíz del proyecto:
-
-```powershell
-node --input-type=module -e 'import sqlite3 from "sqlite3"; import {open} from "sqlite"; const db=await open({filename:"data/sentinel.db",driver:sqlite3.Database}); await db.exec("VACUUM INTO ''sentinel-transfer.db''"); await db.close();'
-scp .\sentinel-transfer.db srv1324384:/tmp/sentinel.db
-```
-
-En el VPS, no sobrescribas una base que ya exista:
-
-```bash
-test ! -e /var/lib/sentinel/sentinel.db || { echo 'La base ya existe; cancelo para no sobrescribirla'; exit 1; }
-sudo install -o "$USER" -g "$USER" -m 600 /tmp/sentinel.db /var/lib/sentinel/sentinel.db
-rm /tmp/sentinel.db
-```
-
-Si no hay una base que conservar, omite la transferencia. `server/db.ts` inicializa el esquema al arrancar. El usuario `admin` no se crea automáticamente; elige `npm run create-admin` si es una instalación nueva, o `npm run reset-admin` si `admin` ya existe.
+El VPS empieza con una base limpia: **no copies ni subas `data/sentinel.db`**. La aplicación creará `/var/lib/sentinel/sentinel.db` y su esquema vacío cuando arranque en el paso 6.
 
 ## 5. Guardar secretos fuera del repositorio
 
@@ -101,40 +86,7 @@ set +a
 
 Si ya existe `admin` y se va a restablecer su clave:
 
-```bash
-cd /opt/sentinel-express
-DB_PATH=/var/lib/sentinel/sentinel.db npm run reset-admin
-```
-
-El script pide la contraseña dos veces sin imprimirla, guarda un backup previo y cambia exclusivamente `users.password_hash`.
-
-## 6. Importar tokens de Netlify Blobs y JSONBin
-
-La migración de tokens debe ejecutarse antes de retirar las cuentas o credenciales de origen. Agrega temporalmente al archivo `/etc/sentinel/sentinel.env` los valores de `NETLIFY_SITE_ID`, `NETLIFY_API_TOKEN`, `JSONBIN_MASTER_KEY` y `JSONBIN_BIN_ID`, luego vuelve a cargarlo:
-
-```bash
-sudoedit /etc/sentinel/sentinel.env
-set -a
-. /etc/sentinel/sentinel.env
-set +a
-cd /opt/sentinel-express
-DB_PATH=/var/lib/sentinel/sentinel.db npm run import:legacy-tokens
-```
-
-La importación añade registros ausentes y no sobrescribe claves que ya existan en SQLite. Confirma el recuento de registros antes de retirar las credenciales antiguas.
-
-## 7. Crear el administrador antes del corte
-
-Si no copiaste una base con `admin`, créalo antes de publicar el servicio:
-
-```bash
-cd /opt/sentinel-express
-DB_PATH=/var/lib/sentinel/sentinel.db npm run create-admin
-```
-
-El comando solicita dos veces una contraseña oculta de al menos 12 caracteres y falla sin cambiar nada si `admin` ya existe. Si la cuenta ya existe y necesita otra clave, ejecuta `DB_PATH=/var/lib/sentinel/sentinel.db npm run reset-admin`.
-
-## 8. Arrancar Sentinel con PM2
+## 6. Arrancar Sentinel para crear la base vacía
 
 ```bash
 cd /opt/sentinel-express
@@ -143,15 +95,61 @@ set -a
 set +a
 pm2 start ecosystem.config.cjs --update-env
 pm2 status sentinel
-pm2 logs sentinel --lines 100
+pm2 logs sentinel --lines 100 --nostream
 pm2 startup systemd -u "$USER" --hp "$HOME"
 ```
 
-Ejecuta el comando `sudo` exacto que `pm2 startup` imprima para habilitar el servicio systemd. Luego guarda la lista de procesos:
+Ejecuta el comando `sudo` exacto que `pm2 startup` imprima y guarda la lista de procesos:
 
 ```bash
 pm2 save
+test -f /var/lib/sentinel/sentinel.db
 ```
+
+El primer arranque crea el esquema SQLite vacío. No se crea el usuario `admin` automáticamente.
+
+## 7. Crear el administrador
+
+```bash
+cd /opt/sentinel-express
+DB_PATH=/var/lib/sentinel/sentinel.db npm run create-admin
+```
+
+El comando solicita dos veces una contraseña oculta de al menos 12 caracteres y falla sin cambiar nada si `admin` ya existe.
+
+## 8. Importar tokens de Netlify Blobs y JSONBin y verificar conteos
+
+La importación debe ejecutarse antes de retirar las cuentas o credenciales de origen. Agrega temporalmente al archivo `/etc/sentinel/sentinel.env` los valores de `NETLIFY_SITE_ID`, `NETLIFY_API_TOKEN`, `JSONBIN_MASTER_KEY` y `JSONBIN_BIN_ID`, luego vuelve a cargarlo:
+
+```bash
+sudoedit /etc/sentinel/sentinel.env
+cd /opt/sentinel-express
+set -a
+. /etc/sentinel/sentinel.env
+set +a
+DB_PATH=/var/lib/sentinel/sentinel.db npm run import:legacy-tokens
+```
+
+La salida del importador indica cuántos registros encontró en el origen (nuevos más los que ya existían). Comprueba en Netlify Blobs y JSONBin los conteos de origen y compáralos con los de la base del VPS:
+
+```bash
+sqlite3 -header -column /var/lib/sentinel/sentinel.db "
+SELECT
+  COUNT(*) AS application_tokens,
+  SUM(CASE WHEN store_name = 'sentinel-tokens' THEN 1 ELSE 0 END) AS netlify_blobs,
+  SUM(CASE WHEN store_name = 'jsonbin-tokens' THEN 1 ELSE 0 END) AS jsonbin,
+  SUM(CASE
+    WHEN json_valid(data)
+      AND json_extract(data, '\$.status') = 'pending'
+      AND json_extract(data, '\$.email') IS NOT NULL
+      AND json_extract(data, '\$.phone') IS NOT NULL
+    THEN 1 ELSE 0
+  END) AS lead_records
+FROM application_tokens;
+"
+```
+
+El esquema actual **no tiene una tabla `leads` separada**: `/api/functions/lead-capture` guarda cada lead como registro en `application_tokens`; `lead_records` cuenta los que tienen estado `pending`, correo y teléfono. En una base limpia, compara `application_tokens` y los subtotales `netlify_blobs`/`jsonbin` con los conteos de sus orígenes, y `lead_records` con los leads pendientes en Netlify. Investiga cualquier diferencia antes de retirar credenciales o datos de origen. La importación añade registros ausentes y no sobrescribe claves existentes.
 
 ## 9. Configurar Nginx para Cloudflare y emitir el certificado
 

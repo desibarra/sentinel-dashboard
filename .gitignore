@@ -101,10 +101,10 @@ tmp/
 temp/
 
 # Database
+data/
 *.db
 *.sqlite
 *.sqlite3
-data/sentinel.db*
 *.db-shm
 *.db-wal
 
