@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { saveSessionCache, loadSessionCache, clearSessionCache, getCacheAge } from '../hooks/useSessionCache';
+import { saveSessionCache, loadSessionCache, clearSessionCache, getCacheAge, persistRevalidatedSession } from '../hooks/useSessionCache';
 import { appDB } from '../db/appDB';
 import type { ValidationResult } from '../lib/cfdiEngine';
 
@@ -27,6 +27,22 @@ beforeEach(async () => {
 });
 
 describe('P0-B: saveSessionCache / loadSessionCache (IndexedDB)', () => {
+  it('persists the refreshed SAT state so a restored report does not revert to the prior connection error', async () => {
+    const refreshed = {
+      ...makeResult('sat-retried'),
+      estatusSAT: 'Vigente',
+      resultado: '🟢 USABLE',
+      ultimoRefrescoSAT: '2026-10-08T12:00:00.000Z',
+    };
+
+    expect(await persistRevalidatedSession(COMPANY_A, [refreshed])).toBe('complete');
+    const restored = await loadSessionCache(COMPANY_A);
+
+    expect(restored?.results[0].estatusSAT).toBe('Vigente');
+    expect(restored?.results[0].resultado).toBe('🟢 USABLE');
+    expect(restored?.results[0].ultimoRefrescoSAT).toBe('2026-10-08T12:00:00.000Z');
+  });
+
   it('guarda y restaura un lote grande (2,351 resultados de tamaño realista) sin QuotaExceededError', async () => {
     const results = Array.from({ length: 2351 }, (_, i) => makeResult(`uuid-${i}`, 15));
     // ~2,351 * 15KB ≈ 35 MB de xmlContent — muy por encima de la cuota típica

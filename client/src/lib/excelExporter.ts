@@ -3390,7 +3390,10 @@ export async function buildMainReportWorkbook(
   const rowsByUuid = new Map<string, ValidationResult>();
   results.filter(result => isExportableUuid(result.uuid)).forEach(result => {
     const key = String(result.uuid).trim().toUpperCase();
-    if (!rowsByUuid.has(key)) rowsByUuid.set(key, result);
+    const existing = rowsByUuid.get(key);
+    const existingRefresh = Date.parse(existing?.ultimoRefrescoSAT || '') || 0;
+    const candidateRefresh = Date.parse(result.ultimoRefrescoSAT || '') || 0;
+    if (!existing || candidateRefresh > existingRefresh) rowsByUuid.set(key, result);
   });
   const companyRfc = normalizarRFC(company.rfc || results.find(result => result.rfcEmpresaEvaluada)?.rfcEmpresaEvaluada || '');
   const companyName = company.name || 'No especificada';

@@ -24,7 +24,7 @@ import { History, RefreshCcw, Save } from "lucide-react";
 import { checkCFDIStatusSAT } from "@/utils/satStatusValidator";
 import { satQueue, SatQueueCounts } from "@/lib/satQueue";
 import { incrementXMLCount, getXMLCount } from "@/services/leadService";
-import { saveSessionCache, loadSessionCache, clearSessionCache, getCacheAge } from "@/hooks/useSessionCache";
+import { saveSessionCache, loadSessionCache, clearSessionCache, getCacheAge, persistRevalidatedSession } from "@/hooks/useSessionCache";
 import { useAuth } from "@/contexts/AuthContext";
 import { tokenService } from "@/services/tokenService";
 import { isBlacklistSynced } from "@/utils/blacklistValidator";
@@ -95,6 +95,9 @@ export function revalidarFilaSAT(
     resultado: nuevoResultado,
     comentarioFiscal: nuevoComentario,
     fiscalRiskLevel: nuevoRiskLevel,
+    trazabilidadInfo: row.trazabilidadInfo
+      ? { ...row.trazabilidadInfo, observacionSAT: status.estado }
+      : row.trazabilidadInfo,
     ...dir,
   };
 }
@@ -104,12 +107,16 @@ export default function Dashboard() {
   const { currentCompany } = useCompany();
   const { demoTokenData } = useAuth();
   const [results, setResults] = useState<ValidationResult[]>([]);
+  const latestResultsRef = useRef(results);
   const [loading, setLoading] = useState(true);
   const [hasValidatedResults, setHasValidatedResults] = useState(false);
   const { isValidating, validateXMLFiles, progress } = useXMLValidator();
   const [sortField, setSortField] = useState<SortField | null>('fechaEmision');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [currentPage, setCurrentPage] = useState(1);
+  useEffect(() => {
+    latestResultsRef.current = results;
+  }, [results]);
   // P0-A: progreso de exportación por hoja + bloqueo de doble ejecución
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<{ sheet: string; sheetIndex: number; totalSheets: number } | null>(null);
@@ -899,6 +906,24 @@ export default function Dashboard() {
 
 
 
+  const applySatRevalidationUpdates = async (updates: Map<string, SATRevalidationStatus>) => {
+    const updatedResults = latestResultsRef.current.map(row => {
+      const status = updates.get(row.uuid);
+      if (!status) return row;
+      return revalidarFilaSAT(
+        row,
+        status,
+        currentCompany?.giro || row.giroEmpresa || '',
+        currentCompany?.rfc || row.rfcEmpresaEvaluada
+      );
+    });
+    latestResultsRef.current = updatedResults;
+    setResults(updatedResults);
+    if (currentCompany?.id) {
+      await persistRevalidatedSession(currentCompany.id, updatedResults);
+    }
+  };
+
   /**
 
    * handleRevalidateSAT
@@ -939,18 +964,8 @@ export default function Dashboard() {
 
       const status = await checkCFDIStatusSAT(result.uuid, result.rfcEmisor, result.rfcReceptor, result.total);
 
-
-
       // Actualizar SOLO la fila cuyo UUID coincide — inmune al sort y la páginación
-
-      setResults(prev => prev.map(row => {
-
-        if (row.uuid !== uuid) return row; // todas las demas filas: sin tocar
-
-        // Logica de revalidacion delegada a funcion pura reutilizable (revalidarFilaSAT)
-        return revalidarFilaSAT(row, status, currentCompany?.giro || row.giroEmpresa || '', currentCompany?.rfc || row.rfcEmpresaEvaluada);
-
-      }));
+      await applySatRevalidationUpdates(new Map([[uuid, status]]));
 
 
 
@@ -1023,11 +1038,7 @@ export default function Dashboard() {
       }));
 
       const byUuid = new Map(outcomes.map(o => [o.uuid, o.status]));
-      setResults(prev => prev.map(row => {
-        const status = byUuid.get(row.uuid);
-        if (!status) return row; // fila no incluida en el reintento: sin tocar
-        return revalidarFilaSAT(row, status, currentCompany?.giro || row.giroEmpresa || '', currentCompany?.rfc || row.rfcEmpresaEvaluada);
-      }));
+      await applySatRevalidationUpdates(byUuid);
 
       const resueltos = outcomes.filter(o => o.status.estado === 'Vigente' || o.status.estado === 'Cancelado').length;
       toast.success(`Reintento completado: ${resueltos}/${pendientes.length} CFDI obtuvieron un estatus definitivo del SAT.`, { id: 'bulk-sat-retry', duration: 8000 });

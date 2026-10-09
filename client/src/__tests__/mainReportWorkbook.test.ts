@@ -114,6 +114,26 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     expect(XLSX.writeFile).toHaveBeenCalledWith(workbook, 'SentinelExpress_Reporte_test.xlsx');
   });
 
+  it('prefiere el estatus SAT revalidado más reciente al deduplicar un UUID', async () => {
+    const uuid = '00000000-0000-4000-8000-000000000099';
+    const stale = result(uuid, {
+      estatusSAT: 'Error Conexión',
+      resultado: 'No validado SAT',
+      ultimoRefrescoSAT: '2026-10-01T10:00:00.000Z',
+    });
+    const retried = result(uuid, {
+      estatusSAT: 'Vigente',
+      resultado: '🟢 USABLE',
+      ultimoRefrescoSAT: '2026-10-08T10:00:00.000Z',
+    });
+    const workbook = await buildMainReportWorkbook([stale, retried], { name: 'Empresa de prueba', rfc: COMPANY_RFC });
+    const detail = rows(workbook, 'CFDI Emitidos');
+
+    expect(detail).toHaveLength(1);
+    expect(detail[0].Estatus_SAT).toBe('Vigente');
+    expect(detail[0].Resultado).toBe('🟢 USABLE');
+  });
+
   it('clasifica emitidos/recibidos por RFC seleccionado y alerta los CFDI ajenos', async () => {
     const issued = result('00000000-0000-4000-8000-000000000001');
     const received = result('00000000-0000-4000-8000-000000000002', {

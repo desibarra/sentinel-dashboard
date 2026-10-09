@@ -79,10 +79,16 @@ export async function saveSessionCache(companyId: string, results: ValidationRes
             toast.warning('No se pudo guardar el respaldo de esta sesión (almacenamiento local lleno). El análisis en pantalla sigue disponible; si recargas la página tendrás que re-subir los XML.', { duration: 8000 });
             return 'quota_exceeded';
         }
+
         console.warn('[SessionCache] No se pudo guardar la sesión en IndexedDB.', e);
         toast.warning('No se pudo guardar el respaldo de esta sesión. El análisis en pantalla sigue disponible.', { duration: 8000 });
         return 'unavailable';
     }
+}
+
+/** Persists results after SAT revalidation so exports/restored sessions use the refreshed state. */
+export async function persistRevalidatedSession(companyId: string, results: ValidationResult[]): Promise<SessionCacheStatus> {
+    return saveSessionCache(companyId, results);
 }
 
 /**

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { revalidarFilaSAT, type SATRevalidationStatus } from '../pages/Dashboard';
-import { buildDiagnosticoWorkbook, buildExecutiveSummaryRows } from '../lib/excelExporter';
+import { buildDiagnosticoWorkbook, buildExecutiveSummaryRows, buildMainReportWorkbook } from '../lib/excelExporter';
 import * as XLSX from 'xlsx';
 import type { ValidationResult } from '../lib/cfdiEngine';
 
@@ -220,6 +220,31 @@ describe('Flujo real de reintento SAT (revalidarFilaSAT + reducer por UUID + rec
     expect(trasExito.estatusSAT).toBe('Vigente');
     expect(trasExito.resultado).toBe('🟢 USABLE');
     expect(trasExito.comentarioFiscal).toBe('motor ok');
+  });
+
+  it('el reporte principal exporta el estado SAT renovado que ve el tablero', async () => {
+    const row = makeRow('FRESH-SAT-5555-4555-8555-EEEEEEEEEEEE', {
+      rfcEmisor: 'EMP010101EMP',
+      rfcReceptor: 'CLI010101CLI',
+      estatusSAT: 'Error Conexión',
+      trazabilidadInfo: {
+        observacionSAT: 'Error Conexión',
+        fuenteEstatus: 'SAT',
+        consultadoEn: '2026-10-01T12:00:00.000Z',
+      },
+    });
+    const retried = revalidarFilaSAT(
+      row,
+      { estado: 'Vigente', validatedAt: new Date('2026-10-08T12:00:00.000Z') },
+      'GIRO'
+    );
+    const workbook = await buildMainReportWorkbook([retried], { name: 'Empresa', rfc: 'EMP010101EMP' });
+    const details = XLSX.utils.sheet_to_json<any>(workbook.Sheets['CFDI Emitidos']);
+
+    expect(retried.estatusSAT).toBe('Vigente');
+    expect(retried.trazabilidadInfo?.observacionSAT).toBe('Vigente');
+    expect(details[0].Estatus_SAT).toBe(retried.estatusSAT);
+    expect(details[0].Resultado).toBe(retried.resultado);
   });
 
   it('una limitación SAT deja la fila pendiente y permite incluirla en reintentos posteriores', () => {
