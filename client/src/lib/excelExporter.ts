@@ -1246,10 +1246,19 @@ export const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
   const usables = results.filter(r => r.resultado?.includes("🟢")).length;
   const alertas = results.filter(r => r.resultado?.includes("🟡")).length;
   const noUsables = results.filter(r => r.resultado?.includes("🔴")).length;
-  const totalMonto = totalInMXN(results, r => r.total || 0);
-  const montoRiesgo = results
+  const financialRows = results.filter(r =>
+    !/cancelad/i.test(String(r.estatusSAT || '')) &&
+    !/cancelad/i.test(String(r.trazabilidadInfo?.observacionSAT || '')) &&
+    String(r.tipoCFDI || '').toUpperCase() !== 'P'
+  );
+  const totalMonto = totalInMXN(financialRows, r => r.total || 0);
+  const montoRiesgo = financialRows
     .filter(r => r.resultado?.includes("🔴") || r.resultado?.includes("🟡"))
     .reduce((sum, r) => sum + (amountInMXN(r, r.total || 0) ?? 0), 0);
+  const amountByCategory = (direction: 'EMITIDO' | 'RECIBIDO', type: 'I' | 'E' | 'N') =>
+    totalInMXN(financialRows.filter(r =>
+      r.direccionCFDI === direction && String(r.tipoCFDI || '').toUpperCase() === type
+    ), r => r.total || 0);
   // Conteo central de estatus SAT — misma función que usan RESUMEN EJECUTIVO
   // y el Dashboard, para que los tres siempre reporten la misma cifra.
   const conteoSAT = contarEstatusSAT(results);
@@ -1266,13 +1275,13 @@ export const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
   const compFueraPeriodo = results.filter(r => r.paymentComplementStatus === 'COMPLEMENTO_FUERA_DE_PERIODO').length;
   const uuidRelNoEncontrado = results.filter(r => r.paymentComplementStatus === 'UUID_RELACIONADO_NO_ENCONTRADO').length;
 
-  const ivaNoAcreditable = results.filter(r => r.ivaCreditabilityStatus === 'NO_ACREDITABLE');
+  const ivaNoAcreditable = financialRows.filter(r => r.ivaCreditabilityStatus === 'NO_ACREDITABLE');
   const ivaPotencialmenteNoAcreditableVal = totalInMXN(ivaNoAcreditable, r => r.ivaTraslado || 0);
 
-  const ivaAcreditableRows = results.filter(r => r.ivaCreditabilityStatus === 'ACREDITABLE');
+  const ivaAcreditableRows = financialRows.filter(r => r.ivaCreditabilityStatus === 'ACREDITABLE');
   const ivaAcreditableVal = totalInMXN(ivaAcreditableRows, r => r.ivaTraslado || 0);
 
-  const ivaEnRevisionRows = results.filter(r => r.ivaCreditabilityStatus === 'POR_DETERMINAR' || r.fiscalRiskLevel === 'AMARILLO');
+  const ivaEnRevisionRows = financialRows.filter(r => r.ivaCreditabilityStatus === 'POR_DETERMINAR' || r.fiscalRiskLevel === 'AMARILLO');
   const ivaEnRevisionVal = totalInMXN(ivaEnRevisionRows, r => r.ivaTraslado || 0);
   // Clasificacion direccional (fila por fila) para que los contadores cuadren con las cedulas
   const emitidosDir = results.filter(r => r.direccionCFDI === 'EMITIDO').length;
@@ -1281,8 +1290,8 @@ export const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
   const signoRes = (r: ValidationResult) => (String(r.tipoCFDI || '').toUpperCase() === 'E' ? -1 : 1);
   const notasEmit = results.filter(r => r.direccionCFDI === 'EMITIDO' && String(r.tipoCFDI || '').toUpperCase() === 'E').length;
   const notasRec = results.filter(r => r.direccionCFDI === 'RECIBIDO' && String(r.tipoCFDI || '').toUpperCase() === 'E').length;
-  const ivaTrasladadoNeto = results.filter(r => r.direccionCFDI === 'EMITIDO').reduce((ac, r) => ac + (amountInMXN(r, r.ivaTraslado || 0) ?? 0) * signoRes(r), 0);
-  const ivaAcreditableNeto = results.filter(r => r.direccionCFDI === 'RECIBIDO').reduce((ac, r) => ac + (amountInMXN(r, r.ivaTraslado || 0) ?? 0) * signoRes(r), 0);
+  const ivaTrasladadoNeto = financialRows.filter(r => r.direccionCFDI === 'EMITIDO').reduce((ac, r) => ac + (amountInMXN(r, r.ivaTraslado || 0) ?? 0) * signoRes(r), 0);
+  const ivaAcreditableNeto = financialRows.filter(r => r.direccionCFDI === 'RECIBIDO').reduce((ac, r) => ac + (amountInMXN(r, r.ivaTraslado || 0) ?? 0) * signoRes(r), 0);
   return [
     { Metrica: '=== 1. RESUMEN OPERATIVO ===', Valor: '' },
     { Metrica: 'CFDI procesados', Valor: total },
@@ -1291,6 +1300,11 @@ export const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
     { Metrica: 'No usables', Valor: noUsables },
     { Metrica: 'Monto total', Valor: Math.round(totalMonto * 100) / 100 },
     { Metrica: 'Monto en riesgo', Valor: Math.round(montoRiesgo * 100) / 100 },
+    { Metrica: 'Ingresos emitidos (MXN)', Valor: amountByCategory('EMITIDO', 'I') },
+    { Metrica: 'Ingresos recibidos (MXN)', Valor: amountByCategory('RECIBIDO', 'I') },
+    { Metrica: 'Egresos emitidos (MXN)', Valor: amountByCategory('EMITIDO', 'E') },
+    { Metrica: 'Egresos recibidos (MXN)', Valor: amountByCategory('RECIBIDO', 'E') },
+    { Metrica: 'Nómina emitida (MXN)', Valor: amountByCategory('EMITIDO', 'N') },
     { Metrica: '', Valor: '' },
     { Metrica: '=== 1A. ESTATUS SAT (Vigentes + Cancelados + No confirmados + REP excluidos = total) ===', Valor: '' },
     { Metrica: 'Vigentes', Valor: vigentes },
@@ -1335,6 +1349,11 @@ export const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
 
 const buildSummaryRows = (results: ValidationResult[], alerts: any[]) => {
   const total = results.length;
+  const financialRows = results.filter(r =>
+    !/cancelad/i.test(String(r.estatusSAT || '')) &&
+    !/cancelad/i.test(String(r.trazabilidadInfo?.observacionSAT || '')) &&
+    String(r.tipoCFDI || '').toUpperCase() !== 'P'
+  );
   // Conteo central de estatus SAT — misma función que usan la hoja "Resumen"
   // y el Dashboard (ver cfdiEngine.ts). Corrige un conteo que siempre daba 0
   // porque comparaba contra un string de respaldo que en la práctica nunca
@@ -1363,7 +1382,7 @@ const buildSummaryRows = (results: ValidationResult[], alerts: any[]) => {
   const repDuplicados = conciliacionReps.filter(r => r.estado === 'DUPLICADO').length;
   const byRisk = (risk: string) => alerts.filter(a => a.Nivel_Riesgo === risk).length;
   const topAlertas = Object.entries(alerts.reduce((acc: any, a) => { acc[a.Regla] = (acc[a.Regla] || 0) + 1; return acc; }, {})).sort((a: any, b: any) => b[1] - a[1]).slice(0, 5).map(([k, v]) => `${k}: ${v}`).join(' | ') || 'NO APLICA';
-  const topEmisores = Object.entries(results.reduce((acc: any, r) => { acc[r.rfcEmisor] = (acc[r.rfcEmisor] || 0) + (amountInMXN(r, Number(r.total || 0)) ?? 0); return acc; }, {})).sort((a: any, b: any) => b[1] - a[1]).slice(0, 5).map(([k, v]: any) => `${k}: ${Math.round(v * 100) / 100}`).join(' | ') || 'NO APLICA';
+  const topEmisores = Object.entries(financialRows.reduce((acc: any, r) => { acc[r.rfcEmisor] = (acc[r.rfcEmisor] || 0) + (amountInMXN(r, Number(r.total || 0)) ?? 0); return acc; }, {})).sort((a: any, b: any) => b[1] - a[1]).slice(0, 5).map(([k, v]: any) => `${k}: ${Math.round(v * 100) / 100}`).join(' | ') || 'NO APLICA';
   return [
     { Metrica: 'Total XML recibidos', Valor: total },
     { Metrica: 'Total XML procesados', Valor: total },
@@ -3454,6 +3473,46 @@ export async function buildMainReportWorkbook(
   const cfdiWithoutBlacklistData = validResults.filter(result =>
     result.rfcEmisorBlacklist?.notSynced || result.rfcReceptorBlacklist?.notSynced
   ).length;
+  const alerts = buildAlerts(validResults);
+  foreign.forEach(result => alerts.push({
+    UUID: result.uuid,
+    Archivo_XML: result.fileName,
+    Tipo_Alerta: 'DIRECCIÓN',
+    Regla: 'CFDI_AJENO',
+    Nivel_Riesgo: 'AMARILLO',
+    Descripcion_Tecnica: 'El RFC de la empresa no coincide con el emisor ni con el receptor.',
+    Fundamento_Referencia: `RFC seleccionado ${companyRfc || 'no especificado'}; comparación normalizada contra RFC_Emisor y RFC_Receptor.`,
+    Evidencia_XML: `Emisor ${result.rfcEmisor}; receptor ${result.rfcReceptor}`,
+    Recomendacion: 'Verificar que el CFDI pertenezca a la empresa seleccionada o cambiar la empresa del análisis.',
+    Motivo: 'CFDI ajeno a la empresa',
+    Fundamento: `RFC seleccionado ${companyRfc || 'no especificado'}; comparación normalizada contra emisor y receptor.`,
+    Severidad: 'Media',
+  }));
+  const seenAlerts = new Set<string>();
+  const alertRows = alerts.map(alert => ({
+    UUID: alert.UUID || '',
+    Severidad: alert.Severidad || (alert.Nivel_Riesgo === 'ROJO' ? 'Alta' : alert.Nivel_Riesgo === 'NARANJA' ? 'Media-alta' : alert.Nivel_Riesgo === 'AMARILLO' ? 'Media' : 'Informativa'),
+    Tipo: alert.Tipo_Alerta || alert.Tipo || '',
+    Motivo: alert.Motivo || alert.Descripcion_Tecnica || '',
+    Fundamento: alert.Fundamento || alert.Fundamento_Referencia || 'Regla preventiva Sentinel Express; requiere revisión con documentación soporte.',
+    Evidencia: alert.Evidencia_XML || '',
+    Recomendación: alert.Recomendacion || '',
+  })).filter(alert => {
+    const key = `${alert.UUID}|${alert.Tipo}|${alert.Motivo}`;
+    if (seenAlerts.has(key)) return false;
+    seenAlerts.add(key);
+    return true;
+  });
+  const activeFinancialResults = validResults.filter(result =>
+    !/cancelad/i.test(String(result.estatusSAT || '')) &&
+    !/cancelad/i.test(String(result.trazabilidadInfo?.observacionSAT || '')) &&
+    String(result.tipoCFDI || '').toUpperCase() !== 'P'
+  );
+  const financialAmount = (direction: 'EMITIDO' | 'RECIBIDO', type: 'I' | 'E' | 'N') =>
+    totalInMXN(activeFinancialResults.filter(result =>
+      result.direccionCFDI === direction && String(result.tipoCFDI || '').toUpperCase() === type
+    ), result => result.total || 0);
+  const satCount = contarEstatusSAT(validResults);
   const workbook = (XLSX as any).utils.book_new();
   const dateValues = validResults.map(result => result.fechaEmision).filter(Boolean).sort();
   const period = dateValues.length ? `${dateValues[0]} — ${dateValues[dateValues.length - 1]}` : 'Sin fechas de emisión';
@@ -3469,16 +3528,33 @@ export async function buildMainReportWorkbook(
     { Indicador: 'Antigüedad de lista 69-B', Valor: blacklistStale ? 'DESACTUALIZADA: más de 30 días; actualizar antes de confiar en el cruce' : blacklistCutoff ? 'Dentro de 30 días' : 'NO VERIFICABLE SIN FECHA DE CORTE' },
     { Indicador: 'CFDI sin consulta 69-B (lista no cargada)', Valor: cfdiWithoutBlacklistData },
     { Indicador: 'Cruces 69-B sin coincidencia (lista cargada)', Valor: blacklistNoMatches },
+    { Indicador: 'CFDI no validados SAT', Valor: satCount.noConfirmados },
+    { Indicador: 'Alertas en hoja Alertas', Valor: alertRows.length },
+    { Indicador: 'Alertas de severidad alta', Valor: alertRows.filter(alert => alert.Severidad === 'Alta').length },
+    { Indicador: 'Alertas de severidad media-alta', Valor: alertRows.filter(alert => alert.Severidad === 'Media-alta').length },
+    { Indicador: 'Ingresos emitidos (MXN)', Valor: financialAmount('EMITIDO', 'I') },
+    { Indicador: 'Ingresos recibidos (MXN)', Valor: financialAmount('RECIBIDO', 'I') },
+    { Indicador: 'Egresos emitidos (MXN)', Valor: financialAmount('EMITIDO', 'E') },
+    { Indicador: 'Egresos recibidos (MXN)', Valor: financialAmount('RECIBIDO', 'E') },
+    { Indicador: 'Nómina emitida (MXN)', Valor: financialAmount('EMITIDO', 'N') },
+    { Indicador: 'REP y CFDI cancelados excluidos de importes', Valor: validResults.filter(result =>
+      String(result.tipoCFDI || '').toUpperCase() === 'P' || /cancelad/i.test(String(result.estatusSAT || ''))
+    ).length },
   ];
   for (const [label, directionRows] of [['Emitidas', issued], ['Recibidas', received]] as const) {
     const usable = directionRows.filter(result => result.resultado?.includes('🟢')).length;
     const alerts = directionRows.filter(result => result.resultado?.includes('🟡')).length;
     const notUsable = directionRows.filter(result => result.resultado?.includes('🔴')).length;
+    const amountRows = directionRows.filter(result =>
+      !/cancelad/i.test(String(result.estatusSAT || '')) &&
+      !/cancelad/i.test(String(result.trazabilidadInfo?.observacionSAT || '')) &&
+      String(result.tipoCFDI || '').toUpperCase() !== 'P'
+    );
     const risk = notUsable > 0 ? 'ROJO' : alerts > 0 ? 'AMARILLO' : 'VERDE';
     summaryRows.push(
       { Indicador: `=== CFDI ${label.toUpperCase()} ===`, Valor: '' },
       { Indicador: 'Cantidad', Valor: directionRows.length },
-      { Indicador: 'Importe total', Valor: totalInMXN(directionRows, result => result.total || 0) },
+      { Indicador: 'Importe total', Valor: totalInMXN(amountRows, result => result.total || 0) },
       { Indicador: 'Usables', Valor: usable },
       { Indicador: 'Alertas', Valor: alerts },
       { Indicador: 'No usables', Valor: notUsable },
@@ -3528,36 +3604,6 @@ export async function buildMainReportWorkbook(
   await appendMainReportSheet(workbook, 'CFDI Emitidos', issued.map(detailRow), onProgress, 2, cancelToken);
   await appendMainReportSheet(workbook, 'CFDI Recibidos', received.map(detailRow), onProgress, 3, cancelToken);
 
-  const alerts = buildAlerts(validResults);
-  foreign.forEach(result => alerts.push({
-    UUID: result.uuid,
-    Archivo_XML: result.fileName,
-    Tipo_Alerta: 'DIRECCIÓN',
-    Regla: 'CFDI_AJENO',
-    Nivel_Riesgo: 'AMARILLO',
-    Descripcion_Tecnica: 'El RFC de la empresa no coincide con el emisor ni con el receptor.',
-    Fundamento_Referencia: `RFC seleccionado ${companyRfc || 'no especificado'}; comparación normalizada contra RFC_Emisor y RFC_Receptor.`,
-    Evidencia_XML: `Emisor ${result.rfcEmisor}; receptor ${result.rfcReceptor}`,
-    Recomendacion: 'Verificar que el CFDI pertenezca a la empresa seleccionada o cambiar la empresa del análisis.',
-    Motivo: 'CFDI ajeno a la empresa',
-    Fundamento: `RFC seleccionado ${companyRfc || 'no especificado'}; comparación normalizada contra emisor y receptor.`,
-    Severidad: 'Media',
-  }));
-  const seen = new Set<string>();
-  const alertRows = alerts.map(alert => ({
-    UUID: alert.UUID || '',
-    Severidad: alert.Severidad || (alert.Nivel_Riesgo === 'ROJO' ? 'Alta' : alert.Nivel_Riesgo === 'NARANJA' ? 'Media-alta' : alert.Nivel_Riesgo === 'AMARILLO' ? 'Media' : 'Informativa'),
-    Tipo: alert.Tipo_Alerta || alert.Tipo || '',
-    Motivo: alert.Motivo || alert.Descripcion_Tecnica || '',
-    Fundamento: alert.Fundamento || alert.Fundamento_Referencia || 'Regla preventiva Sentinel Express; requiere revisión con documentación soporte.',
-    Evidencia: alert.Evidencia_XML || '',
-    Recomendación: alert.Recomendacion || '',
-  })).filter(alert => {
-    const key = `${alert.UUID}|${alert.Tipo}|${alert.Motivo}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
   await appendMainReportSheet(workbook, 'Alertas', alertRows, onProgress, 4, cancelToken);
 
   const blacklistRows: PlainRow[] = [];

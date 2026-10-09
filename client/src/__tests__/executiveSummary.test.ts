@@ -127,7 +127,7 @@ describe('Executive Summary (Hoja Resumen)', () => {
     expect(getEmittedValue('Usables')).toBe(2);
     expect(getEmittedValue('Alertas')).toBe(1);
     expect(getEmittedValue('No usables')).toBe(3);
-    expect(getEmittedValue('Importe total')).toBe(11500);
+    expect(getEmittedValue('Importe total')).toBe(11000);
     expect(getEmittedValue('Semáforo de riesgo')).toBe('ROJO');
   });
 });

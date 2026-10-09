@@ -207,6 +207,33 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     expect(String(loadedMetric('Antigüedad de lista 69-B'))).toContain('más de 30 días');
   });
 
+  it('separa importes MXN por ingresos, egresos y nómina, excluyendo REP y cancelados', async () => {
+    const batch = [
+      result('00000000-0000-4000-8000-000000000031', { total: 116 }),
+      result('00000000-0000-4000-8000-000000000032', { tipoCFDI: 'E', total: 50 }),
+      result('00000000-0000-4000-8000-000000000033', { tipoCFDI: 'N', total: 700 }),
+      result('00000000-0000-4000-8000-000000000034', { tipoCFDI: 'P', total: 0 }),
+      result('00000000-0000-4000-8000-000000000035', { estatusSAT: 'Cancelado', total: 999 }),
+      result('00000000-0000-4000-8000-000000000036', {
+        estatusSAT: 'Error Conexión',
+        resultado: 'No validado SAT',
+        total: 200,
+      }),
+    ];
+    const workbook = await buildMainReportWorkbook(batch, { name: 'Empresa de prueba', rfc: COMPANY_RFC });
+    const summary = rows(workbook, 'Resumen');
+    const metric = (name: string) => summary.find(row => row.Indicador === name)?.Valor;
+    const alertRows = rows(workbook, 'Alertas');
+
+    expect(metric('Ingresos emitidos (MXN)')).toBe(316);
+    expect(metric('Egresos emitidos (MXN)')).toBe(50);
+    expect(metric('Nómina emitida (MXN)')).toBe(700);
+    expect(metric('CFDI no validados SAT')).toBe(1);
+    expect(metric('REP y CFDI cancelados excluidos de importes')).toBe(2);
+    expect(metric('Alertas en hoja Alertas')).toBe(alertRows.length);
+    expect(metric('Importe total')).toBe(1066);
+  });
+
   it('reconcilia al centavo el IVA de cédula contra las cédulas actuales y separa el IVA no pagado', async () => {
     const issued = result('00000000-0000-4000-8000-000000000011', {
       direccionCFDI: 'EMITIDO',
