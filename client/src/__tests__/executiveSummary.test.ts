@@ -127,6 +127,7 @@ describe('Executive Summary (Hoja Resumen)', () => {
     expect(getEmittedValue('Semáforo: Usables')).toBe(2);
     expect(getEmittedValue('Semáforo: Con alerta')).toBe(1);
     expect(getEmittedValue('Semáforo: No usables')).toBe(3);
+    expect(getEmittedValue('Semáforo: Sin clasificar (No validado SAT)')).toBe(0);
     expect(getEmittedValue('Ingresos I (MXN, sin cancelados ni REP)')).toBe(11000);
     expect(getEmittedValue('Conciliación SAT: Vigente')).toBe(5);
     expect(getEmittedValue('Conciliación SAT: Cancelado')).toBe(1);

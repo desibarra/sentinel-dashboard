@@ -246,6 +246,9 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     expect(emittedMetric('Conciliación SAT: No aplica (REP)')).toBe(1);
     expect(emittedMetric('Conciliación SAT: Suma = total de CFDI')).toBe('CUADRA (6)');
     expect(emittedMetric('Alertas (hoja Alertas)')).toBe(alertRows.length);
+    const semaphore = ['Semáforo: Usables', 'Semáforo: Con alerta', 'Semáforo: No usables', 'Semáforo: Sin clasificar (No validado SAT)']
+      .reduce((sum, name) => sum + Number(emittedMetric(name)), 0);
+    expect(semaphore).toBe(emittedMetric('Cantidad'));
   });
 
   it('excluye nómina y REP de clientes/proveedores y consolida nómina por empleado', async () => {

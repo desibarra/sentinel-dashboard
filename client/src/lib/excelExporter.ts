@@ -3578,6 +3578,7 @@ export async function buildMainReportWorkbook(
       { Indicador: 'Semáforo: Usables', Valor: usable },
       { Indicador: 'Semáforo: Con alerta', Valor: withAlert },
       { Indicador: 'Semáforo: No usables', Valor: notUsable },
+      { Indicador: 'Semáforo: Sin clasificar (No validado SAT)', Valor: directionRows.length - usable - withAlert - notUsable },
       { Indicador: 'Semáforo de riesgo', Valor: risk }
     );
   }
@@ -3617,7 +3618,9 @@ export async function buildMainReportWorkbook(
     Forma_Pago: result.formaPago,
     Estatus_SAT: result.estatusSAT,
     Resultado: result.resultado,
-    Comentario: result.comentarioFiscal,
+    Comentario: vat.repNotes.has(String(result.uuid).toUpperCase())
+      ? `${vat.repNotes.get(String(result.uuid).toUpperCase())} ${result.comentarioFiscal || ''}`.trim()
+      : result.comentarioFiscal,
     Estado_Pago: result.pagosRelacionadosEstado || result.paymentComplementStatus || 'NO DETERMINADO',
   });
 

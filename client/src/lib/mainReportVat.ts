@@ -11,15 +11,35 @@ const numberAttr = (node: Element, name: string): number | null => {
 };
 const cancelled = (r: ValidationResult) => /cancelad/i.test(r.estatusSAT || '') || /cancelad/i.test(r.trazabilidadInfo?.observacionSAT || '');
 const rateLabel = (rate: string, factor: string) => factor === 'Exento' ? 'EXENTO' : rate !== '' && Number.isFinite(Number(rate)) ? `${(Number(rate) * 100).toFixed(2)}%` : 'NO DESGLOSADA';
+const month = (date?: string) => date?.slice(0, 7) || '';
+const money = (n: number) => `$${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+type RepSummary = { notInLot: Set<string>; inLot: Map<string, string>; earlyIva: Map<string, number> };
 const amountFields = ['Base_MXN', 'IVA trasladado emitidas (MXN)', 'IVA acreditable pagado recibidas (MXN)', 'IVA emitido por cobrar (MXN)', 'IVA recibido pendiente de pago (MXN)', 'IVA_retenido_MXN', 'ISR_retenido_MXN', 'IVA_REP_facturas_otros_meses_MXN', 'IVA_REP_factura_no_localizada_MXN'];
 
 /** Flujo mensual: PUE y NC por emisión; REP por FechaPago e impuestos DR, sin prorratear la factura. */
-export function buildMainReportVat(results: ValidationResult[]): { detail: Row[]; totals: Row[]; alerts: Row[] } {
+export function buildMainReportVat(results: ValidationResult[]): { detail: Row[]; totals: Row[]; alerts: Row[]; repNotes: Map<string, string> } {
   const detail: Row[] = [];
   const alerts: Row[] = [];
   const byUuid = new Map(results.map(r => [r.uuid.toUpperCase(), r]));
   const paidVat = new Map<string, number>();
-  const alert = (r: ValidationResult, reason: string) => alerts.push({ UUID: r.uuid, Tipo_Alerta: 'IVA', Nivel_Riesgo: 'NARANJA', Descripcion_Tecnica: reason, Evidencia_XML: r.fileName, Recomendacion: 'Revisar los impuestos y monedas del REP en el XML; no se estiman importes ausentes.' });
+  const repSummaries = new Map<string, RepSummary>();
+  const alert = (r: ValidationResult, reason: string, level = 'NARANJA', recommendation = 'Revisar los impuestos y monedas del REP en el XML; no se estiman importes ausentes.') =>
+    alerts.push({ UUID: r.uuid, Tipo_Alerta: 'IVA', Nivel_Riesgo: level, Descripcion_Tecnica: reason, Evidencia_XML: r.fileName, Recomendacion: recommendation });
+  const observation = (r: ValidationResult, period: string, source: string, invoice: ValidationResult | undefined, quantified: boolean) => {
+    let note: string;
+    if (source === 'REP') {
+      if (period === 'SIN FECHA') note = 'REP sin FechaPago válida; el IVA no se asigna a ningún mes.';
+      else if (!invoice) note = `Pago de una factura que no está en el lote (emitida en otro periodo); el IVA se acumula en ${period}, mes del pago.`;
+      else if (month(invoice.fechaEmision) !== period) note = `Pago de la factura de ${month(invoice.fechaEmision)} incluida en el lote; el IVA se acumula en ${period}, mes del pago.`;
+      else note = `Pago de una factura del mismo mes (${period}) incluida en el lote.`;
+      if (period !== 'SIN FECHA' && month(r.fechaEmision) && period < month(r.fechaEmision)) {
+        note += ` REP emitido el ${r.fechaEmision} con FechaPago de ${period}: el IVA corresponde a ${period}; verificar si ya se declaró.`;
+      }
+    } else if (source === 'PUE') note = 'Factura PUE: el IVA se acumula en el mes de emisión.';
+    else if (source === 'NOTA DE CRÉDITO') note = 'Nota de crédito: disminuye el IVA del mes de emisión.';
+    else note = 'Factura PPD: IVA informativo por el saldo no pagado con los REP del lote; se acumula en el mes en que se pague.';
+    return quantified ? note : `${note} Importe no cuantificable: falta tipo de cambio o impuestos DR.`;
+  };
   const add = (r: ValidationResult, period: string, source: string, related: string, tax: string, rate: string, base: number | null, amount: number | null, exchange: number | null, pending = false) => {
     const issued = r.direccionCFDI === 'EMITIDO';
     const converted = amount !== null && exchange !== null ? round(amount * exchange) : '';
@@ -39,7 +59,17 @@ export function buildMainReportVat(results: ValidationResult[]): { detail: Row[]
       IVA_REP_facturas_otros_meses_MXN: source === 'REP' && tax === 'IVA' && invoice && invoice.fechaEmision?.slice(0, 7) !== period ? converted : 0,
       IVA_REP_factura_no_localizada_MXN: source === 'REP' && tax === 'IVA' && !invoice ? converted : 0,
       Estado: converted === '' ? 'NO CUANTIFICABLE' : pending ? 'INFORMATIVO PENDIENTE' : 'CUANTIFICADO',
+      Observación: observation(r, period, source, invoice, converted !== ''),
     };
+    if (source === 'REP' && related) {
+      const summary = repSummaries.get(r.uuid) || { notInLot: new Set<string>(), inLot: new Map<string, string>(), earlyIva: new Map<string, number>() };
+      if (invoice) summary.inLot.set(related.toUpperCase(), month(invoice.fechaEmision));
+      else summary.notInLot.add(related.toUpperCase());
+      if (tax === 'IVA' && typeof converted === 'number' && period < month(r.fechaEmision)) {
+        summary.earlyIva.set(period, round((summary.earlyIva.get(period) || 0) + converted));
+      }
+      repSummaries.set(r.uuid, summary);
+    }
     detail.push(row);
     return converted;
   };
@@ -141,5 +171,25 @@ export function buildMainReportVat(results: ValidationResult[]): { detail: Row[]
     total.No_cuantificables += g.No_cuantificables;
     monthly.set(key, total);
   }
-  return { detail, totals: [...Array.from(monthly.values()), ...Array.from(groups.values())], alerts };
+  const repNotes = new Map<string, string>();
+  for (const r of results) {
+    const summary = repSummaries.get(r.uuid);
+    if (!summary) continue;
+    const parts: string[] = [];
+    if (summary.notInLot.size) parts.push(`${summary.notInLot.size} factura(s) no incluida(s) en el lote (de otros periodos)`);
+    const otherMonths = Array.from(summary.inLot.values()).filter(m => m !== month(r.fechaEmision));
+    if (otherMonths.length) parts.push(`${otherMonths.length} factura(s) del lote de otro mes (${Array.from(new Set(otherMonths)).sort().join(', ')})`);
+    const sameMonth = summary.inLot.size - otherMonths.length;
+    if (sameMonth) parts.push(`${sameMonth} factura(s) del lote del mismo mes`);
+    let note = `REP: paga ${parts.join('; ')}. El IVA se acumula en el mes de cada FechaPago.`;
+    const early = Array.from(summary.earlyIva.entries()).sort();
+    if (early.length) {
+      const detailText = early.map(([period, amount]) => `${money(amount)} en ${period}`).join(', ');
+      note += ` FechaPago anterior a su emisión (${r.fechaEmision}): IVA ${detailText}; verificar si ya se declaró.`;
+      alert(r, `REP emitido el ${r.fechaEmision} con FechaPago de un mes anterior: IVA ${detailText} asignado a ese mes.`, 'INFO',
+        'Verificar si el IVA de ese mes ya se declaró; si no, puede requerir declaración complementaria.');
+    }
+    repNotes.set(r.uuid.toUpperCase(), note);
+  }
+  return { detail, totals: [...Array.from(monthly.values()), ...Array.from(groups.values())], alerts, repNotes };
 }

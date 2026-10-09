@@ -66,8 +66,30 @@ describe('punto 4: flujo mensual desde impuestos DR', () => {
     expect(detail[0].IVA_REP_factura_no_localizada_MXN).toBe(8);
     expect(detail[0].Factura_en_lote).toBe('NO LOCALIZADA');
     expect(detail[0].Mes_factura).toBe('NO LOCALIZADA');
+    const repRow = XLSX.utils.sheet_to_json<any>(workbook.Sheets['CFDI Emitidos'])[0];
+    expect(repRow.Comentario).toContain('REP: paga 1 factura(s) no incluida(s) en el lote');
     const serialized = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx', compression: true });
     expect(XLSX.read(serialized).SheetNames).toContain('Detalle IVA por CFDI');
+  });
+
+  it('explica en cada fila y en el REP cuándo se paga una factura de otro mes o fuera del lote', () => {
+    const old = invoice('OLD', { metodoPago: 'PPD', fechaEmision: '2026-06-10' });
+    const r = rep('R', 'ABSENT', { fechaEmision: '2026-07-20' });
+    r.xmlContent = r.xmlContent!.replace('</Pago></Pagos>', '</Pago><Pago FechaPago="2026-07-18" MonedaP="MXN"><DoctoRelacionado IdDocumento="OLD" MonedaDR="MXN"><TrasladoDR BaseDR="50" ImpuestoDR="002" TipoFactorDR="Tasa" TasaOCuotaDR="0.16" ImporteDR="8"/></DoctoRelacionado></Pago></Pagos>');
+    const late = rep('LATE', 'ABSENT2', { fechaEmision: '2026-08-02' });
+    const result = buildMainReportVat([old, r, late]);
+    const row = (uuid: string, related: string) => result.detail.find(x => x.UUID === uuid && x.UUID_factura === related)!;
+    expect(row('R', 'ABSENT').Observación).toContain('no está en el lote');
+    expect(row('R', 'OLD').Observación).toContain('factura de 2026-06 incluida en el lote; el IVA se acumula en 2026-07');
+    expect(row('OLD', 'OLD').Observación).toContain('Factura PPD');
+    expect(row('LATE', 'ABSENT2').Observación).toContain('verificar si ya se declaró');
+    expect(result.repNotes.get('R')).toContain('1 factura(s) no incluida(s) en el lote');
+    expect(result.repNotes.get('R')).toContain('1 factura(s) del lote de otro mes (2026-06)');
+    expect(result.repNotes.get('LATE')).toContain('FechaPago anterior a su emisión');
+    const lateAlert = result.alerts.find(a => a.UUID === 'LATE')!;
+    expect(lateAlert.Nivel_Riesgo).toBe('INFO');
+    expect(lateAlert.Descripcion_Tecnica).toContain('2026-07');
+    expect(result.alerts.some(a => a.UUID === 'R')).toBe(false);
   });
 
   it('no inventa IVA en REP sin DR y evita volver a contar una factura PUE', () => {
