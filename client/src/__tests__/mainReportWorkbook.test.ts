@@ -109,7 +109,7 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
       { company: { name: 'Empresa de prueba', rfc: COMPANY_RFC } }
     );
 
-    expect(workbook.SheetNames).toHaveLength(11);
+    expect(workbook.SheetNames).toHaveLength(12);
     expect(XLSX.writeFile).toHaveBeenCalledTimes(1);
     expect(XLSX.writeFile).toHaveBeenCalledWith(workbook, 'SentinelExpress_Reporte_test.xlsx');
   });
@@ -156,6 +156,7 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
       'Clientes',
       'Proveedores',
       'Cédula IVA',
+      'Detalle IVA por CFDI',
       'Conciliación PPD-REP emitidas',
       'Conciliación PPD-REP recibidas',
       'Errores de lectura',
@@ -210,6 +211,8 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     const issued = result('00000000-0000-4000-8000-000000000011', {
       direccionCFDI: 'EMITIDO',
       rfcEmpresaEvaluada: COMPANY_RFC,
+      ivaRetenido: 2,
+      isrRetenido: 3,
     });
     const receivedPue = result('00000000-0000-4000-8000-000000000012', {
       rfcEmisor: 'PRO010101PRO',
@@ -236,6 +239,8 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     expect(cents(total('IVA acreditable pagado recibidas (MXN)') + total('IVA recibido pendiente de pago (MXN)'))).toBe(cents(oldReceived));
     expect(total('IVA acreditable pagado recibidas (MXN)')).toBe(16);
     expect(total('IVA recibido pendiente de pago (MXN)')).toBe(16);
+    expect(newIvaRows.some(row => row.Rubro === 'RETENCIÓN IVA' && row.IVA_retenido_MXN === 2)).toBe(true);
+    expect(newIvaRows.some(row => row.Rubro === 'RETENCIÓN ISR' && row.ISR_retenido_MXN === 3)).toBe(true);
   });
 
   it('genera un único libro menor de 10 MB para 4.000 CFDI sintéticos', async () => {
@@ -254,7 +259,7 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
     const elapsedMs = performance.now() - startedAt;
 
-    expect(workbook.SheetNames).toHaveLength(11);
+    expect(workbook.SheetNames).toHaveLength(12);
     expect(rows(workbook, 'CFDI Emitidos')).toHaveLength(4_000);
     expect(buffer.byteLength).toBeLessThan(10 * 1024 * 1024);
     console.info(`[main report benchmark] 4000 CFDI: ${(elapsedMs / 1000).toFixed(2)}s, ${(buffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
