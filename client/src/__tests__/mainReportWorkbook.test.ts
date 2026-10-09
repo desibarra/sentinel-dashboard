@@ -191,10 +191,10 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     const total = (key: string) => newIvaRows.reduce((sum, row) => sum + Number(row[key] || 0), 0);
 
     const cents = (value: number) => Math.round(value * 100);
-    expect(cents(total('IVA trasladado emitidas'))).toBe(cents(oldIssued));
-    expect(cents(total('IVA acreditable pagado recibidas') + total('IVA recibido pendiente de pago'))).toBe(cents(oldReceived));
-    expect(total('IVA acreditable pagado recibidas')).toBe(16);
-    expect(total('IVA recibido pendiente de pago')).toBe(16);
+    expect(cents(total('IVA trasladado emitidas (MXN)'))).toBe(cents(oldIssued));
+    expect(cents(total('IVA acreditable pagado recibidas (MXN)') + total('IVA recibido pendiente de pago (MXN)'))).toBe(cents(oldReceived));
+    expect(total('IVA acreditable pagado recibidas (MXN)')).toBe(16);
+    expect(total('IVA recibido pendiente de pago (MXN)')).toBe(16);
   });
 
   it('genera un único libro menor de 10 MB para 4.000 CFDI sintéticos', async () => {

@@ -77,7 +77,7 @@ export interface ValidationResult {
     impuestosLocalesRetenidos: number;
     total: number;
     moneda: string;
-    tipoCambio: number;
+    tipoCambio: number | null;
     formaPago: string;
     metodoPago: string;
     nivelValidacion: string;

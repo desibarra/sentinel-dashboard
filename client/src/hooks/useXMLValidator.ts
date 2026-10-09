@@ -212,6 +212,14 @@ export function combinarResultadoFinal(
   return armar('', estructural.resultado, estructural.nivelValidacion, estructural.score);
 }
 
+function readTipoCambio(comprobante: Element | null | undefined, moneda: string): number | null {
+  if (moneda.trim().toUpperCase() === 'MXN') return 1;
+  const raw = comprobante?.getAttribute('TipoCambio')?.trim();
+  if (!raw) return null;
+  const rate = Number(raw);
+  return Number.isFinite(rate) && rate > 0 ? rate : null;
+}
+
 export function useXMLValidator() {
   const [isValidating, setIsValidating] = useState(false);
   const [validationResults, setValidationResults] = useState<ValidationResult[]>([]);
@@ -372,7 +380,7 @@ export function useXMLValidator() {
       const reglasAplicables = obtenerReglasAplicables(version, añoFiscal, tipoCFDI);
 
       const moneda = comprobante?.getAttribute("Moneda") || "MXN";
-      const tipoCambio = parseFloat(comprobante?.getAttribute("TipoCambio") || "1");
+      const tipoCambio = readTipoCambio(comprobante, moneda);
 
       // RFC Y NOMBRES - REFORZADO para evitar "NO DISPONIBLE"
       let rfcEmisor = "NO DISPONIBLE";
@@ -581,7 +589,7 @@ export function useXMLValidator() {
             impuestosLocalesRetenidos: 0,
             total: parseFloat(comprobante?.getAttribute("Total") || "0"),
             moneda: comprobante?.getAttribute("Moneda") || "MXN",
-            tipoCambio: 1,
+            tipoCambio: readTipoCambio(comprobante, comprobante?.getAttribute("Moneda") || "MXN"),
             formaPago: comprobante?.getAttribute("FormaPago") || "NO DISPONIBLE",
             metodoPago: comprobante?.getAttribute("MetodoPago") || "NO DISPONIBLE",
             nivelValidacion: "NÓMINA - ESTRUCTURA INVÁLIDA",
@@ -920,7 +928,7 @@ export function useXMLValidator() {
         impuestosLocalesRetenidos: taxesByConcepto.impuestosLocalesRetenidos,
         total: totalXML,
         moneda: comprobante?.getAttribute("Moneda") || "MXN",
-        tipoCambio: 1,
+        tipoCambio,
         formaPago: comprobante?.getAttribute("FormaPago") || "NO DISPONIBLE",
         metodoPago: comprobante?.getAttribute("MetodoPago") || "NO DISPONIBLE",
         nivelValidacion: finalNivelValidacion,
@@ -1016,7 +1024,7 @@ export function useXMLValidator() {
     let subtotal = 0;
     let total = 0;
     let moneda = "MXN";
-    let tipoCambio = 1;
+    let tipoCambio: number | null = 1;
     let metodoPago = "NO DISPONIBLE";
     let formaPago = "NO DISPONIBLE";
     let parsedSuccessfully = false;
@@ -1042,7 +1050,7 @@ export function useXMLValidator() {
             subtotal = parseFloat(comprobante.getAttribute("SubTotal") || comprobante.getAttribute("subTotal") || "0") || 0;
             total = parseFloat(comprobante.getAttribute("Total") || comprobante.getAttribute("total") || "0") || 0;
             moneda = comprobante.getAttribute("Moneda") || "MXN";
-            tipoCambio = parseFloat(comprobante.getAttribute("TipoCambio") || "1") || 1;
+            tipoCambio = readTipoCambio(comprobante, moneda);
             metodoPago = comprobante.getAttribute("MetodoPago") || "NO DISPONIBLE";
             formaPago = comprobante.getAttribute("FormaPago") || "NO DISPONIBLE";
 

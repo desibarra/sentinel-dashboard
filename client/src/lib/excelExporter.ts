@@ -926,6 +926,8 @@ const buildForensicRows = (results: ValidationResult[]) => results.map(r => {
     Total: r.total,
     Moneda: r.moneda,
     TipoCambio: r.tipoCambio,
+    Subtotal_MXN: amountInMXN(r, r.subtotal) ?? '',
+    Total_MXN: amountInMXN(r, r.total) ?? '',
     MetodoPago: r.metodoPago,
     FormaPago: r.formaPago,
     CondicionesDePago: r.condicionesDePago || 'NO VIENE EN XML',
@@ -1153,6 +1155,12 @@ const buildAlerts = (results: ValidationResult[], cache?: XmlDocCache) => {
     const detail = cp(r);
     const transporte = String(detail?.transporteInternacional || '').toLowerCase();
     const entradaSalida = String(detail?.entradaSalidaMercancia || '').toLowerCase();
+    if (
+      !['MXN', 'XXX'].includes(String(r.moneda || '').trim().toUpperCase()) &&
+      mxnExchangeRate(r) === null
+    ) {
+      addAlert(alerts, r, 'MONEDA', 'MON-01', 'NARANJA', 'Tipo de cambio ausente o inválido; los importes no se pueden convertir a MXN.', `${r.moneda || 'Moneda no especificada'}; TipoCambio=${r.tipoCambio ?? 'ausente'}`, 'Verificar el TipoCambio del CFDI antes de consolidar sus importes en MXN.');
+    }
     if ((r.baseIVA0 || 0) > 0 && /si|sí/i.test(transporte) && /salida/i.test(entradaSalida)) addAlert(alerts, r, 'IVA', 'IVA-01', 'AMARILLO', '0% aparentemente soportado por transporte internacional de salida, sujeto a pedimento/DODA/BOL/evidencia.', joinClean(detail?.transporteInternacional, detail?.entradaSalidaMercancia), 'Integrar expediente de exportación y soporte logístico.');
     if ((r.baseIVA0 || 0) > 0 && /si|sí/i.test(transporte) && /entrada/i.test(entradaSalida)) addAlert(alerts, r, 'IVA', 'IVA-02', 'ROJO', 'Riesgo: revisar si la tasa 0% procede en servicio vinculado a importación.', joinClean(detail?.transporteInternacional, detail?.entradaSalidaMercancia), 'Revisión fiscal manual de procedencia de tasa 0%.');
     if ((r.baseIVA0 || 0) > 0 && /no/i.test(transporte)) addAlert(alerts, r, 'IVA', 'IVA-03', 'ROJO', 'Posible tasa 0% sin soporte de servicio internacional.', String(detail?.transporteInternacional || 'NO VIENE EN XML'), 'Solicitar fundamento y evidencia soporte.');
@@ -1238,10 +1246,10 @@ export const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
   const usables = results.filter(r => r.resultado?.includes("🟢")).length;
   const alertas = results.filter(r => r.resultado?.includes("🟡")).length;
   const noUsables = results.filter(r => r.resultado?.includes("🔴")).length;
-  const totalMonto = results.reduce((sum, r) => sum + (r.total || 0), 0);
+  const totalMonto = totalInMXN(results, r => r.total || 0);
   const montoRiesgo = results
     .filter(r => r.resultado?.includes("🔴") || r.resultado?.includes("🟡"))
-    .reduce((sum, r) => sum + (r.total || 0), 0);
+    .reduce((sum, r) => sum + (amountInMXN(r, r.total || 0) ?? 0), 0);
   // Conteo central de estatus SAT — misma función que usan RESUMEN EJECUTIVO
   // y el Dashboard, para que los tres siempre reporten la misma cifra.
   const conteoSAT = contarEstatusSAT(results);
@@ -1259,13 +1267,13 @@ export const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
   const uuidRelNoEncontrado = results.filter(r => r.paymentComplementStatus === 'UUID_RELACIONADO_NO_ENCONTRADO').length;
 
   const ivaNoAcreditable = results.filter(r => r.ivaCreditabilityStatus === 'NO_ACREDITABLE');
-  const ivaPotencialmenteNoAcreditableVal = ivaNoAcreditable.reduce((sum, r) => sum + (r.ivaTraslado || 0), 0);
+  const ivaPotencialmenteNoAcreditableVal = totalInMXN(ivaNoAcreditable, r => r.ivaTraslado || 0);
 
   const ivaAcreditableRows = results.filter(r => r.ivaCreditabilityStatus === 'ACREDITABLE');
-  const ivaAcreditableVal = ivaAcreditableRows.reduce((sum, r) => sum + (r.ivaTraslado || 0), 0);
+  const ivaAcreditableVal = totalInMXN(ivaAcreditableRows, r => r.ivaTraslado || 0);
 
   const ivaEnRevisionRows = results.filter(r => r.ivaCreditabilityStatus === 'POR_DETERMINAR' || r.fiscalRiskLevel === 'AMARILLO');
-  const ivaEnRevisionVal = ivaEnRevisionRows.reduce((sum, r) => sum + (r.ivaTraslado || 0), 0);
+  const ivaEnRevisionVal = totalInMXN(ivaEnRevisionRows, r => r.ivaTraslado || 0);
   // Clasificacion direccional (fila por fila) para que los contadores cuadren con las cedulas
   const emitidosDir = results.filter(r => r.direccionCFDI === 'EMITIDO').length;
   const recibidosDir = results.filter(r => r.direccionCFDI === 'RECIBIDO').length;
@@ -1273,8 +1281,8 @@ export const buildExecutiveSummaryRows = (results: ValidationResult[]) => {
   const signoRes = (r: ValidationResult) => (String(r.tipoCFDI || '').toUpperCase() === 'E' ? -1 : 1);
   const notasEmit = results.filter(r => r.direccionCFDI === 'EMITIDO' && String(r.tipoCFDI || '').toUpperCase() === 'E').length;
   const notasRec = results.filter(r => r.direccionCFDI === 'RECIBIDO' && String(r.tipoCFDI || '').toUpperCase() === 'E').length;
-  const ivaTrasladadoNeto = results.filter(r => r.direccionCFDI === 'EMITIDO').reduce((ac, r) => ac + (r.ivaTraslado || 0) * signoRes(r), 0);
-  const ivaAcreditableNeto = results.filter(r => r.direccionCFDI === 'RECIBIDO').reduce((ac, r) => ac + (r.ivaTraslado || 0) * signoRes(r), 0);
+  const ivaTrasladadoNeto = results.filter(r => r.direccionCFDI === 'EMITIDO').reduce((ac, r) => ac + (amountInMXN(r, r.ivaTraslado || 0) ?? 0) * signoRes(r), 0);
+  const ivaAcreditableNeto = results.filter(r => r.direccionCFDI === 'RECIBIDO').reduce((ac, r) => ac + (amountInMXN(r, r.ivaTraslado || 0) ?? 0) * signoRes(r), 0);
   return [
     { Metrica: '=== 1. RESUMEN OPERATIVO ===', Valor: '' },
     { Metrica: 'CFDI procesados', Valor: total },
@@ -1355,7 +1363,7 @@ const buildSummaryRows = (results: ValidationResult[], alerts: any[]) => {
   const repDuplicados = conciliacionReps.filter(r => r.estado === 'DUPLICADO').length;
   const byRisk = (risk: string) => alerts.filter(a => a.Nivel_Riesgo === risk).length;
   const topAlertas = Object.entries(alerts.reduce((acc: any, a) => { acc[a.Regla] = (acc[a.Regla] || 0) + 1; return acc; }, {})).sort((a: any, b: any) => b[1] - a[1]).slice(0, 5).map(([k, v]) => `${k}: ${v}`).join(' | ') || 'NO APLICA';
-  const topEmisores = Object.entries(results.reduce((acc: any, r) => { acc[r.rfcEmisor] = (acc[r.rfcEmisor] || 0) + Number(r.total || 0); return acc; }, {})).sort((a: any, b: any) => b[1] - a[1]).slice(0, 5).map(([k, v]: any) => `${k}: ${Math.round(v * 100) / 100}`).join(' | ') || 'NO APLICA';
+  const topEmisores = Object.entries(results.reduce((acc: any, r) => { acc[r.rfcEmisor] = (acc[r.rfcEmisor] || 0) + (amountInMXN(r, Number(r.total || 0)) ?? 0); return acc; }, {})).sort((a: any, b: any) => b[1] - a[1]).slice(0, 5).map(([k, v]: any) => `${k}: ${Math.round(v * 100) / 100}`).join(' | ') || 'NO APLICA';
   return [
     { Metrica: 'Total XML recibidos', Valor: total },
     { Metrica: 'Total XML procesados', Valor: total },
@@ -3330,6 +3338,20 @@ const isExportableUuid = (uuid: string | undefined): boolean => {
 
 const roundCurrency = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
 
+const mxnExchangeRate = (result: ValidationResult): number | null => {
+  if (!String(result.moneda || '').trim() || String(result.moneda).trim().toUpperCase() === 'MXN') return 1;
+  const rate = result.tipoCambio;
+  return rate !== null && Number.isFinite(rate) && rate > 0 ? rate : null;
+};
+
+const amountInMXN = (result: ValidationResult, amount: number): number | null => {
+  const rate = mxnExchangeRate(result);
+  return rate === null ? null : roundCurrency(amount * rate);
+};
+
+const totalInMXN = (results: ValidationResult[], amount: (result: ValidationResult) => number): number =>
+  roundCurrency(results.reduce((sum, result) => sum + (amountInMXN(result, amount(result)) ?? 0), 0));
+
 const classifyForCompany = (result: ValidationResult, companyRfc: string): 'EMITIDO' | 'RECIBIDO' | 'AJENO' | 'REVISION' => {
   const company = normalizarRFC(companyRfc);
   const issuer = normalizarRFC(result.rfcEmisor);
@@ -3417,6 +3439,7 @@ export async function buildMainReportWorkbook(
     { Indicador: 'RFC de la empresa', Valor: companyRfc || 'No especificado' },
     { Indicador: 'Periodo analizado', Valor: period },
     { Indicador: 'Fecha del análisis', Valor: new Date().toISOString() },
+    { Indicador: 'Moneda de presentación de importes', Valor: 'MXN; importes sin tipo de cambio disponible se excluyen y se alertan' },
   ];
   for (const [label, directionRows] of [['Emitidas', issued], ['Recibidas', received]] as const) {
     const usable = directionRows.filter(result => result.resultado?.includes('🟢')).length;
@@ -3426,7 +3449,7 @@ export async function buildMainReportWorkbook(
     summaryRows.push(
       { Indicador: `=== CFDI ${label.toUpperCase()} ===`, Valor: '' },
       { Indicador: 'Cantidad', Valor: directionRows.length },
-      { Indicador: 'Importe total', Valor: roundCurrency(directionRows.reduce((sum, result) => sum + (result.total || 0), 0)) },
+      { Indicador: 'Importe total', Valor: totalInMXN(directionRows, result => result.total || 0) },
       { Indicador: 'Usables', Valor: usable },
       { Indicador: 'Alertas', Valor: alerts },
       { Indicador: 'No usables', Valor: notUsable },
@@ -3452,6 +3475,7 @@ export async function buildMainReportWorkbook(
     RFC_Receptor: result.rfcReceptor,
     Nombre_Receptor: result.nombreReceptor,
     Subtotal: result.subtotal,
+    Subtotal_MXN: amountInMXN(result, result.subtotal) ?? '',
     Descuento: result.descuentoGlobal,
     Base_IVA_16: result.baseIVA16,
     Base_IVA_8: result.baseIVA8,
@@ -3461,6 +3485,7 @@ export async function buildMainReportWorkbook(
     IVA_Retenido: result.ivaRetenido,
     ISR_Retenido: result.isrRetenido,
     Total: result.total,
+    Total_MXN: amountInMXN(result, result.total) ?? '',
     Moneda: result.moneda,
     Tipo_Cambio: result.tipoCambio,
     Metodo_Pago: result.metodoPago,
@@ -3534,16 +3559,20 @@ export async function buildMainReportWorkbook(
   await appendMainReportSheet(workbook, '69-B - EFOS', blacklistRows, onProgress, 5, cancelToken);
 
   const buildCounterpartyRows = (directionRows: ValidationResult[], role: 'Cliente' | 'Proveedor') => {
-    const groups = new Map<string, { nombre: string; cantidad: number; subtotal: number; iva: number; total: number }>();
+    const groups = new Map<string, { nombre: string; cantidad: number; subtotal: number; iva: number; total: number; importesSinTipoCambio: number }>();
     directionRows.forEach(result => {
       const rfc = role === 'Cliente' ? result.rfcReceptor : result.rfcEmisor;
       const nombre = role === 'Cliente' ? result.nombreReceptor : result.nombreEmisor;
-      const group = groups.get(rfc) || { nombre, cantidad: 0, subtotal: 0, iva: 0, total: 0 };
+      const group = groups.get(rfc) || { nombre, cantidad: 0, subtotal: 0, iva: 0, total: 0, importesSinTipoCambio: 0 };
       const sign = String(result.tipoCFDI || '').toUpperCase() === 'E' ? -1 : 1;
       group.cantidad++;
-      group.subtotal += (result.subtotal || 0) * sign;
-      group.iva += (result.ivaTraslado || 0) * sign;
-      group.total += (result.total || 0) * sign;
+      const subtotalMxn = amountInMXN(result, result.subtotal || 0);
+      const ivaMxn = amountInMXN(result, result.ivaTraslado || 0);
+      const totalMxn = amountInMXN(result, result.total || 0);
+      if (subtotalMxn === null || ivaMxn === null || totalMxn === null) group.importesSinTipoCambio++;
+      group.subtotal += (subtotalMxn || 0) * sign;
+      group.iva += (ivaMxn || 0) * sign;
+      group.total += (totalMxn || 0) * sign;
       groups.set(rfc, group);
     });
     return Array.from(groups, ([rfc, group]) => ({
@@ -3553,6 +3582,7 @@ export async function buildMainReportWorkbook(
       Subtotal: roundCurrency(group.subtotal),
       IVA: roundCurrency(group.iva),
       Total: roundCurrency(group.total),
+      Importes_sin_tipo_de_cambio: group.importesSinTipoCambio,
     }));
   };
   await appendMainReportSheet(workbook, 'Clientes', buildCounterpartyRows(issued, 'Cliente'), onProgress, 6, cancelToken);
@@ -3565,38 +3595,42 @@ export async function buildMainReportWorkbook(
     if (direction !== 'EMITIDO' && direction !== 'RECIBIDO') return [];
     const sign = String(result.tipoCFDI || '').toUpperCase() === 'E' ? -1 : 1;
     const creditableVatBeforePayment = result.trazabilidadInfo?.ivaAcreditable || result.ivaTraslado || 0;
-    const grossVat = (direction === 'RECIBIDO' ? creditableVatBeforePayment : result.ivaTraslado || 0) * sign;
-    let paidVat = direction === 'EMITIDO' ? 0 : 0;
+    const rawGrossVat = (direction === 'RECIBIDO' ? creditableVatBeforePayment : result.ivaTraslado || 0) * sign;
+    let rawPaidVat = 0;
     if (direction === 'RECIBIDO') {
       const payment = paymentByInvoice.get(String(result.uuid).toUpperCase());
-      if (payment?.estado === 'PUE') paidVat = grossVat;
+      if (payment?.estado === 'PUE') rawPaidVat = rawGrossVat;
       else if ((payment?.estado === 'LIQUIDADA' || payment?.estado === 'PARCIAL') && (payment.totalFactura || 0) > 0) {
-        paidVat = grossVat * Math.min(1, Math.max(0, payment.totalPagado / payment.totalFactura));
+        rawPaidVat = rawGrossVat * Math.min(1, Math.max(0, payment.totalPagado / payment.totalFactura));
       }
     }
-    paidVat = roundCurrency(paidVat);
-    const pendingVat = direction === 'RECIBIDO' ? roundCurrency(grossVat - paidVat) : 0;
-    const withholding = (result.ivaRetenido || 0) + (result.isrRetenido || 0);
+    const grossVat = amountInMXN(result, rawGrossVat);
+    const paidVat = amountInMXN(result, rawPaidVat);
+    const pendingVat = direction === 'RECIBIDO' && grossVat !== null && paidVat !== null
+      ? roundCurrency(grossVat - paidVat)
+      : null;
     return [{
       UUID: result.uuid,
       Fecha: result.fechaEmision,
       Dirección: direction,
       Tipo_CFDI: result.tipoCFDI,
-      IVA_trasladado_emitidas: direction === 'EMITIDO' ? roundCurrency(grossVat) : 0,
-      IVA_acreditable_pagado_recibidas: direction === 'RECIBIDO' ? roundCurrency(paidVat) : 0,
-      IVA_recibido_pendiente_de_pago: direction === 'RECIBIDO' ? roundCurrency(pendingVat) : 0,
-      IVA_retenido: roundCurrency((result.ivaRetenido || 0) * sign),
-      ISR_retenido: roundCurrency((result.isrRetenido || 0) * sign),
+      Moneda_original: result.moneda,
+      Tipo_cambio: result.tipoCambio ?? '',
+      IVA_trasladado_emitidas_MXN: direction === 'EMITIDO' ? grossVat ?? '' : 0,
+      IVA_acreditable_pagado_recibidas_MXN: direction === 'RECIBIDO' ? paidVat ?? '' : 0,
+      IVA_recibido_pendiente_de_pago_MXN: direction === 'RECIBIDO' ? pendingVat ?? '' : 0,
+      IVA_retenido_MXN: amountInMXN(result, (result.ivaRetenido || 0) * sign) ?? '',
+      ISR_retenido_MXN: amountInMXN(result, (result.isrRetenido || 0) * sign) ?? '',
       Estado_pago: paymentByInvoice.get(String(result.uuid).toUpperCase())?.estado || 'NO DETERMINADO',
     }];
   });
   const ivaTotals = ivaRows.map(row => ({
       Concepto: `${row.Dirección} · ${row.Tipo_CFDI} · ${row.UUID}`,
-      'IVA trasladado emitidas': row.IVA_trasladado_emitidas,
-      'IVA acreditable pagado recibidas': row.IVA_acreditable_pagado_recibidas,
-      'IVA recibido pendiente de pago': row.IVA_recibido_pendiente_de_pago,
-      IVA_retenido: row.IVA_retenido,
-      ISR_retenido: row.ISR_retenido,
+      'IVA trasladado emitidas (MXN)': row.IVA_trasladado_emitidas_MXN,
+      'IVA acreditable pagado recibidas (MXN)': row.IVA_acreditable_pagado_recibidas_MXN,
+      'IVA recibido pendiente de pago (MXN)': row.IVA_recibido_pendiente_de_pago_MXN,
+      IVA_retenido_MXN: row.IVA_retenido_MXN,
+      ISR_retenido_MXN: row.ISR_retenido_MXN,
       Estado_pago: row.Estado_pago,
       Fecha: row.Fecha,
     }));
