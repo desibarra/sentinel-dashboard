@@ -27,6 +27,11 @@ import { appDB, SessionCacheEntry } from "@/db/appDB";
 
 const TTL_MS = 30 * 60 * 1000; // 30 minutos
 
+// Incrementar cuando cambie lo que el lector extrae del XML (p. ej. TipoCambio):
+// un caché generado con un lector anterior se descarta en vez de exportarse con
+// datos viejos. v2: TipoCambio real del XML (antes fijo en 1).
+export const SESSION_PARSER_VERSION = 2;
+
 // Migración: clave del antiguo caché en localStorage. Se limpia de forma
 // segura la primera vez que se usa este módulo, sin tocar IndexedDB del
 // 69-B (base de datos completamente distinta: "SentinelBlacklists").
@@ -64,6 +69,7 @@ export async function saveSessionCache(companyId: string, results: ValidationRes
         timestamp: Date.now(),
         results,
         status: 'complete',
+        parserVersion: SESSION_PARSER_VERSION,
     };
     try {
         await appDB.saveSessionCache(entry);
@@ -114,6 +120,12 @@ export async function loadSessionCache(companyId: string): Promise<SessionCache 
 
         if (Date.now() - entry.timestamp > TTL_MS) {
             await appDB.clearSessionCache(companyId).catch(() => {});
+            return null;
+        }
+
+        if (entry.parserVersion !== SESSION_PARSER_VERSION) {
+            await appDB.clearSessionCache(companyId).catch(() => {});
+            toast.info('El análisis guardado se generó con una versión anterior del sistema y se descartó. Vuelve a cargar los XML para analizarlos con la versión actual.', { duration: 10000 });
             return null;
         }
 

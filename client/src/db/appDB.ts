@@ -34,6 +34,8 @@ export interface SessionCacheEntry {
     timestamp: number;
     results: any[]; // ValidationResult[] completo, incluido xmlContent
     status: 'complete' | 'partial';
+    /** Versión del lector de XML con la que se generaron los resultados. */
+    parserVersion?: number;
 }
 
 interface SentinelSchema extends DBSchema {

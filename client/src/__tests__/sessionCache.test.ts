@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { saveSessionCache, loadSessionCache, clearSessionCache, getCacheAge, persistRevalidatedSession } from '../hooks/useSessionCache';
+import { saveSessionCache, loadSessionCache, clearSessionCache, getCacheAge, persistRevalidatedSession, SESSION_PARSER_VERSION } from '../hooks/useSessionCache';
 import { appDB } from '../db/appDB';
 import type { ValidationResult } from '../lib/cfdiEngine';
 
@@ -85,6 +85,17 @@ describe('P0-B: saveSessionCache / loadSessionCache (IndexedDB)', () => {
     // Y quedó limpiada (no solo ignorada)
     const raw = await appDB.getSessionCache(COMPANY_A);
     expect(raw).toBeUndefined();
+  });
+
+  it('descarta un caché generado con un lector anterior (sin versión o versión distinta)', async () => {
+    await saveSessionCache(COMPANY_A, [makeResult('lector-viejo')]);
+    const entry = await appDB.getSessionCache(COMPANY_A);
+    const { parserVersion, ...legacy } = entry!;
+    expect(parserVersion).toBe(SESSION_PARSER_VERSION);
+    await appDB.saveSessionCache(legacy);
+
+    expect(await loadSessionCache(COMPANY_A)).toBeNull();
+    expect(await appDB.getSessionCache(COMPANY_A)).toBeUndefined();
   });
 
   it('una entrada corrupta (forma inesperada) se descarta de forma segura, no revienta', async () => {
