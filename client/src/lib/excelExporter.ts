@@ -1169,7 +1169,7 @@ const buildAlerts = (results: ValidationResult[], cache?: XmlDocCache) => {
     if ((r.baseIVA0 || 0) > 0 && /no/i.test(transporte)) addAlert(alerts, r, 'IVA', 'IVA-03', 'ROJO', 'Posible tasa 0% sin soporte de servicio internacional.', String(detail?.transporteInternacional || 'NO VIENE EN XML'), 'Solicitar fundamento y evidencia soporte.');
     (r.desglosePorConcepto || []).forEach((c: any) => {
       if (c.objetoImp === '01' && (c.traslados || []).some((t: any) => Number(t.importe || 0) > 0)) addAlert(alerts, r, 'IVA', 'IVA-04', 'ROJO', 'Inconsistencia interna posible: ObjetoImp=01 con IVA trasladado.', c.descripcion || 'Concepto sin descripción', 'Revisar estructura fiscal del XML.');
-      if ((c.descripcion || '').trim().length < 8 || /servicio|producto|varios|concepto/i.test(c.descripcion || '')) addAlert(alerts, r, 'MATERIALIDAD', 'MAT-04', 'AMARILLO', 'Descripción genérica; materialidad débil.', c.descripcion || 'NO VIENE EN XML', 'Solicitar soporte documental del servicio/bien.');
+      if (!['P', 'N'].includes(String(r.tipoCFDI).toUpperCase()) && ((c.descripcion || '').trim().length < 8 || /servicio|producto|varios|concepto/i.test(c.descripcion || ''))) addAlert(alerts, r, 'MATERIALIDAD', 'MAT-04', 'AMARILLO', 'Descripción genérica; materialidad débil.', c.descripcion || 'NO VIENE EN XML', 'Solicitar soporte documental del servicio/bien.');
       if (getCartaPortePresente(r) === 'SI' && !/^78/.test(c.claveProdServ || '')) addAlert(alerts, r, 'MATERIALIDAD', 'MAT-05', 'NARANJA', 'Carta Porte detectada con clave de producto/servicio no claramente logística.', c.claveProdServ || 'NO VIENE EN XML', 'Revisar clave fiscal del servicio.');
     });
     if (r.tipoCFDI === 'I' && !(r.ivaTraslado > 0) && !(r.baseIVAExento > 0) && !(r.baseNoObjeto > 0) && !(r.baseIVA0 > 0)) addAlert(alerts, r, 'IVA', 'IVA-05', 'NARANJA', 'Tratamiento de IVA no claro: sin IVA trasladado, exento, no objeto ni tasa 0 identificada.', r.uuid, 'Revisión manual del tratamiento de IVA.');
@@ -1179,7 +1179,7 @@ const buildAlerts = (results: ValidationResult[], cache?: XmlDocCache) => {
     if (/si|sí/i.test(transporte) && (detail?.mercancias || []).some((m: any) => !hasValue((m as any).fraccionArancelaria))) addAlert(alerts, r, 'CARTA PORTE', 'CP-03', 'NARANJA', 'Transporte internacional con mercancía sin fracción arancelaria.', detail?.mercanciaPrincipal || 'NO VIENE EN XML', 'Revisar datos de comercio exterior.');
     const distancia = Number(detail?.totalDistanciaRecorrida || 0);
     if (getCartaPortePresente(r) === 'SI' && (distancia < 1 || distancia > 5000)) addAlert(alerts, r, 'CARTA PORTE', 'CP-05', 'AMARILLO', 'Distancia atípica; revisar manualmente.', String(detail?.totalDistanciaRecorrida || 'NO VIENE EN XML'), 'Validar ruta/distancia.');
-    if (isSatTechnicalFailure(r.estatusSAT) || isSatTechnicalFailure(r.trazabilidadInfo?.observacionSAT)) addAlert(alerts, r, 'MATERIALIDAD', 'MAT-01', 'NARANJA', 'Estatus SAT no confirmado.', r.estatusSAT, 'Validar manualmente antes de usar en devolución/acreditamiento.');
+    if (r.tipoCFDI !== 'P' && !/^(Vigente|Cancelado)$/i.test(String(r.estatusSAT || '').trim())) addAlert(alerts, r, 'SAT', 'SAT-01', 'NARANJA', 'Estatus SAT no confirmado.', r.estatusSAT, 'Validar manualmente antes de usar en devolución/acreditamiento.');
     if (/cancelado/i.test(r.estatusSAT)) addAlert(alerts, r, 'MATERIALIDAD', 'MAT-02', 'ROJO', 'CFDI cancelado.', r.estatusSAT, 'No usar para acreditamiento/deducción sin revisión.');
     if ((seen.get(r.uuid) || 0) > 1) addAlert(alerts, r, 'MATERIALIDAD', 'MAT-03', 'ROJO', 'UUID duplicado en lote.', r.uuid, 'Depurar duplicados.');
     // PAGO-01: solo aplica cuando la conciliación central no encontró NINGÚN
@@ -3493,7 +3493,12 @@ export async function buildMainReportWorkbook(
     Severidad: 'Media',
   }));
   const seenAlerts = new Set<string>();
-  const alertRows = alerts.map(alert => ({
+  const alertSources = new Map(validResults.map(r => [r.uuid, r]));
+  const alertRows = alerts.map(alert => {
+    const source = alertSources.get(alert.UUID);
+    return ({
+    RFC_Contraparte: source?.direccionCFDI === 'EMITIDO' ? source.rfcReceptor : source?.direccionCFDI === 'RECIBIDO' ? source.rfcEmisor : 'NO DETERMINADA',
+    Importe_MXN: source ? amountInMXN(source, source.total) ?? '' : '',
     UUID: alert.UUID || '',
     Severidad: alert.Severidad || (alert.Nivel_Riesgo === 'ROJO' ? 'Alta' : alert.Nivel_Riesgo === 'NARANJA' ? 'Media-alta' : alert.Nivel_Riesgo === 'AMARILLO' ? 'Media' : 'Informativa'),
     Tipo: alert.Tipo_Alerta || alert.Tipo || '',
@@ -3501,7 +3506,7 @@ export async function buildMainReportWorkbook(
     Fundamento: alert.Fundamento || alert.Fundamento_Referencia || 'Regla preventiva Sentinel Express; requiere revisión con documentación soporte.',
     Evidencia: alert.Evidencia_XML || '',
     Recomendación: alert.Recomendacion || '',
-  })).filter(alert => {
+  }); }).filter(alert => {
     const key = `${alert.UUID}|${alert.Tipo}|${alert.Motivo}`;
     if (seenAlerts.has(key)) return false;
     seenAlerts.add(key);

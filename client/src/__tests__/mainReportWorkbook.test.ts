@@ -324,6 +324,26 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     expect(newIvaRows.some(row => row.Rubro === 'RETENCIÓN ISR' && row.ISR_retenido_MXN === 3)).toBe(true);
   });
 
+  it('punto 8: excluye P y N de descripción genérica y clasifica SAT con contraparte e importe MXN', async () => {
+    const generic = [{ descripcion: 'Pago', traslados: [], retenciones: [] }] as any;
+    const inputs = [
+      result('00000000-0000-4000-8000-000000000071', { tipoCFDI: 'P', desglosePorConcepto: generic }),
+      result('00000000-0000-4000-8000-000000000072', { tipoCFDI: 'N', desglosePorConcepto: generic }),
+      result('00000000-0000-4000-8000-000000000073', { desglosePorConcepto: generic, estatusSAT: 'Error Conexión', moneda: 'USD', tipoCambio: 20, total: 100 }),
+      result('00000000-0000-4000-8000-000000000074', { rfcEmisor: 'PRO010101PRO', rfcReceptor: COMPANY_RFC, estatusSAT: 'No Encontrado', moneda: 'USD', tipoCambio: null }),
+    ];
+    const workbook = await buildMainReportWorkbook(inputs, { rfc: COMPANY_RFC });
+    const alerts = rows(workbook, 'Alertas');
+    expect(alerts.filter(a => a.Motivo.includes('Descripción genérica')).map(a => a.UUID)).toEqual([inputs[2].uuid]);
+    const sat = alerts.filter(a => a.Motivo === 'Estatus SAT no confirmado.');
+    expect(sat).toHaveLength(2);
+    expect(sat.every(a => a.Tipo === 'SAT')).toBe(true);
+    expect(sat[0].RFC_Contraparte).toBe('CLI010101CLI');
+    expect(sat[0].Importe_MXN).toBe(2000);
+    expect(sat[1].RFC_Contraparte).toBe('PRO010101PRO');
+    expect(sat[1].Importe_MXN).toBe('');
+  });
+
   it('genera un único libro menor de 10 MB para 4.000 CFDI sintéticos', async () => {
     const batch = Array.from({ length: 4_000 }, (_, index) => result(
       `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
