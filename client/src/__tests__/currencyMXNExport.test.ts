@@ -77,3 +77,41 @@ describe('currency parsing and MXN export characterization', () => {
     expect(alerts.some(alert => String(alert.Motivo).includes('Tipo de cambio ausente o inválido'))).toBe(true);
   });
 });
+
+
+describe('punto 7: nómina desde XML', () => {
+  const payrollXml = () => readFileSync(resolve(__dirname, '../../../tests/fixtures/demo-xmls/08_FACTURA_USD_TIPO_CAMBIO.xml'), 'utf8')
+    .replace('TipoDeComprobante="I"', 'TipoDeComprobante="N"')
+    .replace('Moneda="USD"', 'Moneda="MXN"')
+    .replace('SubTotal="1000.00"', 'SubTotal="10100.00" Descuento="100.00"')
+    .replace('Total="1160.00"', 'Total="10000.00"')
+    .replace('<cfdi:Complemento>', `<cfdi:Complemento><nomina12:Nomina xmlns:nomina12="http://www.sat.gob.mx/nomina12" Version="1.2" NumDiasPagados="15" TotalPercepciones="10000" TotalOtrosPagos="100" TotalDeducciones="100">
+      <nomina12:Percepciones TotalGravado="10000" TotalExento="0"><nomina12:Percepcion ImporteGravado="10000" ImporteExento="0"/></nomina12:Percepciones>
+      <nomina12:Deducciones TotalImpuestosRetenidos="100" TotalOtrasDeducciones="0"><nomina12:Deduccion TipoDeduccion="002" Importe="100"/></nomina12:Deducciones>
+      <nomina12:OtrosPagos><nomina12:OtroPago Importe="100"/></nomina12:OtrosPagos>
+    </nomina12:Nomina>`);
+
+  it('conserva SubTotal y otros pagos sin inventar ISR ni alertar por una tasa estimada', async () => {
+    const parsed = await validateXml(payrollXml());
+    expect(parsed.subtotal).toBe(10100);
+    expect(parsed.totalOtrosPagos).toBe(100);
+    expect(parsed.isrRetenidoNomina).toBe(100);
+    expect(parsed.diferenciaTotales).toBe(0);
+    expect(parsed.comentarioMotor).not.toMatch(/estimaci|heuríst|inconsistencias/i);
+    const workbook = await buildMainReportWorkbook([parsed], { rfc: 'MME921204H52' });
+    expect(XLSX.utils.sheet_to_json<any>(workbook.Sheets['CFDI Emitidos'])[0].Subtotal).toBe(10100);
+  });
+
+  it('detecta un subtotal incongruente aunque el neto cuadre', async () => {
+    const parsed = await validateXml(payrollXml().replace('SubTotal="10100.00"', 'SubTotal="10000.00"'));
+    expect(parsed.subtotal).toBe(10000);
+    expect(parsed.comentarioFiscal).toContain('SubTotal');
+    const workbook = await buildMainReportWorkbook([parsed], { rfc: 'MME921204H52' });
+    expect(XLSX.utils.sheet_to_json<any>(workbook.Sheets.Alertas).some(a => a.Tipo === 'NÓMINA' && a.Evidencia.includes('SubTotal'))).toBe(true);
+  });
+
+  it('detecta diferencias pequeñas reales de total', async () => {
+    const parsed = await validateXml(payrollXml().replace('Total="10000.00"', 'Total="9999.00"'));
+    expect(parsed.comentarioFiscal).toContain('diferencia');
+  });
+});

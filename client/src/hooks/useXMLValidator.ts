@@ -572,7 +572,7 @@ export function useXMLValidator() {
             encodingDetectado: "UTF-8",
             complementosDetectados: ["Nómina"],
             scoreInformativo: 50,
-            subtotal: 0,
+            subtotal: Number(comprobante?.getAttribute("SubTotal") || 0),
             baseIVA16: 0,
             baseIVA8: 0,
             baseIVA0: 0,
@@ -658,7 +658,7 @@ export function useXMLValidator() {
       // IMPUESTOS CORRECTOS (POR CONCEPTO) - Solo para NO nómina
       const taxesByConcepto = esNomina
         ? {
-          subtotal: 0,
+          subtotal: Number(comprobante?.getAttribute("SubTotal") || 0),
           baseIVA16: 0,
           baseIVA8: 0,
           baseIVA0: 0,

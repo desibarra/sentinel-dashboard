@@ -1254,14 +1254,30 @@ export const extractNominaInfo = (xmlDoc: XMLDocument, xmlContent: string) => {
 
     const otrosPagosNode = nodes.find(n => (n.localName || n.nodeName) === "OtrosPagos");
     if (otrosPagosNode) {
-        totalO = parseFloat(otrosPagosNode.getAttribute("TotalOtrosPagos") || "0");
+        totalO = Array.from(otrosPagosNode.children).reduce((sum, child) => sum + Number(child.getAttribute("Importe") || 0), 0);
         const subsidioNode = nodes.find(n => (n.localName || n.nodeName) === "SubsidioAlEmpleo");
         if (subsidioNode) {
             subsidioCausado = parseFloat(subsidioNode.getAttribute("SubsidioCausado") || "0");
         }
     }
 
-    return { 
+    const erroresAritmeticos: string[] = [];
+    const comparar = (label: string, declared: number, calculated: number) => {
+        if (Math.abs(declared - calculated) > 0.010001) erroresAritmeticos.push(`${label}: XML ${declared.toFixed(2)}, suma ${calculated.toFixed(2)}`);
+    };
+    for (const [attr, sum] of [['TotalPercepciones', totalP], ['TotalDeducciones', totalD], ['TotalOtrosPagos', totalO]] as const) {
+        comparar(attr, Number(node.getAttribute(attr) || 0), sum);
+    }
+    if (percepcionesNode) {
+        for (const [attr, field] of [['TotalGravado', 'ImporteGravado'], ['TotalExento', 'ImporteExento']]) {
+            comparar(attr, Number(percepcionesNode.getAttribute(attr) || 0), Array.from(percepcionesNode.children).reduce((sum, child) => sum + Number(child.getAttribute(field) || 0), 0));
+        }
+    }
+    if (deduccionesNode) comparar('Deducciones', totalD, Array.from(deduccionesNode.children).reduce((sum, child) => sum + Number(child.getAttribute('Importe') || 0), 0));
+    comparar('SubTotal', Number(xmlDoc.documentElement.getAttribute('SubTotal') || 0), totalP + totalO);
+    comparar('Descuento', Number(xmlDoc.documentElement.getAttribute('Descuento') || 0), totalD);
+    return {
+        erroresAritmeticos,
         versionNomina: version, 
         totalPercepciones: Math.round(totalP * 100) / 100, 
         totalDeducciones: Math.round(totalD * 100) / 100, 
@@ -1274,25 +1290,6 @@ export const extractNominaInfo = (xmlDoc: XMLDocument, xmlContent: string) => {
         esValida: true, 
         errorMsg: "" 
     };
-};
-
-// Heurística simplificada de estimación de ISR (no cálculo exacto, solo proxy de validación ligera)
-export const estimarISRHeuristicoMensual = (baseGravable: number, diasPagados: number): number => {
-    if (baseGravable <= 0 || diasPagados <= 0) return 0;
-    
-    // Ingreso mensualizado base
-    const ingresoMensual = (baseGravable / diasPagados) * 30.4;
-    
-    // Tramos heurísticos muy simplificados
-    let porcentaje = 0;
-    if (ingresoMensual > 40000) porcentaje = 0.25;
-    else if (ingresoMensual > 20000) porcentaje = 0.18;
-    else if (ingresoMensual > 10000) porcentaje = 0.12;
-    else if (ingresoMensual > 7000) porcentaje = 0.08;
-    else if (ingresoMensual > 0) porcentaje = 0.02;
-
-    const isrMensual = ingresoMensual * porcentaje;
-    return (isrMensual / 30.4) * diasPagados;
 };
 
 export const validateNominaTotals = (p: number, d: number, o: number, total: number) => {
@@ -1417,46 +1414,18 @@ export const classifyCFDI = (
         }
     }
 
-    // AUDITORÍA FOCALIZADA EN NÓMINA HEURÍSTICA Y LIGERA
+    // La revisión de nómina contrasta exclusivamente importes declarados y sumas del XML.
     if (esNomina && resultado !== "🔴 NO USABLE") {
-        let isrEstimado = estimarISRHeuristicoMensual(nominaInfo.percepcionesGravadas, nominaInfo.diasPagados);
-        let difISR = Math.abs(isrEstimado - nominaInfo.isrRetenido);
-        
-        let alertasFiscales: string[] = [];
-
-        // 1. Diferencias estructurales matemáticas graves son los ÚNICOS motivos de error no-estructural en nómina
-        const difTotales = validation.diferencia;
-        if (difTotales > 1000) {
-            resultado = "🔴 NO USABLE";
-            nivelValidacion = "NÓMINA - ERROR GRAVE";
-            comentarioFiscal = `ERROR FISCAL: Diferencia matemática anormal en nómina ($${difTotales.toFixed(2)}). Se detectan inconsistencias graves en estructura.`;
-            return { resultado, comentarioFiscal, nivelValidacion };
-        } 
-
-        // 2. Validación Heurística de ISR
-        if (difISR > 20 && nominaInfo.percepcionesGravadas > 0) { 
-           alertasFiscales.push("Se detectan inconsistencias en ISR retenido que requieren revisión detallada contra estimación fiscal.");
-        }
-
-        // 3. Validación Heurística de Subsidio
-        const ingresoMensualEstimado = (nominaInfo.percepcionesGravadas / nominaInfo.diasPagados) * 30.4;
-        if (nominaInfo.subsidioCausado > 0 && ingresoMensualEstimado > 10000) {
-            alertasFiscales.push("El subsidio aplicado podría no corresponder al nivel de ingreso mensual estimado (rango atípico).");
-        }
-
-        // 4. Validación Heurística Gravado vs Exento
-        if (nominaInfo.percepcionesGravadas === 0 && (nominaInfo.percepcionesGravadas + nominaInfo.percepcionesExentas) > 0) {
-            alertasFiscales.push("Percepciones clasificadas completamente como exentas. La clasificación fiscal de estas percepciones puede representar un riesgo de auditoría.");
-        }
-
-        if (alertasFiscales.length > 0) {
-            resultado = "🟡 ALERTA";
-            nivelValidacion = "NÓMINA - REVISIÓN";
-            comentarioFiscal = "HALLAZGOS DE REVISIÓN EN NÓMINA:\n- " + alertasFiscales.join("\n- ");
+        const inconsistencias: string[] = [...(nominaInfo.erroresAritmeticos || [])];
+        if (validation.diferencia > 0.01) inconsistencias.push(`Total: diferencia $${validation.diferencia.toFixed(2)}`);
+        if (inconsistencias.length) {
+            resultado = validation.diferencia > 1000 ? "🔴 NO USABLE" : "🟡 ALERTA";
+            nivelValidacion = "NÓMINA - REVISIÓN ARITMÉTICA";
+            comentarioFiscal = "Inconsistencias aritméticas del XML de nómina:\n- " + inconsistencias.join("\n- ");
         } else {
             resultado = "🟢 USABLE";
             nivelValidacion = "NÓMINA - VÁLIDA";
-            comentarioFiscal = "Nómina congruente con estatus válido. Ausencia de indicadores de riesgo heurístico en cálculos de impuestos e ingresos.";
+            comentarioFiscal = "Los importes de nómina son aritméticamente congruentes con el XML. ISR retenido tomado de las deducciones declaradas.";
         }
     } else if (!esNomina && !tieneECC && validation.isValid) {
         // Caso Base Sano - Facturas/REP

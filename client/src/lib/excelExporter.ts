@@ -1152,6 +1152,9 @@ const buildAlerts = (results: ValidationResult[], cache?: XmlDocCache) => {
   const facturaConciliadaPorUuid = new Map(conciliacionParaAlertas.map(f => [String(f.uuid || '').toUpperCase(), f]));
 
   results.forEach(r => {
+    if (r.tipoCFDI === 'N' && /Inconsistencias aritméticas del XML de nómina/.test(r.comentarioMotor || '')) {
+      addAlert(alerts, r, 'NÓMINA', 'NOM-01', 'NARANJA', 'Inconsistencia aritmética de nómina.', r.comentarioMotor || '', 'Conciliar los importes declarados y el detalle del XML.');
+    }
     const detail = cp(r);
     const transporte = String(detail?.transporteInternacional || '').toLowerCase();
     const entradaSalida = String(detail?.entradaSalidaMercancia || '').toLowerCase();
