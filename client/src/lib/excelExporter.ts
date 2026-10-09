@@ -4,6 +4,7 @@ import { Zip, ZipDeflate, strToU8 } from 'fflate';
 import { ValidationResult, contarEstatusSAT, reconciliarPagosPPD } from '@/lib/cfdiEngine';
 import { normalizarRFC } from '@/lib/direccionCFDI';
 import { sentinelStageLog } from '@/lib/stageLog';
+import { styleXlsx, numberFormatFor, MONEY_FORMAT, type SheetStylePlan, type CellStyle } from '@/lib/xlsxStyle';
 
 // ─────────────────────────────────────────────────────────────────────────
 // P0-A: Blindaje de exportación — límites reales de Excel y saneamiento
@@ -3395,6 +3396,64 @@ const classifyForCompany = (result: ValidationResult, companyRfc: string): 'EMIT
   return isIssuer && isReceiver ? 'REVISION' : 'AJENO';
 };
 
+// Plan de estilos por hoja del reporte principal (en orden de SheetNames); se aplica al serializar.
+const mainReportStylePlans = new WeakMap<object, SheetStylePlan[]>();
+
+const textStyle = (value: string): CellStyle | undefined => {
+  if (/^(NO CUADRA|NO CONCLUYENTE|DESACTUALIZADA|ROJO|🔴)/.test(value)) return 'alta';
+  if (/^(AMARILLO|🟡|EXCLUIDO: PAGO DUPLICADO|NO VERIFICADO)/.test(value)) return 'mediaAlta';
+  if (/^(CUADRA|VERDE|🟢)/.test(value)) return 'ok';
+  return undefined;
+};
+
+/** Separadores de miles, anchos de columna, autofiltro y plan de colores (encabezado, secciones, severidad). */
+function formatMainReportSheet(sheet: any, headers: string[], rows: PlainRow[]): SheetStylePlan {
+  const utils = (XLSX as any).utils;
+  const plan: SheetStylePlan = { cells: [], sectionRows: [] };
+  const widths = headers.map(h => Math.max(h.length + 2, 10));
+  const labelColumn = headers.includes('Indicador') && headers.includes('Valor');
+  rows.forEach((row, i) => {
+    const r = i + 1;
+    if (labelColumn && /^===/.test(String(row.Indicador || ''))) plan.sectionRows.push(r);
+    headers.forEach((header, c) => {
+      const cell = sheet[utils.encode_cell({ r, c })];
+      if (!cell) return;
+      if (cell.t === 'n') {
+        cell.z = numberFormatFor(header, cell.v, labelColumn && header === 'Valor' ? String(row.Indicador || '') : '');
+        if (i < 500) widths[c] = Math.max(widths[c], Math.abs(cell.v).toFixed(cell.z === MONEY_FORMAT ? 2 : 0).length + 5);
+        return;
+      }
+      const text = String(cell.v ?? '');
+      if (i < 500) widths[c] = Math.max(widths[c], Math.min(text.length + 2, 60));
+      if (header === 'Severidad' && (text === 'Alta' || text === 'Media-alta')) plan.cells.push({ r, c, style: text === 'Alta' ? 'alta' : 'mediaAlta' });
+      else {
+        const style = text ? textStyle(text) : undefined;
+        if (style) plan.cells.push({ r, c, style });
+      }
+    });
+  });
+  if (sheet['!ref']) sheet['!autofilter'] = { ref: sheet['!ref'] };
+  sheet['!cols'] = widths.map(wch => ({ wch: Math.min(wch, 60) }));
+  return plan;
+}
+
+/** Serializa el reporte principal con formato y lo descarga en el navegador. */
+export function writeStyledMainReport(workbook: any, fileName: string): Uint8Array {
+  const raw: Uint8Array = (XLSX as any).write(workbook, { type: 'array', bookType: 'xlsx', compression: true });
+  const bytes = styleXlsx(new Uint8Array(raw), mainReportStylePlans.get(workbook) || []);
+  if (typeof URL.createObjectURL !== 'function' || typeof document === 'undefined') return bytes; // fuera del navegador (pruebas)
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+  try {
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName.split(/[\\/]/).pop() || fileName;
+    anchor.click();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  return bytes;
+}
+
 const appendMainReportSheet = async (
   workbook: any,
   name: string,
@@ -3412,8 +3471,11 @@ const appendMainReportSheet = async (
   const rows = data.length ? data : [{ Estado: 'SIN REGISTROS' }];
   const headers = collectHeaders(rows);
   const sheet = (XLSX as any).utils.aoa_to_sheet(rowsToAOA(rows, headers));
-  applySheetDefaults(sheet);
+  const plan = formatMainReportSheet(sheet, headers, rows);
   (XLSX as any).utils.book_append_sheet(workbook, sheet, name);
+  const plans = mainReportStylePlans.get(workbook) || [];
+  plans.push(plan);
+  mainReportStylePlans.set(workbook, plans);
   onProgress?.({ sheet: name, stage: 'done', sheetIndex, totalSheets: MAIN_REPORT_SHEETS.length, affectedRows: data.length });
 };
 
@@ -3514,6 +3576,26 @@ function buildSourceReconciliationRows(results: ValidationResult[], validResults
   rec.duplicados.forEach(item => rows.push(row('Pago duplicado excluido', `REP ${item.UUID_REP_excluido}`, 1,
     `Factura ${item.UUID_factura}, parcialidad ${item.NumParcialidad || 'N/D'}, ImpPagado ${item.ImpPagado || 'N/D'}, FechaPago ${item.FechaPago}; ya contado en REP ${item.UUID_REP_conservado}; IVA excluido ${item.IVA_excluido_MXN.toFixed(2)} MXN`)));
   return rows;
+}
+
+/** Evidencia de Carta Porte por CFDI: ruta, unidad, operador y mercancía (soporte de materialidad). */
+function cartaPorteColumns(result: ValidationResult): PlainRow {
+  const detail = cp(result);
+  if (getCartaPortePresente(result) !== 'SI' || !detail) {
+    return { Carta_Porte: 'NO', Origen: '', Destino: '', Ruta: '', Distancia_km: '', Placas: '', Operador: '', Mercancia_Principal: '' };
+  }
+  const operador = detail.figuras?.find((f: any) => f.tipoFigura === '01') || detail.figuras?.[0];
+  const distancia = Number(detail.totalDistanciaRecorrida);
+  return {
+    Carta_Porte: 'SI',
+    Origen: formatAddress(detail.origenes?.[0]).replace(/ \| /g, ', '),
+    Destino: formatAddress(detail.destinos?.[0]).replace(/ \| /g, ', '),
+    Ruta: routeSummary(result).replace(/ \| /g, ', ').replace(' -> ', ' → '),
+    Distancia_km: Number.isFinite(distancia) && distancia > 0 ? distancia : '',
+    Placas: detail.autotransporte?.placaVM || result.trazabilidadInfo?.placas || '',
+    Operador: joinClean(operador?.rfcFigura, operador?.nombreFigura, operador?.numLicencia),
+    Mercancia_Principal: detail.mercanciaPrincipal || '',
+  };
 }
 
 export async function buildMainReportWorkbook(
@@ -3721,6 +3803,7 @@ export async function buildMainReportWorkbook(
       ? `${vat.repNotes.get(String(result.uuid).toUpperCase())} ${result.comentarioFiscal || ''}`.trim()
       : result.comentarioFiscal,
     Estado_Pago: result.pagosRelacionadosEstado || result.paymentComplementStatus || 'NO DETERMINADO',
+    ...cartaPorteColumns(result),
   });
 
   await appendMainReportSheet(workbook, 'CFDI Emitidos', issued.map(detailRow), onProgress, 4, cancelToken);
@@ -3912,7 +3995,7 @@ export async function exportToExcel(
   const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
   const fileName = fileNameOverride || `SentinelExpress_Reporte_${dateStr}.xlsx`;
   sentinelStageLog('serializacion_descarga_inicio', { fileName, sheets: wb.SheetNames.length, records: results.length });
-  (XLSX as any).writeFile(wb, fileName, { compression: true });
+  writeStyledMainReport(wb, fileName);
   sentinelStageLog('serializacion_descarga_fin', { fileName });
   return wb;
 }

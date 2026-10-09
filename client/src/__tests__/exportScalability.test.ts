@@ -6,6 +6,12 @@ import {
   estimateCfdiExportWeight,
 } from '../lib/excelExporter';
 import type { ValidationResult, PagoRelacionadoDetalle } from '../lib/cfdiEngine';
+const blobBytes = (blob: Blob) => new Promise<Uint8Array>((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
+  reader.onerror = () => reject(reader.error);
+  reader.readAsArrayBuffer(blob);
+});
 
 // El namespace de 'xlsx' es un módulo ESM de solo lectura — vi.spyOn no puede
 // redefinir sus propiedades. Se envuelve writeFile en un vi.fn() que por
@@ -164,16 +170,17 @@ describe('planExportChunks — partición por peso, nunca separa REP de su(s) fa
 // la integración vigente se prueba en mainReportWorkbook.test.ts.
 describe('exportToExcel — reporte principal de archivo único', () => {
   it('serializa los 5,000 CFDI en una sola descarga', async () => {
-    const mockedWriteFile = vi.mocked(XLSX.writeFile);
-    mockedWriteFile.mockClear();
-    mockedWriteFile.mockImplementation(() => undefined as any);
+    const blobs: Blob[] = [];
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn((blob: Blob) => { blobs.push(blob); return 'blob:test'; }), revokeObjectURL: vi.fn() }));
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
     try {
       const workbook = await exportToExcel(makeBatch(5000), 'dev-outputs/reporte-unico.xlsx');
       expect(workbook.SheetNames).toHaveLength(16);
-      expect(mockedWriteFile).toHaveBeenCalledTimes(1);
-      expect(mockedWriteFile.mock.calls[0][0].SheetNames).toHaveLength(16);
+      expect(click).toHaveBeenCalledTimes(1);
+      expect(XLSX.read(await blobBytes(blobs[0])).SheetNames).toHaveLength(16);
     } finally {
-      mockedWriteFile.mockRestore();
+      click.mockRestore();
+      vi.unstubAllGlobals();
     }
   }, 120000);
 });

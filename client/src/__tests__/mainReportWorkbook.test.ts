@@ -2,6 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as XLSX from 'xlsx';
 import type { ValidationResult } from '../lib/cfdiEngine';
 import { buildDiagnosticoWorkbook, buildMainReportWorkbook, exportToExcel } from '../lib/excelExporter';
+const blobBytes = (blob: Blob) => new Promise<Uint8Array>((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
+  reader.onerror = () => reject(reader.error);
+  reader.readAsArrayBuffer(blob);
+});
 
 vi.mock('xlsx', async (importOriginal) => {
   const actual = await importOriginal<typeof import('xlsx')>();
@@ -100,8 +106,11 @@ function rows(workbook: any, sheetName: string, range?: number): Record<string, 
 afterEach(() => vi.restoreAllMocks());
 
 describe('reporte principal XLSX, dirección e IVA conciliado', () => {
-  it('envía exactamente un archivo al navegador', async () => {
-    vi.mocked(XLSX.writeFile).mockClear();
+  it('envía exactamente un archivo con formato al navegador', async () => {
+    const blobs: Blob[] = [];
+    const downloads: string[] = [];
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn((blob: Blob) => { blobs.push(blob); return 'blob:test'; }), revokeObjectURL: vi.fn() }));
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { downloads.push(this.download); });
     const workbook = await exportToExcel(
       [result('00000000-0000-4000-8000-000000000000')],
       'SentinelExpress_Reporte_test.xlsx',
@@ -110,8 +119,12 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     );
 
     expect(workbook.SheetNames).toHaveLength(16);
-    expect(XLSX.writeFile).toHaveBeenCalledTimes(1);
-    expect(XLSX.writeFile).toHaveBeenCalledWith(workbook, 'SentinelExpress_Reporte_test.xlsx', { compression: true });
+    expect(downloads).toEqual(['SentinelExpress_Reporte_test.xlsx']);
+    expect(blobs).toHaveLength(1);
+    const styled = XLSX.read(await blobBytes(blobs[0]), { cellStyles: true });
+    expect(styled.SheetNames).toEqual(workbook.SheetNames);
+    expect(XLSX.utils.sheet_to_json(styled.Sheets['Resumen'])).toEqual(XLSX.utils.sheet_to_json(workbook.Sheets['Resumen']));
+    vi.unstubAllGlobals();
   });
 
   it('prefiere el estatus SAT revalidado más reciente al deduplicar un UUID', async () => {
