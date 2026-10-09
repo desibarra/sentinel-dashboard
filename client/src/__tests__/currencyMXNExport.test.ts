@@ -43,7 +43,7 @@ describe('currency parsing and MXN export characterization', () => {
     const workbook = await buildMainReportWorkbook([result], { name: 'Empresa de prueba', rfc: 'MME921204H52' });
     const legacyWorkbook = await buildDiagnosticoWorkbook([result]);
     const row = XLSX.utils.sheet_to_json<Record<string, any>>(workbook.Sheets['CFDI Emitidos'])[0];
-    const ivaRows = XLSX.utils.sheet_to_json<Record<string, any>>(workbook.Sheets['Cédula IVA']);
+    const ivaRows = XLSX.utils.sheet_to_json<Record<string, any>>(workbook.Sheets['Cédula IVA']).filter(row => row.Tipo_fila === 'DESGLOSE');
     const legacyVat = XLSX.utils.sheet_to_json<Record<string, any>>(legacyWorkbook.Sheets['CEDULA IVA TRASLADADO'], { range: 1 })
       .reduce((sum, item) => sum + Number(item.IVA || 0), 0);
 
@@ -57,7 +57,7 @@ describe('currency parsing and MXN export characterization', () => {
     expect(ivaRows[0]['IVA trasladado emitidas (MXN)']).toBe(2739.74);
     expect(Math.round(ivaRows.reduce((sum, item) => sum + Number(item['IVA trasladado emitidas (MXN)'] || 0), 0) * 100))
       .toBe(Math.round(legacyVat * result.tipoCambio * 100));
-    expect(ivaRows[0].Mes_factura).toBe('2026-03');
+    expect(ivaRows[0].Mes_periodo).toBe('2026-03');
     const detailVatRows = XLSX.utils.sheet_to_json<Record<string, any>>(workbook.Sheets['Detalle IVA por CFDI']);
     expect(detailVatRows).toHaveLength(1);
     expect(detailVatRows[0].Tasa).toBe('16.00%');

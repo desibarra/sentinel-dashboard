@@ -1,3 +1,4 @@
+import { buildMainReportVat } from './mainReportVat';
 import * as XLSX from 'xlsx';
 import { Zip, ZipDeflate, strToU8 } from 'fflate';
 import { ValidationResult, contarEstatusSAT, reconciliarPagosPPD } from '@/lib/cfdiEngine';
@@ -3361,15 +3362,6 @@ const isExportableUuid = (uuid: string | undefined): boolean => {
 };
 
 const roundCurrency = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
-const formatTaxRate = (rate: string, factor: string | undefined): string => {
-  if (String(factor || '').toLowerCase() === 'exento') return 'EXENTO';
-  const normalized = String(rate || '').trim();
-  if (!normalized) return 'NO DESGLOSADA';
-  if (normalized.endsWith('%')) return normalized;
-  const numeric = Number(normalized);
-  return Number.isFinite(numeric) ? `${(numeric * 100).toFixed(2)}%` : normalized;
-};
-
 const mxnExchangeRate = (result: ValidationResult): number | null => {
   if (!String(result.moneda || '').trim() || String(result.moneda).trim().toUpperCase() === 'MXN') return 1;
   const rate = result.tipoCambio;
@@ -3477,7 +3469,8 @@ export async function buildMainReportWorkbook(
   const cfdiWithoutBlacklistData = validResults.filter(result =>
     result.rfcEmisorBlacklist?.notSynced || result.rfcReceptorBlacklist?.notSynced
   ).length;
-  const alerts = buildAlerts(validResults);
+  const vat = buildMainReportVat(validResults);
+  const alerts = [...buildAlerts(validResults), ...vat.alerts];
   foreign.forEach(result => alerts.push({
     UUID: result.uuid,
     Archivo_XML: result.fileName,
@@ -3765,186 +3758,8 @@ export async function buildMainReportWorkbook(
   await appendMainReportSheet(workbook, 'Proveedores', buildCounterpartyRows(received, 'Proveedor'), onProgress, 7, cancelToken);
   await appendMainReportSheet(workbook, 'Nómina por empleado', payrollRows, onProgress, 8, cancelToken);
 
-  const reconciliation = reconciliarPagosPPD(validResults);
-  const paymentByInvoice = new Map(reconciliation.facturas.map(invoice => [invoice.uuid.toUpperCase(), invoice]));
-  const ivaDetailRows: PlainRow[] = validResults.flatMap(result => {
-    const direction = result.direccionCFDI;
-    if (direction !== 'EMITIDO' && direction !== 'RECIBIDO') return [];
-    const sign = String(result.tipoCFDI || '').toUpperCase() === 'E' ? -1 : 1;
-    const payment = paymentByInvoice.get(String(result.uuid).toUpperCase());
-    const paidRatio = direction !== 'RECIBIDO'
-      ? 0
-      : payment?.estado === 'PUE'
-        ? 1
-        : (payment?.estado === 'LIQUIDADA' || payment?.estado === 'PARCIAL') && (payment.totalFactura || 0) > 0
-          ? Math.min(1, Math.max(0, payment.totalPagado / payment.totalFactura))
-          : 0;
-    const conceptLines = (result.desglosePorConcepto || []).flatMap(concept => {
-      const trasladoLines = concept.traslados
-        .filter(tax => tax.impuesto === '002')
-        .map(tax => ({
-          rubro: 'IVA',
-          base: tax.base,
-          importe: tax.importe,
-          tasa: formatTaxRate(tax.tasa, tax.tipoFactor),
-          factor: tax.tipoFactor || 'Tasa',
-          descripcion: concept.descripcion,
-        }));
-      if (!trasladoLines.length && concept.objetoImp === '02' && !concept.traslados.length) {
-        trasladoLines.push({
-          rubro: 'IVA',
-          base: concept.importe - concept.descuento,
-          importe: 0,
-          tasa: 'EXENTO',
-          factor: 'Exento',
-          descripcion: concept.descripcion,
-        });
-      }
-      const retentionLines = concept.retenciones
-        .filter(tax => tax.impuesto === '001' || tax.impuesto === '002')
-        .map(tax => ({
-          rubro: tax.impuesto === '001' ? 'RETENCIÓN ISR' : 'RETENCIÓN IVA',
-          base: tax.base,
-          importe: tax.importe,
-          tasa: formatTaxRate(tax.tasa, tax.tipoFactor),
-          factor: tax.tipoFactor || 'Tasa',
-          descripcion: concept.descripcion,
-        }));
-      return [...trasladoLines, ...retentionLines];
-    });
-    if (!conceptLines.some(line => line.rubro === 'IVA') && (result.ivaTraslado || 0) > 0) {
-      conceptLines.push({
-        rubro: 'IVA',
-        base: result.subtotal || 0,
-        importe: result.ivaTraslado,
-        tasa: 'No desglosada',
-        factor: 'No desglosado',
-        descripcion: 'IVA total del CFDI; XML sin detalle por concepto disponible',
-      });
-    } else if (!conceptLines.some(line => line.rubro === 'IVA') && (result.baseIVAExento || 0) > 0) {
-      conceptLines.push({
-        rubro: 'IVA',
-        base: result.baseIVAExento,
-        importe: 0,
-        tasa: 'EXENTO',
-        factor: 'Exento',
-        descripcion: 'Base exenta del CFDI',
-      });
-    }
-    if (!conceptLines.some(line => line.rubro === 'RETENCIÓN IVA') && (result.ivaRetenido || 0) > 0) {
-      conceptLines.push({
-        rubro: 'RETENCIÓN IVA',
-        base: 0,
-        importe: result.ivaRetenido,
-        tasa: 'No desglosada',
-        factor: 'No desglosado',
-        descripcion: 'Retención total del CFDI; XML sin detalle por concepto disponible',
-      });
-    }
-    if (!conceptLines.some(line => line.rubro === 'RETENCIÓN ISR') && (result.isrRetenido || 0) > 0) {
-      conceptLines.push({
-        rubro: 'RETENCIÓN ISR',
-        base: 0,
-        importe: result.isrRetenido,
-        tasa: 'No desglosada',
-        factor: 'No desglosado',
-        descripcion: 'Retención total del CFDI; XML sin detalle por concepto disponible',
-      });
-    }
-
-    return conceptLines.map(line => {
-      const importeMxn = amountInMXN(result, line.importe * sign);
-      const baseMxn = amountInMXN(result, line.base * sign);
-      const pendingRatio = direction === 'RECIBIDO' ? 1 - paidRatio : 0;
-      return {
-        UUID: result.uuid,
-        Archivo: result.fileName,
-        Fecha_CFDI: result.fechaEmision,
-        Mes_factura: result.fechaEmision?.slice(0, 7) || 'SIN FECHA',
-        Mes_ultimo_pago: payment?.ultimaFechaPago?.slice(0, 7) || '',
-        Dirección: direction,
-        Tipo_CFDI: result.tipoCFDI,
-        Concepto: line.descripcion,
-        Rubro: line.rubro,
-        Tasa: line.tasa,
-        Tipo_factor: line.factor,
-        Base_MXN: baseMxn ?? '',
-        Moneda_original: result.moneda,
-        Tipo_cambio: result.tipoCambio ?? '',
-        IVA_trasladado_emitidas_MXN: direction === 'EMITIDO' && line.rubro === 'IVA' ? importeMxn ?? '' : 0,
-        IVA_acreditable_pagado_recibidas_MXN: direction === 'RECIBIDO' && line.rubro === 'IVA'
-          ? amountInMXN(result, line.importe * sign * paidRatio) ?? ''
-          : 0,
-        IVA_recibido_pendiente_de_pago_MXN: direction === 'RECIBIDO' && line.rubro === 'IVA'
-          ? amountInMXN(result, line.importe * sign * pendingRatio) ?? ''
-          : 0,
-        IVA_retenido_MXN: line.rubro === 'RETENCIÓN IVA' ? importeMxn ?? '' : 0,
-        ISR_retenido_MXN: line.rubro === 'RETENCIÓN ISR' ? importeMxn ?? '' : 0,
-        Estado_pago: payment?.estado || (result.metodoPago === 'PUE' ? 'PUE' : 'SIN EVIDENCIA REP'),
-        UUID_REP: payment?.repRelacionados.join(' | ') || '',
-        Fecha_ultimo_pago: payment?.ultimaFechaPago || '',
-      };
-    });
-  });
-  const ivaGroups = new Map<string, PlainRow>();
-  ivaDetailRows.forEach(row => {
-    const key = [row.Mes_factura, row.Mes_ultimo_pago, row.Dirección, row.Rubro, row.Tasa, row.Estado_pago].join('|');
-    const group = ivaGroups.get(key) || {
-      Mes_factura: row.Mes_factura,
-      Mes_ultimo_pago: row.Mes_ultimo_pago,
-      Dirección: row.Dirección,
-      Rubro: row.Rubro,
-      Tasa: row.Tasa,
-      Estado_pago: row.Estado_pago,
-      Base_MXN: 0,
-      CFDI_UUIDs: new Set<string>(),
-      sinTipoCambioUUIDs: new Set<string>(),
-      UUID_REP: new Set<string>(),
-      'IVA trasladado emitidas (MXN)': 0,
-      'IVA acreditable pagado recibidas (MXN)': 0,
-      'IVA recibido pendiente de pago (MXN)': 0,
-      IVA_retenido_MXN: 0,
-      ISR_retenido_MXN: 0,
-    };
-    group.Base_MXN += Number(row.Base_MXN || 0);
-    (group.CFDI_UUIDs as Set<string>).add(row.UUID);
-    if (row.Moneda_original && String(row.Moneda_original).toUpperCase() !== 'MXN' && row.Tipo_cambio === '') {
-      (group.sinTipoCambioUUIDs as Set<string>).add(row.UUID);
-    }
-    for (const field of [
-      'IVA trasladado emitidas (MXN)',
-      'IVA acreditable pagado recibidas (MXN)',
-      'IVA recibido pendiente de pago (MXN)',
-      'IVA_retenido_MXN',
-      'ISR_retenido_MXN',
-    ]) {
-      const sourceField = field === 'IVA trasladado emitidas (MXN)' ? 'IVA_trasladado_emitidas_MXN'
-        : field === 'IVA acreditable pagado recibidas (MXN)' ? 'IVA_acreditable_pagado_recibidas_MXN'
-          : field === 'IVA recibido pendiente de pago (MXN)' ? 'IVA_recibido_pendiente_de_pago_MXN'
-            : field;
-      group[field] += Number(row[sourceField] || 0);
-    }
-    if (row.UUID_REP) String(row.UUID_REP).split(' | ').forEach((uuid: string) => (group.UUID_REP as Set<string>).add(uuid));
-    ivaGroups.set(key, group);
-  });
-  const ivaTotals = Array.from(ivaGroups.values()).map(group => {
-    const { CFDI_UUIDs, sinTipoCambioUUIDs, UUID_REP, ...visibleGroup } = group;
-    return {
-      ...visibleGroup,
-      Concepto: `${group.Mes_factura} · ${group.Dirección} · ${group.Rubro} · ${group.Tasa}`,
-      Base_MXN: roundCurrency(group.Base_MXN),
-      CFDI: (CFDI_UUIDs as Set<string>).size,
-      Importes_sin_tipo_de_cambio: (sinTipoCambioUUIDs as Set<string>).size,
-      UUID_REP: Array.from(UUID_REP as Set<string>).join(' | '),
-      'IVA trasladado emitidas (MXN)': roundCurrency(group['IVA trasladado emitidas (MXN)']),
-      'IVA acreditable pagado recibidas (MXN)': roundCurrency(group['IVA acreditable pagado recibidas (MXN)']),
-      'IVA recibido pendiente de pago (MXN)': roundCurrency(group['IVA recibido pendiente de pago (MXN)']),
-      IVA_retenido_MXN: roundCurrency(group.IVA_retenido_MXN),
-      ISR_retenido_MXN: roundCurrency(group.ISR_retenido_MXN),
-    };
-  });
-  await appendMainReportSheet(workbook, 'Cédula IVA', ivaTotals, onProgress, 9, cancelToken);
-  await appendMainReportSheet(workbook, 'Detalle IVA por CFDI', ivaDetailRows, onProgress, 10, cancelToken);
+  await appendMainReportSheet(workbook, 'Cédula IVA', vat.totals, onProgress, 9, cancelToken);
+  await appendMainReportSheet(workbook, 'Detalle IVA por CFDI', vat.detail, onProgress, 10, cancelToken);
 
   const reconciliationRows = (direction: 'EMITIDO' | 'RECIBIDO') => [
     ...buildConciliacionPagosRows(validResults).filter(row => row.Direccion_CFDI === direction).map(row => ({ Tipo: 'Factura', ...row })),

@@ -315,7 +315,7 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     const newWorkbook = await buildMainReportWorkbook(inputs, { name: 'Empresa de prueba', rfc: COMPANY_RFC });
     const oldIssued = rows(oldWorkbook, 'CEDULA IVA TRASLADADO', 1).reduce((sum, row) => sum + Number(row.IVA || 0), 0);
     const oldReceived = rows(oldWorkbook, 'CEDULA IVA ACREDITABLE', 1).reduce((sum, row) => sum + Number(row.IVA || 0), 0);
-    const newIvaRows = rows(newWorkbook, 'Cédula IVA');
+    const newIvaRows = rows(newWorkbook, 'Cédula IVA').filter(row => row.Tipo_fila === 'DESGLOSE');
     const total = (key: string) => newIvaRows.reduce((sum, row) => sum + Number(row[key] || 0), 0);
 
     const cents = (value: number) => Math.round(value * 100);
