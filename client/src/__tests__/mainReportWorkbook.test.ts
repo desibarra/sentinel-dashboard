@@ -111,7 +111,7 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
 
     expect(workbook.SheetNames).toHaveLength(13);
     expect(XLSX.writeFile).toHaveBeenCalledTimes(1);
-    expect(XLSX.writeFile).toHaveBeenCalledWith(workbook, 'SentinelExpress_Reporte_test.xlsx');
+    expect(XLSX.writeFile).toHaveBeenCalledWith(workbook, 'SentinelExpress_Reporte_test.xlsx', { compression: true });
   });
 
   it('prefiere el estatus SAT revalidado más reciente al deduplicar un UUID', async () => {
@@ -190,8 +190,9 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     const notLoadedRows = rows(reportNotLoaded, 'Resumen');
     const notLoadedMetric = (metric: string) => notLoadedRows.find(row => row.Indicador === metric)?.Valor;
 
-    expect(notLoadedMetric('Estado de validación 69-B')).toBe('LISTA NO CARGADA');
+    expect(notLoadedMetric('Estado de validación 69-B')).toBe('NO VERIFICADO — lista 69-B no cargada');
     expect(notLoadedMetric('Cruces 69-B sin coincidencia (lista cargada)')).toBe(0);
+    expect(rows(reportNotLoaded, '69-B - EFOS')[0].Coincidencia).toBe('NO VERIFICADO — lista 69-B no cargada');
 
     const reportLoaded = await buildMainReportWorkbook([
       result('00000000-0000-4000-8000-000000000022', {
@@ -203,6 +204,8 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     const loadedMetric = (metric: string) => loadedRows.find(row => row.Indicador === metric)?.Valor;
 
     expect(loadedMetric('Estado de validación 69-B')).toBe('LISTA CARGADA');
+    expect(rows(reportLoaded, '69-B - EFOS')[0].Coincidencia).toBe('Sin coincidencias');
+    expect(rows(reportLoaded, '69-B - EFOS')[0].Fecha_Corte).toBe('2020-01-01');
     expect(loadedMetric('Cruces 69-B sin coincidencia (lista cargada)')).toBe(2);
     expect(loadedMetric('Fecha de corte 69-B')).toBe('2020-01-01');
     expect(String(loadedMetric('Antigüedad de lista 69-B'))).toContain('más de 30 días');
@@ -357,7 +360,7 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     ));
     const startedAt = performance.now();
     const workbook = await buildMainReportWorkbook(batch, { name: 'Empresa de prueba', rfc: COMPANY_RFC });
-    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx', compression: true }) as Buffer;
     const elapsedMs = performance.now() - startedAt;
 
     expect(workbook.SheetNames).toHaveLength(13);

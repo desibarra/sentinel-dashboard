@@ -3469,7 +3469,7 @@ export async function buildMainReportWorkbook(
   const cutoffTime = blacklistCutoff ? Date.parse(blacklistCutoff) : Number.NaN;
   const blacklistStale = Number.isFinite(cutoffTime) && Date.now() - cutoffTime > 30 * 24 * 60 * 60 * 1000;
   const blacklistStatus = blacklistStates.some(state => state.notSynced)
-    ? 'LISTA NO CARGADA'
+    ? 'NO VERIFICADO — lista 69-B no cargada'
     : blacklistStates.some(state => state.notSynced === false)
       ? 'LISTA CARGADA'
       : 'SIN DATOS DE VALIDACIÓN';
@@ -3627,16 +3627,17 @@ export async function buildMainReportWorkbook(
           { role: 'Receptor', rfc: result.rfcReceptor, blacklist: result.rfcReceptorBlacklist },
         ];
     parties.forEach(party => {
-      if (!party.blacklist?.found && !party.blacklist?.notSynced) return;
+      const verified = party.blacklist?.notSynced === false;
       blacklistRows.push({
         UUID: result.uuid,
         Dirección: direction,
         Contraparte: party.role,
         RFC: party.rfc,
-        Coincidencia: party.blacklist.found ? 'SI' : 'LISTA NO SINCRONIZADA',
-        Situación: party.blacklist.situacion || 'No especificada',
-        Fecha_Publicación: party.blacklist.fechaPublicacion || '',
-        Fuente: party.blacklist.source || '',
+        Coincidencia: !verified ? party.blacklist?.notSynced ? 'NO VERIFICADO — lista 69-B no cargada' : 'NO VERIFICADO — sin datos de cruce 69-B' : party.blacklist?.found ? 'SI' : 'Sin coincidencias',
+        Situación: party.blacklist?.situacion || '',
+        Fecha_Corte: verified ? party.blacklist?.fechaCorte || 'NO VERIFICADA' : '',
+        Fecha_Publicación: party.blacklist?.fechaPublicacion || '',
+        Fuente: party.blacklist?.source || '',
       });
     });
   });
@@ -3975,7 +3976,7 @@ export async function exportToExcel(
   const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
   const fileName = fileNameOverride || `SentinelExpress_Reporte_${dateStr}.xlsx`;
   sentinelStageLog('serializacion_descarga_inicio', { fileName, sheets: wb.SheetNames.length, records: results.length });
-  (XLSX as any).writeFile(wb, fileName);
+  (XLSX as any).writeFile(wb, fileName, { compression: true });
   sentinelStageLog('serializacion_descarga_fin', { fileName });
   return wb;
 }
