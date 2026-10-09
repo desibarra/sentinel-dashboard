@@ -24,7 +24,7 @@ import { History, RefreshCcw, Save } from "lucide-react";
 import { checkCFDIStatusSAT } from "@/utils/satStatusValidator";
 import { satQueue, SatQueueCounts } from "@/lib/satQueue";
 import { incrementXMLCount, getXMLCount } from "@/services/leadService";
-import { saveSessionCache, loadSessionCache, clearSessionCache, getCacheAge, persistRevalidatedSession } from "@/hooks/useSessionCache";
+import { saveSessionCache, loadSessionCache, clearSessionCache, getCacheAge, persistRevalidatedSession, SESSION_PARSER_VERSION } from "@/hooks/useSessionCache";
 import { useAuth } from "@/contexts/AuthContext";
 import { tokenService } from "@/services/tokenService";
 import { isBlacklistSynced } from "@/utils/blacklistValidator";
@@ -422,7 +422,9 @@ export default function Dashboard() {
 
       totalAmount: validationResults.reduce((sum, r) => sum + r.total, 0),
 
-      results: validationResults
+      results: validationResults,
+
+      parserVersion: SESSION_PARSER_VERSION,
 
     };
 
@@ -451,6 +453,15 @@ export default function Dashboard() {
     setCurrentPage(1);               // regresa a la primera página de la tabla
 
     toast.success(`Proceso restaurado: ${(history.xmlCount || 0).toLocaleString()} CFDI · ${history.fileName}`, { duration: 4000 });
+
+    // Un análisis de una versión anterior conserva el estatus SAT de entonces (p. ej. RFC con "&"
+    // reportados como "No Encontrado"); se avisa para revalidar antes de exportar.
+    // Los importes se recalculan al exportar; lo que no se recalcula es el estatus SAT guardado.
+    const pendingSat = contarEstatusSAT(history.results || []).noConfirmados;
+    if (pendingSat > 0) {
+      const oldVersion = history.parserVersion !== SESSION_PARSER_VERSION ? ', se generó con una versión anterior de Sentinel,' : '';
+      toast.warning(`Este análisis${oldVersion} tiene ${pendingSat.toLocaleString()} CFDI sin estatus SAT confirmado. Revalida el SAT antes de exportar o vuelve a cargar los XML.`, { duration: 12000 });
+    }
 
   };
 
@@ -496,6 +507,10 @@ export default function Dashboard() {
       });
       sentinelStageLog("export_fin_workbook", { count: results.length });
       toast.success(`Reporte principal de ${wb.SheetNames.length} hojas exportado en un solo archivo.`);
+      const pendingSat = contarEstatusSAT(results).noConfirmados;
+      if (pendingSat > 0) {
+        toast.warning(`El reporte incluye ${pendingSat.toLocaleString()} CFDI sin estatus SAT confirmado (ver Resumen). Revalida el SAT para un reporte definitivo.`, { duration: 12000 });
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Error al exportar el reporte principal");
       console.error("Export error:", error);

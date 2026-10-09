@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { appDB, ValidationHistory } from '@/db/appDB';
+import { contarEstatusSAT } from '@/lib/cfdiEngine';
 import { useCompany } from '@/contexts/CompanyContext';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
@@ -16,11 +17,13 @@ interface HistorySidebarProps {
 export const HistorySidebar: React.FC<HistorySidebarProps> = ({ onLoadHistory, children }) => {
     const { currentCompany } = useCompany();
     const [historyItems, setHistoryItems] = useState<ValidationHistory[]>([]);
+    const [pendingSat, setPendingSat] = useState<Map<string, number>>(new Map());
 
     const loadHistory = async () => {
         if (currentCompany) {
             const items = await appDB.getHistoryByCompany(currentCompany.id);
             setHistoryItems(items.sort((a, b) => b.timestamp - a.timestamp));
+            setPendingSat(new Map(items.map(item => [item.id, contarEstatusSAT(item.results || []).noConfirmados])));
         }
     };
 
@@ -88,6 +91,11 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({ onLoadHistory, c
                                     <FileText className="w-4 h-4 text-primary" />
                                     {item.fileName}
                                 </h4>
+                                {(pendingSat.get(item.id) ?? 0) > 0 && (
+                                    <p className="-mt-2 mb-3 text-xs font-medium text-amber-700 dark:text-amber-400">
+                                        {(pendingSat.get(item.id) ?? 0).toLocaleString()} CFDI sin estatus SAT confirmado: revalida antes de exportar
+                                    </p>
+                                )}
 
                                 <div className="grid grid-cols-3 gap-2">
                                     <div className="p-2 bg-emerald-50 dark:bg-emerald-900/10 rounded-lg text-center border border-emerald-100 dark:border-emerald-800">

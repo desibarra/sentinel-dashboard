@@ -20,6 +20,8 @@ export interface ValidationHistory {
     totalAmount: number;
     results: any[];
     globalNotes?: string;
+    /** SESSION_PARSER_VERSION con que se generó; ausente en análisis anteriores a v3. */
+    parserVersion?: number;
 }
 
 // P0-B: caché de sesión activa (antes vivía en localStorage bajo la clave
