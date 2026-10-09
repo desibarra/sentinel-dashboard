@@ -99,3 +99,57 @@ describe('punto 4: flujo mensual desde impuestos DR', () => {
     expect(buildMainReportVat([r]).alerts).toHaveLength(1);
   });
 });
+
+describe('pagos duplicados, IVA sin factura y conciliación de fuente', () => {
+  const withPayment = (uuid: string, related: string, props: Partial<ValidationResult> = {}) => {
+    const r = rep(uuid, related, props);
+    r.xmlContent = r.xmlContent!.replace('ObjetoImpDR="02"', 'ObjetoImpDR="02" NumParcialidad="1" ImpPagado="58"');
+    return r;
+  };
+  it('cuenta una sola vez el mismo pago presente en dos REP y reporta lo excluido', () => {
+    const result = buildMainReportVat([withPayment('R1', 'ABSENT'), withPayment('R2', 'ABSENT', { fechaEmision: '2026-07-20' }), withPayment('R3', 'OTHER')]);
+    expect(total(result, issued)).toBe(16);
+    expect(total(result, 'IVA_excluido_pago_duplicado_MXN')).toBe(8);
+    expect(result.reconciliation.drDuplicados).toBe(1);
+    expect(result.reconciliation.ivaDuplicadoExcluido).toBe(8);
+    expect(result.reconciliation.duplicados[0]).toMatchObject({ UUID_REP_excluido: 'R2', UUID_REP_conservado: 'R1' });
+    expect(result.detail.find(x => x.UUID === 'R2')?.Estado).toBe('EXCLUIDO: PAGO DUPLICADO');
+    expect(result.alerts.some(a => /Pago duplicado/.test(a.Descripcion_Tecnica))).toBe(true);
+  });
+  it('no deduplica parcialidades distintas de la misma factura', () => {
+    const second = withPayment('R2', 'ABSENT');
+    second.xmlContent = second.xmlContent!.replace('NumParcialidad="1"', 'NumParcialidad="2"');
+    expect(total(buildMainReportVat([withPayment('R1', 'ABSENT'), second]), issued)).toBe(16);
+  });
+  it('separa el IVA con factura en lote del pendiente de factura', () => {
+    const rows = [invoice('PUE'), invoice('OLD', { metodoPago: 'PPD' }), rep('R1', 'OLD'), rep('R2', 'ABSENT')].map(r => ({ ...r, direccionCFDI: 'RECIBIDO' } as ValidationResult));
+    const result = buildMainReportVat(rows);
+    expect(total(result, received)).toBe(32);
+    expect(total(result, 'IVA con factura en lote (MXN)')).toBe(24);
+    expect(total(result, 'IVA_REP_factura_no_localizada_MXN')).toBe(8);
+  });
+  it('lleva la cuenta de REP leídos, excluidos y pagos fuera del periodo', () => {
+    const late = rep('R4', 'ABSENT');
+    late.xmlContent = late.xmlContent!.replace('2026-07-15', '2026-05-30');
+    const result = buildMainReportVat([invoice('PUE'), rep('R1', 'ABSENT'), rep('R2', 'X', { estatusSAT: 'Cancelado' }), late]);
+    expect(result.reconciliation).toMatchObject({ repLeidos: 3, repCancelados: 1, pagosLeidos: 2, pagosFueraDelPeriodo: 1, drLeidos: 2, drFacturaNoLocalizada: 2 });
+    expect(result.reconciliation.pagosPorMes.find(m => m.mes === '2026-05')?.fueraDelPeriodo).toBe(true);
+  });
+  it('exporta conciliación de fuente, alertas altas y alertas agrupadas', async () => {
+    const base = { rfcEmisor: 'EMP010101EMP', rfcReceptor: 'CLI010101CLI', fileName: 'test.xml', total: 0, resultado: '🟢 USABLE', esNomina: 'NO' } as Partial<ValidationResult>;
+    const ids = ['00000000-0000-4000-8000-000000000081', '00000000-0000-4000-8000-000000000082'];
+    const workbook = await buildMainReportWorkbook([
+      withPayment(ids[0], 'ABSENT', base), withPayment(ids[1], 'ABSENT', base),
+      invoice('00000000-0000-4000-8000-000000000083', { ...base, estatusSAT: 'Cancelado' }),
+    ], { rfc: 'EMP010101EMP' });
+    const sheet = (name: string) => XLSX.utils.sheet_to_json<any>(workbook.Sheets[name]);
+    expect(workbook.SheetNames.slice(0, 3)).toEqual(['Resumen', 'Conciliación fuente', 'Alertas altas']);
+    expect(sheet('Conciliación fuente').find(r => r.Concepto === 'Excluidos: pago duplicado en otro REP')?.Cantidad).toBe(1);
+    expect(sheet('Conciliación fuente').find(r => r.Concepto === 'Suma = DoctoRelacionado leídos')?.Cantidad).toBe('CUADRA');
+    expect(sheet('Alertas altas').every(r => r.Severidad === 'Alta')).toBe(true);
+    expect(sheet('Alertas altas').length).toBeGreaterThan(0);
+    expect(sheet('Alertas')[0].Severidad).toBe('Alta');
+    expect(sheet('Alertas por contraparte').every(r => typeof r.CFDI === 'number')).toBe(true);
+    expect(sheet('Resumen').find(r => r.Indicador === 'IVA excluido por pagos duplicados (MXN)')?.Valor).toBe(8);
+  });
+});

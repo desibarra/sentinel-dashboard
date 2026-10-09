@@ -3342,9 +3342,12 @@ export interface ExportToExcelOptions {
 
 const MAIN_REPORT_SHEETS = [
   'Resumen',
+  'Conciliación fuente',
+  'Alertas altas',
   'CFDI Emitidos',
   'CFDI Recibidos',
   'Alertas',
+  'Alertas por contraparte',
   '69-B - EFOS',
   'Clientes',
   'Proveedores',
@@ -3427,6 +3430,91 @@ function buildReadErrorRows(results: ValidationResult[]): PlainRow[] {
   });
 }
 
+const SEVERITY_ORDER = ['Alta', 'Media-alta', 'Media', 'Informativa'];
+const severityRank = (severity: unknown) => {
+  const index = SEVERITY_ORDER.indexOf(String(severity || ''));
+  return index === -1 ? SEVERITY_ORDER.length : index;
+};
+
+/** Una fila por contraparte + regla: resume las alertas repetitivas (sin evidencia de pago, descripción genérica, etc.). */
+function groupAlertsByCounterparty(alertRows: PlainRow[]): PlainRow[] {
+  const groups = new Map<string, { row: PlainRow; uuids: Set<string>; importe: number }>();
+  for (const alert of alertRows) {
+    const key = [alert.RFC_Contraparte, alert.Severidad, alert.Tipo, alert.Regla || alert.Motivo].join('|');
+    const group = groups.get(key) || {
+      row: { RFC_Contraparte: alert.RFC_Contraparte, Severidad: alert.Severidad, Tipo: alert.Tipo, Regla: alert.Regla, Motivo: alert.Motivo, Recomendación: alert.Recomendación },
+      uuids: new Set<string>(), importe: 0,
+    };
+    if (!group.uuids.has(String(alert.UUID))) {
+      group.uuids.add(String(alert.UUID));
+      group.importe += typeof alert.Importe_MXN === 'number' ? alert.Importe_MXN : 0;
+    }
+    groups.set(key, group);
+  }
+  return Array.from(groups.values())
+    .map(({ row, uuids, importe }): PlainRow => {
+      const list = Array.from(uuids);
+      return { ...row, CFDI: list.length, Importe_MXN: roundCurrency(importe), UUIDs: list.slice(0, 20).join(' | ') + (list.length > 20 ? ` | … (+${list.length - 20})` : '') };
+    })
+    .sort((a, b) => severityRank(a.Severidad) - severityRank(b.Severidad) || b.CFDI - a.CFDI);
+}
+
+function vatSummaryRows(vat: ReturnType<typeof buildMainReportVat>): PlainRow[] {
+  const monthly = vat.totals.filter(row => row.Tipo_fila === 'TOTAL MENSUAL');
+  const sum = (direction: string, field: string) => roundCurrency(monthly.filter(row => row.Dirección === direction).reduce((total, row) => total + Number(row[field] || 0), 0));
+  const rows: PlainRow[] = [];
+  for (const [direction, label, field] of [['EMITIDO', 'IVA trasladado cobrado', 'IVA trasladado emitidas (MXN)'], ['RECIBIDO', 'IVA acreditable pagado', 'IVA acreditable pagado recibidas (MXN)']] as const) {
+    rows.push(
+      { Indicador: `${label} (MXN, total)`, Valor: sum(direction, field) },
+      { Indicador: `${label}: con factura en lote (MXN)`, Valor: sum(direction, 'IVA con factura en lote (MXN)') },
+      { Indicador: `${label}: pendiente de factura (MXN)${direction === 'RECIBIDO' ? ' — no sustentado; no acreditar sin la factura' : ''}`, Valor: sum(direction, 'IVA_REP_factura_no_localizada_MXN') },
+    );
+  }
+  rows.push(
+    { Indicador: 'Pagos duplicados en REP excluidos', Valor: vat.reconciliation.drDuplicados },
+    { Indicador: 'IVA excluido por pagos duplicados (MXN)', Valor: vat.reconciliation.ivaDuplicadoExcluido },
+  );
+  return rows;
+}
+
+/** Trazabilidad contra el documento fuente: qué se leyó, qué se excluyó y por qué. */
+function buildSourceReconciliationRows(results: ValidationResult[], validResults: ValidationResult[], rec: ReturnType<typeof buildMainReportVat>['reconciliation']): PlainRow[] {
+  const type = (value: ValidationResult) => String(value.tipoCFDI || '').toUpperCase();
+  const outOfCompany = validResults.filter(result => type(result) === 'P' && !['EMITIDO', 'RECIBIDO'].includes(result.direccionCFDI || '')).length;
+  const row = (Sección: string, Concepto: string, Cantidad: number | string, Detalle = '') => ({ Sección, Concepto, Cantidad, Detalle });
+  const counted = rec.repLeidos - rec.repCancelados - rec.repSinPagos;
+  const rows: PlainRow[] = [
+    row('Archivos', 'XML recibidos', results.length),
+    row('Archivos', 'XML sin UUID válido (hoja Errores de lectura)', results.filter(result => !isExportableUuid(result.uuid)).length),
+    row('Archivos', 'UUID repetidos descartados (se conserva la consulta SAT más reciente)', results.filter(result => isExportableUuid(result.uuid)).length - validResults.length),
+    row('Archivos', 'CFDI únicos analizados', validResults.length),
+    row('REP', 'REP (tipo P) analizados', validResults.filter(result => type(result) === 'P').length),
+    row('REP', 'REP excluidos: ajenos a la empresa', outOfCompany),
+    row('REP', 'REP de la empresa leídos', rec.repLeidos),
+    row('REP', 'REP excluidos: cancelados', rec.repCancelados),
+    row('REP', 'REP excluidos: sin nodos Pago legibles', rec.repSinPagos),
+    row('REP', 'REP que aportan pagos', counted),
+    row('Pagos', 'Nodos Pago leídos', rec.pagosLeidos),
+    row('Pagos', 'Pagos sin FechaPago válida (no asignados a mes)', rec.pagosSinFecha),
+    row('Pagos', 'Pagos con FechaPago en mes distinto a la emisión del REP', rec.pagosMesDistintoEmisionREP),
+    row('Pagos', `Pagos fuera del periodo analizado${rec.periodo ? ` (${rec.periodo.desde} a ${rec.periodo.hasta})` : ''}`, rec.periodo ? rec.pagosFueraDelPeriodo : 'SIN PERIODO'),
+    row('Documentos relacionados', 'DoctoRelacionado leídos', rec.drLeidos),
+    row('Documentos relacionados', 'Excluidos: factura cancelada', rec.drFacturaCancelada),
+    row('Documentos relacionados', 'Excluidos: factura incompatible (PUE, otro tipo u otra dirección)', rec.drIncompatibles),
+    row('Documentos relacionados', 'Excluidos: pago duplicado en otro REP', rec.drDuplicados, `IVA excluido ${rec.ivaDuplicadoExcluido.toFixed(2)} MXN`),
+    row('Documentos relacionados', 'Contados con factura en lote', rec.drFacturaEnLote),
+    row('Documentos relacionados', 'Contados con factura NO localizada (pendiente de factura)', rec.drFacturaNoLocalizada),
+    row('Documentos relacionados', 'Suma = DoctoRelacionado leídos',
+      rec.drFacturaCancelada + rec.drIncompatibles + rec.drDuplicados + rec.drFacturaEnLote + rec.drFacturaNoLocalizada === rec.drLeidos ? 'CUADRA' : 'NO CUADRA'),
+    row('Documentos relacionados', 'Contados pero no cuantificables: sin impuestos DR', rec.drSinImpuestos),
+    row('Documentos relacionados', 'Contados pero no cuantificables: sin tipo de cambio', rec.drSinTipoCambio),
+  ];
+  rec.pagosPorMes.forEach(item => rows.push(row('Pagos por mes', `FechaPago ${item.mes || 'SIN FECHA'}`, item.pagos, `IVA ${item.iva.toFixed(2)} MXN${item.fueraDelPeriodo ? ' — fuera del periodo analizado' : ''}`)));
+  rec.duplicados.forEach(item => rows.push(row('Pago duplicado excluido', `REP ${item.UUID_REP_excluido}`, 1,
+    `Factura ${item.UUID_factura}, parcialidad ${item.NumParcialidad || 'N/D'}, ImpPagado ${item.ImpPagado || 'N/D'}, FechaPago ${item.FechaPago}; ya contado en REP ${item.UUID_REP_conservado}; IVA excluido ${item.IVA_excluido_MXN.toFixed(2)} MXN`)));
+  return rows;
+}
+
 export async function buildMainReportWorkbook(
   results: ValidationResult[],
   company: { name?: string; rfc?: string } = {},
@@ -3466,6 +3554,11 @@ export async function buildMainReportWorkbook(
       ? 'LISTA CARGADA'
       : 'SIN DATOS DE VALIDACIÓN';
   const blacklistNoMatches = blacklistStates.filter(state => state.notSynced === false && !state.found).length;
+  // Sin coincidencia contra una lista vieja (o sin fecha de corte) no prueba nada: se reporta como no concluyente.
+  const blacklistInconclusive = blacklistStale || !blacklistCutoff;
+  const inconclusiveLabel = blacklistCutoff
+    ? `NO CONCLUYENTE — lista 69-B con corte ${blacklistCutoff} (más de 30 días); actualizarla`
+    : 'NO CONCLUYENTE — lista 69-B sin fecha de corte verificada; actualizarla';
   const cfdiWithoutBlacklistData = validResults.filter(result =>
     result.rfcEmisorBlacklist?.notSynced || result.rfcReceptorBlacklist?.notSynced
   ).length;
@@ -3495,6 +3588,7 @@ export async function buildMainReportWorkbook(
     UUID: alert.UUID || '',
     Severidad: alert.Severidad || (alert.Nivel_Riesgo === 'ROJO' ? 'Alta' : alert.Nivel_Riesgo === 'NARANJA' ? 'Media-alta' : alert.Nivel_Riesgo === 'AMARILLO' ? 'Media' : 'Informativa'),
     Tipo: alert.Tipo_Alerta || alert.Tipo || '',
+    Regla: alert.Regla || '',
     Motivo: alert.Motivo || alert.Descripcion_Tecnica || '',
     Fundamento: alert.Fundamento || alert.Fundamento_Referencia || 'Regla preventiva Sentinel Express; requiere revisión con documentación soporte.',
     Evidencia: alert.Evidencia_XML || '',
@@ -3504,7 +3598,7 @@ export async function buildMainReportWorkbook(
     if (seenAlerts.has(key)) return false;
     seenAlerts.add(key);
     return true;
-  });
+  }).sort((a, b) => severityRank(a.Severidad) - severityRank(b.Severidad));
   const activeFinancialResults = validResults.filter(result =>
     !/cancelad/i.test(String(result.estatusSAT || '')) &&
     !/cancelad/i.test(String(result.trazabilidadInfo?.observacionSAT || '')) &&
@@ -3529,7 +3623,7 @@ export async function buildMainReportWorkbook(
     { Indicador: 'Fecha de corte 69-B', Valor: blacklistCutoff || 'NO VERIFICADA' },
     { Indicador: 'Antigüedad de lista 69-B', Valor: blacklistStale ? 'DESACTUALIZADA: más de 30 días; actualizar antes de confiar en el cruce' : blacklistCutoff ? 'Dentro de 30 días' : 'NO VERIFICABLE SIN FECHA DE CORTE' },
     { Indicador: 'CFDI sin consulta 69-B (lista no cargada)', Valor: cfdiWithoutBlacklistData },
-    { Indicador: 'Cruces 69-B sin coincidencia (lista cargada)', Valor: blacklistNoMatches },
+    { Indicador: 'Cruces 69-B sin coincidencia (lista cargada)', Valor: blacklistInconclusive && blacklistNoMatches ? `${inconclusiveLabel} (${blacklistNoMatches} cruces)` : blacklistNoMatches },
     { Indicador: 'CFDI no validados SAT', Valor: satCount.noConfirmados },
     { Indicador: 'Alertas en hoja Alertas', Valor: alertRows.length },
     { Indicador: 'Alertas de severidad alta', Valor: alertRows.filter(alert => alert.Severidad === 'Alta').length },
@@ -3539,6 +3633,7 @@ export async function buildMainReportWorkbook(
     { Indicador: 'Egresos emitidos (MXN)', Valor: financialAmount('EMITIDO', 'E') },
     { Indicador: 'Egresos recibidos (MXN)', Valor: financialAmount('RECIBIDO', 'E') },
     { Indicador: 'Nómina emitida (MXN)', Valor: financialAmount('EMITIDO', 'N') },
+    ...vatSummaryRows(vat),
     { Indicador: 'REP y CFDI cancelados excluidos de importes', Valor: validResults.filter(result =>
       String(result.tipoCFDI || '').toUpperCase() === 'P' || /cancelad/i.test(String(result.estatusSAT || ''))
     ).length },
@@ -3588,6 +3683,8 @@ export async function buildMainReportWorkbook(
     { Indicador: 'XML sin UUID válido', Valor: results.filter(result => !isExportableUuid(result.uuid)).length }
   );
   await appendMainReportSheet(workbook, 'Resumen', summaryRows, onProgress, 1, cancelToken);
+  await appendMainReportSheet(workbook, 'Conciliación fuente', buildSourceReconciliationRows(results, validResults, vat.reconciliation), onProgress, 2, cancelToken);
+  await appendMainReportSheet(workbook, 'Alertas altas', alertRows.filter(alert => alert.Severidad === 'Alta'), onProgress, 3, cancelToken);
 
   const detailRow = (result: ValidationResult): PlainRow => ({
     UUID: result.uuid,
@@ -3624,10 +3721,11 @@ export async function buildMainReportWorkbook(
     Estado_Pago: result.pagosRelacionadosEstado || result.paymentComplementStatus || 'NO DETERMINADO',
   });
 
-  await appendMainReportSheet(workbook, 'CFDI Emitidos', issued.map(detailRow), onProgress, 2, cancelToken);
-  await appendMainReportSheet(workbook, 'CFDI Recibidos', received.map(detailRow), onProgress, 3, cancelToken);
+  await appendMainReportSheet(workbook, 'CFDI Emitidos', issued.map(detailRow), onProgress, 4, cancelToken);
+  await appendMainReportSheet(workbook, 'CFDI Recibidos', received.map(detailRow), onProgress, 5, cancelToken);
 
-  await appendMainReportSheet(workbook, 'Alertas', alertRows, onProgress, 4, cancelToken);
+  await appendMainReportSheet(workbook, 'Alertas', alertRows, onProgress, 6, cancelToken);
+  await appendMainReportSheet(workbook, 'Alertas por contraparte', groupAlertsByCounterparty(alertRows), onProgress, 7, cancelToken);
 
   const blacklistRows: PlainRow[] = [];
   validResults.forEach(result => {
@@ -3647,7 +3745,7 @@ export async function buildMainReportWorkbook(
         Dirección: direction,
         Contraparte: party.role,
         RFC: party.rfc,
-        Coincidencia: !verified ? party.blacklist?.notSynced ? 'NO VERIFICADO — lista 69-B no cargada' : 'NO VERIFICADO — sin datos de cruce 69-B' : party.blacklist?.found ? 'SI' : 'Sin coincidencias',
+        Coincidencia: !verified ? party.blacklist?.notSynced ? 'NO VERIFICADO — lista 69-B no cargada' : 'NO VERIFICADO — sin datos de cruce 69-B' : party.blacklist?.found ? 'SI' : blacklistInconclusive ? inconclusiveLabel : 'Sin coincidencias',
         Situación: party.blacklist?.situacion || '',
         Fecha_Corte: verified ? party.blacklist?.fechaCorte || 'NO VERIFICADA' : '',
         Fecha_Publicación: party.blacklist?.fechaPublicacion || '',
@@ -3655,7 +3753,7 @@ export async function buildMainReportWorkbook(
       });
     });
   });
-  await appendMainReportSheet(workbook, '69-B - EFOS', blacklistRows, onProgress, 5, cancelToken);
+  await appendMainReportSheet(workbook, '69-B - EFOS', blacklistRows, onProgress, 8, cancelToken);
 
   const buildCounterpartyRows = (directionRows: ValidationResult[], role: 'Cliente' | 'Proveedor') => {
     const groups = new Map<string, { nombre: string; cantidad: number; subtotal: number; iva: number; total: number; importesSinTipoCambio: number }>();
@@ -3775,12 +3873,12 @@ export async function buildMainReportWorkbook(
     UUIDs: group.uuid.join(' | '),
     CFDI_sin_tipo_de_cambio: group.conversionesPendientes,
   }));
-  await appendMainReportSheet(workbook, 'Clientes', buildCounterpartyRows(issued, 'Cliente'), onProgress, 6, cancelToken);
-  await appendMainReportSheet(workbook, 'Proveedores', buildCounterpartyRows(received, 'Proveedor'), onProgress, 7, cancelToken);
-  await appendMainReportSheet(workbook, 'Nómina por empleado', payrollRows, onProgress, 8, cancelToken);
+  await appendMainReportSheet(workbook, 'Clientes', buildCounterpartyRows(issued, 'Cliente'), onProgress, 9, cancelToken);
+  await appendMainReportSheet(workbook, 'Proveedores', buildCounterpartyRows(received, 'Proveedor'), onProgress, 10, cancelToken);
+  await appendMainReportSheet(workbook, 'Nómina por empleado', payrollRows, onProgress, 11, cancelToken);
 
-  await appendMainReportSheet(workbook, 'Cédula IVA', vat.totals, onProgress, 9, cancelToken);
-  await appendMainReportSheet(workbook, 'Detalle IVA por CFDI', vat.detail, onProgress, 10, cancelToken);
+  await appendMainReportSheet(workbook, 'Cédula IVA', vat.totals, onProgress, 12, cancelToken);
+  await appendMainReportSheet(workbook, 'Detalle IVA por CFDI', vat.detail, onProgress, 13, cancelToken);
 
   const reconciliationRows = (direction: 'EMITIDO' | 'RECIBIDO') => [
     ...buildConciliacionPagosRows(validResults).filter(row => row.Direccion_CFDI === direction).map(row => ({ Tipo: 'Factura', ...row })),
@@ -3789,9 +3887,9 @@ export async function buildMainReportWorkbook(
       return rep?.direccionCFDI === direction;
     }).map(row => ({ Tipo: 'REP', ...row })),
   ];
-  await appendMainReportSheet(workbook, 'Conciliación PPD-REP emitidas', reconciliationRows('EMITIDO'), onProgress, 11, cancelToken);
-  await appendMainReportSheet(workbook, 'Conciliación PPD-REP recibidas', reconciliationRows('RECIBIDO'), onProgress, 12, cancelToken);
-  await appendMainReportSheet(workbook, 'Errores de lectura', buildReadErrorRows(results), onProgress, 13, cancelToken);
+  await appendMainReportSheet(workbook, 'Conciliación PPD-REP emitidas', reconciliationRows('EMITIDO'), onProgress, 14, cancelToken);
+  await appendMainReportSheet(workbook, 'Conciliación PPD-REP recibidas', reconciliationRows('RECIBIDO'), onProgress, 15, cancelToken);
+  await appendMainReportSheet(workbook, 'Errores de lectura', buildReadErrorRows(results), onProgress, 16, cancelToken);
 
   const unexpectedSheetNames = workbook.SheetNames.filter((name: string) => !MAIN_REPORT_SHEETS.includes(name as typeof MAIN_REPORT_SHEETS[number]));
   if (unexpectedSheetNames.length || workbook.SheetNames.length !== MAIN_REPORT_SHEETS.length) {

@@ -34,6 +34,17 @@ function okXmlResponse(estado: string) {
 }
 
 describe('checkCFDIStatusSAT — clasificación de reintentos (mock, sin red real)', () => {
+  it('escapa el & del RFC (K&S041130S83) para que no corte la expresión impresa', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okXmlResponse('Vigente'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await checkCFDIStatusSAT('uuid-amp', 'EMI010101EMI', 'K&S041130S83', 100);
+
+    const body = String(fetchMock.mock.calls[0][1].body);
+    expect(body).toContain('rr=K&amp;S041130S83&tt=');
+    expect(body).not.toContain('rr=K&S041130S83');
+  });
+
   it('Vigente se resuelve en la primera llamada, sin reintentos', async () => {
     const fetchMock = vi.fn().mockResolvedValue(okXmlResponse('Vigente'));
     vi.stubGlobal('fetch', fetchMock);

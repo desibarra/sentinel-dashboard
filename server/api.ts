@@ -242,7 +242,7 @@ apiRouter.post("/sat/validate", async (req: Request, res: Response) => {
        <soapenv:Header/>
        <soapenv:Body>
           <tem:Consulta>
-             <tem:expresionImpresa><![CDATA[?re=${rfcEmisor}&rr=${rfcReceptor}&tt=${totalFormatted}&id=${uuid}]]></tem:expresionImpresa>
+             <tem:expresionImpresa><![CDATA[?re=${rfcEmisor.replace(/&/g, "&amp;")}&rr=${rfcReceptor.replace(/&/g, "&amp;")}&tt=${totalFormatted}&id=${uuid}]]></tem:expresionImpresa>
           </tem:Consulta>
        </soapenv:Body>
     </soapenv:Envelope>

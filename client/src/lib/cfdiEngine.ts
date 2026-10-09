@@ -1816,6 +1816,7 @@ export function reconciliarPagosPPD(results: ValidationResult[]): Reconciliacion
         fueraDePeriodo: boolean; // true si algún REP llegó > DIAS_MAX_COMPLEMENTO después de la factura
     }
     const pagosPorFactura = new Map<string, Acumulado>();
+    const pagosVistos = new Set<string>();
     const reps: ReconciliacionREP[] = [];
 
     for (const rep of repsUnicos) {
@@ -1840,6 +1841,12 @@ export function reconciliarPagosPPD(results: ValidationResult[]): Reconciliacion
 
             algunaRelacionada = true;
             facturasDeEsteRep.push(uuidRel);
+
+            // El mismo pago (parcialidad + importe + fecha) en dos REP distintos
+            // solo se acumula una vez — si no, el saldo pagado se infla.
+            const pagoKey = [uuidRel, d.numParcialidad ?? '', d.impPagado?.toFixed(2) ?? '', String(d.fechaPago).slice(0, 10)].join('|');
+            if (pagosVistos.has(pagoKey)) continue;
+            pagosVistos.add(pagoKey);
 
             // ── Conversión de moneda: NUNCA se aproxima en silencio. ──
             // Casos cubiertos:

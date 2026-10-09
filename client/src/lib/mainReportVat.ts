@@ -14,15 +14,36 @@ const rateLabel = (rate: string, factor: string) => factor === 'Exento' ? 'EXENT
 const month = (date?: string) => date?.slice(0, 7) || '';
 const money = (n: number) => `$${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 type RepSummary = { notInLot: Set<string>; inLot: Map<string, string>; earlyIva: Map<string, number> };
-const amountFields = ['Base_MXN', 'IVA trasladado emitidas (MXN)', 'IVA acreditable pagado recibidas (MXN)', 'IVA emitido por cobrar (MXN)', 'IVA recibido pendiente de pago (MXN)', 'IVA_retenido_MXN', 'ISR_retenido_MXN', 'IVA_REP_facturas_otros_meses_MXN', 'IVA_REP_factura_no_localizada_MXN'];
+const amountFields = ['Base_MXN', 'IVA trasladado emitidas (MXN)', 'IVA acreditable pagado recibidas (MXN)', 'IVA con factura en lote (MXN)', 'IVA emitido por cobrar (MXN)', 'IVA recibido pendiente de pago (MXN)', 'IVA_retenido_MXN', 'ISR_retenido_MXN', 'IVA_REP_facturas_otros_meses_MXN', 'IVA_REP_factura_no_localizada_MXN', 'IVA_excluido_pago_duplicado_MXN'];
+/** Trazabilidad de la lectura de REP para la hoja de conciliación contra el documento fuente. */
+export type RepReconciliation = {
+  repLeidos: number; repCancelados: number; repSinPagos: number; pagosLeidos: number; pagosSinFecha: number;
+  drLeidos: number; drFacturaCancelada: number; drIncompatibles: number; drDuplicados: number; ivaDuplicadoExcluido: number;
+  drSinImpuestos: number; drSinTipoCambio: number; drFacturaEnLote: number; drFacturaNoLocalizada: number;
+  pagosMesDistintoEmisionREP: number; pagosFueraDelPeriodo: number; periodo: { desde: string; hasta: string } | null;
+  pagosPorMes: { mes: string; pagos: number; iva: number; fueraDelPeriodo: boolean }[];
+  duplicados: { UUID_REP_excluido: string; UUID_REP_conservado: string; UUID_factura: string; NumParcialidad: string; ImpPagado: string; FechaPago: string; IVA_excluido_MXN: number }[];
+};
 
 /** Flujo mensual: PUE y NC por emisión; REP por FechaPago e impuestos DR, sin prorratear la factura. */
-export function buildMainReportVat(results: ValidationResult[]): { detail: Row[]; totals: Row[]; alerts: Row[]; repNotes: Map<string, string> } {
+export function buildMainReportVat(results: ValidationResult[]): { detail: Row[]; totals: Row[]; alerts: Row[]; repNotes: Map<string, string>; reconciliation: RepReconciliation } {
   const detail: Row[] = [];
   const alerts: Row[] = [];
   const byUuid = new Map(results.map(r => [r.uuid.toUpperCase(), r]));
   const paidVat = new Map<string, number>();
   const repSummaries = new Map<string, RepSummary>();
+  const emissionMonths = results.filter(r => r.tipoCFDI !== 'P').map(r => month(r.fechaEmision)).filter(Boolean).sort();
+  const rec: RepReconciliation = {
+    repLeidos: 0, repCancelados: 0, repSinPagos: 0, pagosLeidos: 0, pagosSinFecha: 0, drLeidos: 0, drFacturaCancelada: 0, drIncompatibles: 0,
+    drDuplicados: 0, ivaDuplicadoExcluido: 0, drSinImpuestos: 0, drSinTipoCambio: 0, drFacturaEnLote: 0, drFacturaNoLocalizada: 0,
+    pagosMesDistintoEmisionREP: 0, pagosFueraDelPeriodo: 0,
+    periodo: emissionMonths.length ? { desde: emissionMonths[0], hasta: emissionMonths[emissionMonths.length - 1] } : null,
+    pagosPorMes: [], duplicados: [],
+  };
+  const paymentsByMonth = new Map<string, { pagos: number; iva: number }>();
+  // Un mismo pago (factura + parcialidad + importe + FechaPago) puede venir en dos REP distintos;
+  // solo se cuenta la primera vez, por orden de emisión del REP.
+  const seenPayments = new Map<string, string>();
   const alert = (r: ValidationResult, reason: string, level = 'NARANJA', recommendation = 'Revisar los impuestos y monedas del REP en el XML; no se estiman importes ausentes.') =>
     alerts.push({ UUID: r.uuid, Tipo_Alerta: 'IVA', Nivel_Riesgo: level, Descripcion_Tecnica: reason, Evidencia_XML: r.fileName, Recomendacion: recommendation });
   const observation = (r: ValidationResult, period: string, source: string, invoice: ValidationResult | undefined, quantified: boolean) => {
@@ -40,10 +61,24 @@ export function buildMainReportVat(results: ValidationResult[]): { detail: Row[]
     else note = 'Factura PPD: IVA informativo por el saldo no pagado con los REP del lote; se acumula en el mes en que se pague.';
     return quantified ? note : `${note} Importe no cuantificable: falta tipo de cambio o impuestos DR.`;
   };
-  const add = (r: ValidationResult, period: string, source: string, related: string, tax: string, rate: string, base: number | null, amount: number | null, exchange: number | null, pending = false) => {
+  const add = (r: ValidationResult, period: string, source: string, related: string, tax: string, rate: string, base: number | null, amount: number | null, exchange: number | null, pending = false, duplicateOf = '') => {
     const issued = r.direccionCFDI === 'EMITIDO';
     const converted = amount !== null && exchange !== null ? round(amount * exchange) : '';
     const invoice = byUuid.get(related.toUpperCase());
+    if (duplicateOf) {
+      const excluded = tax === 'IVA' && typeof converted === 'number' ? converted : 0;
+      rec.ivaDuplicadoExcluido = round(rec.ivaDuplicadoExcluido + excluded);
+      detail.push({
+        UUID: r.uuid, UUID_factura: related, UUID_REP: r.uuid, Factura_en_lote: invoice ? 'SÍ' : 'NO LOCALIZADA',
+        Fecha_CFDI: r.fechaEmision, Mes_factura: invoice?.fechaEmision?.slice(0, 7) || 'NO LOCALIZADA', Mes_periodo: period,
+        Dirección: r.direccionCFDI, Fuente: 'REP', Rubro: tax, Tasa: rate, Base_MXN: '',
+        ...Object.fromEntries(amountFields.filter(f => f !== 'Base_MXN').map(f => [f, 0])),
+        IVA_excluido_pago_duplicado_MXN: excluded,
+        Estado: 'EXCLUIDO: PAGO DUPLICADO',
+        Observación: `Mismo pago (factura, parcialidad, importe y FechaPago) ya contado en el REP ${duplicateOf}; no se suma dos veces.`,
+      });
+      return converted;
+    }
     const row: Row = {
       UUID: r.uuid, UUID_factura: related, UUID_REP: source === 'REP' ? r.uuid : '',
       Factura_en_lote: source !== 'REP' ? 'SÍ' : invoice ? 'SÍ' : 'NO LOCALIZADA',
@@ -52,12 +87,14 @@ export function buildMainReportVat(results: ValidationResult[]): { detail: Row[]
       Base_MXN: base !== null && exchange !== null ? round(base * exchange) : '',
       'IVA trasladado emitidas (MXN)': tax === 'IVA' && issued && !pending ? converted : 0,
       'IVA acreditable pagado recibidas (MXN)': tax === 'IVA' && !issued && !pending ? converted : 0,
+      'IVA con factura en lote (MXN)': tax === 'IVA' && !pending && (source !== 'REP' || invoice) ? converted : 0,
       'IVA emitido por cobrar (MXN)': tax === 'IVA' && issued && pending ? converted : 0,
       'IVA recibido pendiente de pago (MXN)': tax === 'IVA' && !issued && pending ? converted : 0,
       IVA_retenido_MXN: tax === 'RETENCIÓN IVA' && !pending ? converted : 0,
       ISR_retenido_MXN: tax === 'RETENCIÓN ISR' && !pending ? converted : 0,
       IVA_REP_facturas_otros_meses_MXN: source === 'REP' && tax === 'IVA' && invoice && invoice.fechaEmision?.slice(0, 7) !== period ? converted : 0,
       IVA_REP_factura_no_localizada_MXN: source === 'REP' && tax === 'IVA' && !invoice ? converted : 0,
+      IVA_excluido_pago_duplicado_MXN: 0,
       Estado: converted === '' ? 'NO CUANTIFICABLE' : pending ? 'INFORMATIVO PENDIENTE' : 'CUANTIFICADO',
       Observación: observation(r, period, source, invoice, converted !== ''),
     };
@@ -74,38 +111,67 @@ export function buildMainReportVat(results: ValidationResult[]): { detail: Row[]
     return converted;
   };
   // Primero se extraen todos los DR, incluyendo facturas que no están en el lote.
-  for (const r of results.filter(r => r.tipoCFDI === 'P' && !cancelled(r) && ['EMITIDO', 'RECIBIDO'].includes(r.direccionCFDI || ''))) {
+  const reps = results.filter(r => r.tipoCFDI === 'P' && ['EMITIDO', 'RECIBIDO'].includes(r.direccionCFDI || ''))
+    .sort((a, b) => String(a.fechaEmision || '').localeCompare(String(b.fechaEmision || '')) || a.uuid.localeCompare(b.uuid));
+  rec.repLeidos = reps.length;
+  for (const r of reps) {
+    if (cancelled(r)) { rec.repCancelados++; continue; }
     const doc = new DOMParser().parseFromString(r.xmlContent || '', 'application/xml');
     const payments = children(doc, 'Pago');
     if (!payments.length) {
+      rec.repSinPagos++;
       alert(r, 'REP sin nodos Pago legibles; IVA no cuantificable.');
       add(r, 'SIN FECHA', 'REP', '', 'IVA', 'NO DESGLOSADA', null, null, null);
     }
     for (const payment of payments) {
       const date = payment.getAttribute('FechaPago') || '';
+      rec.pagosLeidos++;
       if (!/^\d{4}-\d{2}-\d{2}/.test(date)) {
+        rec.pagosSinFecha++;
         alert(r, 'REP sin FechaPago válida; no se puede asignar el IVA al mes.');
         add(r, 'SIN FECHA', 'REP', '', 'IVA', 'NO DESGLOSADA', null, null, null);
         continue;
       }
       const currency = payment.getAttribute('MonedaP');
       const paymentRate = currency === 'MXN' ? 1 : numberAttr(payment, 'TipoCambioP');
+      const paymentMonth = date.slice(0, 7);
+      const monthStats = paymentsByMonth.get(paymentMonth) || { pagos: 0, iva: 0 };
+      monthStats.pagos++;
+      paymentsByMonth.set(paymentMonth, monthStats);
+      if (paymentMonth !== month(r.fechaEmision)) rec.pagosMesDistintoEmisionREP++;
+      if (rec.periodo && (paymentMonth < rec.periodo.desde || paymentMonth > rec.periodo.hasta)) rec.pagosFueraDelPeriodo++;
       for (const dr of children(payment, 'DoctoRelacionado')) {
         const related = dr.getAttribute('IdDocumento') || '';
         const invoice = byUuid.get(related.toUpperCase());
-        if (invoice && cancelled(invoice)) continue;
+        rec.drLeidos++;
+        if (invoice && cancelled(invoice)) { rec.drFacturaCancelada++; continue; }
         if (invoice && (invoice.metodoPago === 'PUE' || invoice.tipoCFDI !== 'I' || invoice.direccionCFDI !== r.direccionCFDI)) {
+          rec.drIncompatibles++;
           alert(r, `REP relacionado con CFDI incompatible (${related}); excluido para evitar doble conteo.`); continue;
+        }
+        const paymentKey = [r.direccionCFDI, related.trim().toUpperCase(), (dr.getAttribute('NumParcialidad') || '').trim(),
+          numberAttr(dr, 'ImpPagado')?.toFixed(2) ?? (dr.getAttribute('ImpPagado') || ''), date.slice(0, 10)].join('|');
+        const duplicateOf = seenPayments.get(paymentKey) || '';
+        if (duplicateOf === r.uuid) continue;
+        if (duplicateOf) rec.drDuplicados++;
+        else {
+          seenPayments.set(paymentKey, r.uuid);
+          if (invoice) rec.drFacturaEnLote++; else rec.drFacturaNoLocalizada++;
         }
         const drCurrency = dr.getAttribute('MonedaDR');
         const equivalence = drCurrency && drCurrency === currency ? 1 : numberAttr(dr, 'EquivalenciaDR');
         const exchange = paymentRate && equivalence && currency && drCurrency ? paymentRate / equivalence : null;
-        if (exchange === null) alert(r, `REP ${related}: falta TipoCambioP, MonedaP, MonedaDR o EquivalenciaDR; IVA no convertible a MXN.`);
-        const taxes = [...children(dr, 'TrasladoDR'), ...children(dr, 'RetencionDR')];
-        if (!taxes.length && dr.getAttribute('ObjetoImpDR') !== '01') {
-          alert(r, `REP ${related}: sin impuestos DR desglosados; IVA no cuantificable.`);
-          add(r, date.slice(0, 7), 'REP', related, 'IVA', 'NO DESGLOSADA', null, null, exchange);
+        if (exchange === null && !duplicateOf) {
+          rec.drSinTipoCambio++;
+          alert(r, `REP ${related}: falta TipoCambioP, MonedaP, MonedaDR o EquivalenciaDR; IVA no convertible a MXN.`);
         }
+        const taxes = [...children(dr, 'TrasladoDR'), ...children(dr, 'RetencionDR')];
+        if (!taxes.length && dr.getAttribute('ObjetoImpDR') !== '01' && !duplicateOf) {
+          rec.drSinImpuestos++;
+          alert(r, `REP ${related}: sin impuestos DR desglosados; IVA no cuantificable.`);
+          add(r, paymentMonth, 'REP', related, 'IVA', 'NO DESGLOSADA', null, null, exchange);
+        }
+        let duplicateVat = 0;
         for (const tax of taxes) {
           const retained = tax.localName === 'RetencionDR';
           const code = tax.getAttribute('ImpuestoDR');
@@ -113,18 +179,31 @@ export function buildMainReportVat(results: ValidationResult[]): { detail: Row[]
           const factor = tax.getAttribute('TipoFactorDR') || '';
           const amount = factor === 'Exento' ? 0 : numberAttr(tax, 'ImporteDR');
           const base = numberAttr(tax, 'BaseDR');
-          if (amount === null || base === null) alert(r, `REP ${related}: BaseDR o ImporteDR ausente; no se estiman impuestos.`);
+          if ((amount === null || base === null) && !duplicateOf) alert(r, `REP ${related}: BaseDR o ImporteDR ausente; no se estiman impuestos.`);
           const taxRate = rateLabel(tax.getAttribute('TasaOCuotaDR') || '', factor);
-          const converted = add(r, date.slice(0, 7), 'REP', related, retained ? code === '001' ? 'RETENCIÓN ISR' : 'RETENCIÓN IVA' : 'IVA', taxRate, base, amount, exchange);
+          const converted = add(r, paymentMonth, 'REP', related, retained ? code === '001' ? 'RETENCIÓN ISR' : 'RETENCIÓN IVA' : 'IVA', taxRate, base, amount, exchange, false, duplicateOf);
+          if (duplicateOf) {
+            if (!retained && typeof converted === 'number') duplicateVat = round(duplicateVat + converted);
+            continue;
+          }
+          if (!retained && typeof converted === 'number') monthStats.iva = round(monthStats.iva + converted);
           if (!retained && amount !== null && invoice?.moneda === drCurrency) {
             const key = `${related.toUpperCase()}|${taxRate}`;
             paidVat.set(key, (paidVat.get(key) || 0) + amount);
             paidVat.set(related.toUpperCase(), (paidVat.get(related.toUpperCase()) || 0) + amount);
           }
         }
+        if (duplicateOf) {
+          rec.duplicados.push({ UUID_REP_excluido: r.uuid, UUID_REP_conservado: duplicateOf, UUID_factura: related, NumParcialidad: dr.getAttribute('NumParcialidad') || '',
+            ImpPagado: dr.getAttribute('ImpPagado') || '', FechaPago: date, IVA_excluido_MXN: duplicateVat });
+          alert(r, `Pago duplicado de la factura ${related} (parcialidad ${dr.getAttribute('NumParcialidad') || 'N/D'}, ImpPagado ${dr.getAttribute('ImpPagado') || 'N/D'}, FechaPago ${date.slice(0, 10)}) ya incluido en el REP ${duplicateOf}; IVA ${money(duplicateVat)} excluido.`,
+            'NARANJA', 'Confirmar con el emisor cuál REP es el válido y solicitar la cancelación del duplicado.');
+        }
       }
     }
   }
+  rec.pagosPorMes = Array.from(paymentsByMonth, ([mes, v]) => ({ mes, pagos: v.pagos, iva: v.iva,
+    fueraDelPeriodo: Boolean(rec.periodo && (mes < rec.periodo.desde || mes > rec.periodo.hasta)) })).sort((a, b) => a.mes.localeCompare(b.mes));
   for (const r of results.filter(r => ['I', 'E'].includes(r.tipoCFDI) && !cancelled(r) && ['EMITIDO', 'RECIBIDO'].includes(r.direccionCFDI || ''))) {
     const credit = r.tipoCFDI === 'E';
     const pending = !credit && r.metodoPago !== 'PUE';
@@ -191,5 +270,5 @@ export function buildMainReportVat(results: ValidationResult[]): { detail: Row[]
     }
     repNotes.set(r.uuid.toUpperCase(), note);
   }
-  return { detail, totals: [...Array.from(monthly.values()), ...Array.from(groups.values())], alerts, repNotes };
+  return { detail, totals: [...Array.from(monthly.values()), ...Array.from(groups.values())], alerts, repNotes, reconciliation: rec };
 }

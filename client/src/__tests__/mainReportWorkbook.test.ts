@@ -109,7 +109,7 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
       { company: { name: 'Empresa de prueba', rfc: COMPANY_RFC } }
     );
 
-    expect(workbook.SheetNames).toHaveLength(13);
+    expect(workbook.SheetNames).toHaveLength(16);
     expect(XLSX.writeFile).toHaveBeenCalledTimes(1);
     expect(XLSX.writeFile).toHaveBeenCalledWith(workbook, 'SentinelExpress_Reporte_test.xlsx', { compression: true });
   });
@@ -204,11 +204,20 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     const loadedMetric = (metric: string) => loadedRows.find(row => row.Indicador === metric)?.Valor;
 
     expect(loadedMetric('Estado de validación 69-B')).toBe('LISTA CARGADA');
-    expect(rows(reportLoaded, '69-B - EFOS')[0].Coincidencia).toBe('Sin coincidencias');
+    // Lista con más de 30 días: "sin coincidencia" no es concluyente.
+    expect(rows(reportLoaded, '69-B - EFOS')[0].Coincidencia).toContain('NO CONCLUYENTE');
     expect(rows(reportLoaded, '69-B - EFOS')[0].Fecha_Corte).toBe('2020-01-01');
-    expect(loadedMetric('Cruces 69-B sin coincidencia (lista cargada)')).toBe(2);
+    expect(String(loadedMetric('Cruces 69-B sin coincidencia (lista cargada)'))).toContain('NO CONCLUYENTE');
     expect(loadedMetric('Fecha de corte 69-B')).toBe('2020-01-01');
     expect(String(loadedMetric('Antigüedad de lista 69-B'))).toContain('más de 30 días');
+
+    const recentCutoff = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const recent = { ...loadedNoMatch, fechaCorte: recentCutoff };
+    const reportRecent = await buildMainReportWorkbook([
+      result('00000000-0000-4000-8000-000000000025', { rfcEmisorBlacklist: recent, rfcReceptorBlacklist: recent }),
+    ], { name: 'Empresa de prueba', rfc: COMPANY_RFC });
+    expect(rows(reportRecent, '69-B - EFOS')[0].Coincidencia).toBe('Sin coincidencias');
+    expect(rows(reportRecent, 'Resumen').find(row => row.Indicador === 'Cruces 69-B sin coincidencia (lista cargada)')?.Valor).toBe(2);
   });
 
   it('separa importes MXN por ingresos, egresos y nómina, excluyendo REP y cancelados', async () => {
@@ -376,7 +385,7 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx', compression: true }) as Buffer;
     const elapsedMs = performance.now() - startedAt;
 
-    expect(workbook.SheetNames).toHaveLength(13);
+    expect(workbook.SheetNames).toHaveLength(16);
     expect(rows(workbook, 'CFDI Emitidos')).toHaveLength(4_000);
     expect(buffer.byteLength).toBeLessThan(10 * 1024 * 1024);
     console.info(`[main report benchmark] 4000 CFDI: ${(elapsedMs / 1000).toFixed(2)}s, ${(buffer.byteLength / 1024 / 1024).toFixed(2)} MB`);

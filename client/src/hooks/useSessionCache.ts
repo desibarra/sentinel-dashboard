@@ -30,7 +30,8 @@ const TTL_MS = 30 * 60 * 1000; // 30 minutos
 // Incrementar cuando cambie lo que el lector extrae del XML (p. ej. TipoCambio):
 // un caché generado con un lector anterior se descarta en vez de exportarse con
 // datos viejos. v2: TipoCambio real del XML (antes fijo en 1).
-export const SESSION_PARSER_VERSION = 2;
+// v3: consulta SAT con & escapado en RFC (antes "No Encontrado" falso).
+export const SESSION_PARSER_VERSION = 3;
 
 // Migración: clave del antiguo caché en localStorage. Se limpia de forma
 // segura la primera vez que se usa este módulo, sin tocar IndexedDB del

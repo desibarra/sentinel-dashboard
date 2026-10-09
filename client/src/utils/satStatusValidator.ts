@@ -32,13 +32,14 @@ async function checkCFDIStatusSATRaw(
     // Formatear total a 6 decimales como requiere el SAT
     const totalFormatted = Number(total).toFixed(6);
 
-    // Construir sobre SOAP
+    // Construir sobre SOAP. Un RFC con "&" (p. ej. K&S041130S83) rompería la
+    // expresión ?re=...&rr=...; el SAT lo espera escapado como &amp;.
     const soapRequest = `
     <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:tem="http://tempuri.org/">
        <soapenv:Header/>
        <soapenv:Body>
           <tem:Consulta>
-             <tem:expresionImpresa><![CDATA[?re=${rfcEmisor}&rr=${rfcReceptor}&tt=${totalFormatted}&id=${uuid}]]></tem:expresionImpresa>
+             <tem:expresionImpresa><![CDATA[?re=${rfcEmisor.replace(/&/g, "&amp;")}&rr=${rfcReceptor.replace(/&/g, "&amp;")}&tt=${totalFormatted}&id=${uuid}]]></tem:expresionImpresa>
           </tem:Consulta>
        </soapenv:Body>
     </soapenv:Envelope>
