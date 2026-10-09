@@ -3544,22 +3544,40 @@ export async function buildMainReportWorkbook(
     ).length },
   ];
   for (const [label, directionRows] of [['Emitidas', issued], ['Recibidas', received]] as const) {
+    const direction = label === 'Emitidas' ? 'EMITIDO' : 'RECIBIDO';
     const usable = directionRows.filter(result => result.resultado?.includes('🟢')).length;
-    const alerts = directionRows.filter(result => result.resultado?.includes('🟡')).length;
+    const withAlert = directionRows.filter(result => result.resultado?.includes('🟡')).length;
     const notUsable = directionRows.filter(result => result.resultado?.includes('🔴')).length;
-    const amountRows = directionRows.filter(result =>
-      !/cancelad/i.test(String(result.estatusSAT || '')) &&
-      !/cancelad/i.test(String(result.trazabilidadInfo?.observacionSAT || '')) &&
-      String(result.tipoCFDI || '').toUpperCase() !== 'P'
-    );
-    const risk = notUsable > 0 ? 'ROJO' : alerts > 0 ? 'AMARILLO' : 'VERDE';
+    const directionUuids = new Set(directionRows.map(result => result.uuid));
+    const sheetAlerts = alertRows.filter(alert => directionUuids.has(alert.UUID)).length;
+    // Conciliación SAT: cada CFDI cae en exactamente una categoría.
+    const satBucket = (result: ValidationResult) => {
+      if (String(result.tipoCFDI || '').toUpperCase() === 'P') return 'rep';
+      if (/cancelad/i.test(String(result.estatusSAT || '')) || /cancelad/i.test(String(result.trazabilidadInfo?.observacionSAT || ''))) return 'cancelado';
+      if (result.estatusSAT === 'Vigente') return 'vigente';
+      if (result.estatusSAT === 'No Encontrado') return 'noEncontrado';
+      return 'noValidado';
+    };
+    const sat = { vigente: 0, cancelado: 0, noEncontrado: 0, noValidado: 0, rep: 0 };
+    directionRows.forEach(result => { sat[satBucket(result)]++; });
+    const satSum = sat.vigente + sat.cancelado + sat.noEncontrado + sat.noValidado + sat.rep;
+    const risk = notUsable > 0 ? 'ROJO' : withAlert > 0 ? 'AMARILLO' : 'VERDE';
     summaryRows.push(
       { Indicador: `=== CFDI ${label.toUpperCase()} ===`, Valor: '' },
       { Indicador: 'Cantidad', Valor: directionRows.length },
-      { Indicador: 'Importe total', Valor: totalInMXN(amountRows, result => result.total || 0) },
-      { Indicador: 'Usables', Valor: usable },
-      { Indicador: 'Alertas', Valor: alerts },
-      { Indicador: 'No usables', Valor: notUsable },
+      { Indicador: 'Conciliación SAT: Vigente', Valor: sat.vigente },
+      { Indicador: 'Conciliación SAT: Cancelado', Valor: sat.cancelado },
+      { Indicador: 'Conciliación SAT: No encontrado', Valor: sat.noEncontrado },
+      { Indicador: 'Conciliación SAT: No validado', Valor: sat.noValidado },
+      { Indicador: 'Conciliación SAT: No aplica (REP)', Valor: sat.rep },
+      { Indicador: 'Conciliación SAT: Suma = total de CFDI', Valor: satSum === directionRows.length ? `CUADRA (${satSum})` : `NO CUADRA (${satSum} vs ${directionRows.length})` },
+      { Indicador: 'Ingresos I (MXN, sin cancelados ni REP)', Valor: financialAmount(direction, 'I') },
+      { Indicador: 'Egresos E (MXN, sin cancelados ni REP)', Valor: financialAmount(direction, 'E') },
+      { Indicador: 'Nómina N (MXN, sin cancelados ni REP)', Valor: financialAmount(direction, 'N') },
+      { Indicador: 'Alertas (hoja Alertas)', Valor: sheetAlerts },
+      { Indicador: 'Semáforo: Usables', Valor: usable },
+      { Indicador: 'Semáforo: Con alerta', Valor: withAlert },
+      { Indicador: 'Semáforo: No usables', Valor: notUsable },
       { Indicador: 'Semáforo de riesgo', Valor: risk }
     );
   }

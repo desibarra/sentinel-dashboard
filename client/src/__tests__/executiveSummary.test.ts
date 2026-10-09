@@ -124,10 +124,16 @@ describe('Executive Summary (Hoja Resumen)', () => {
 
     expect(rows.find(row => row.Indicador === 'Empresa')?.Valor).toBe(company.name);
     expect(getEmittedValue('Cantidad')).toBe(6);
-    expect(getEmittedValue('Usables')).toBe(2);
-    expect(getEmittedValue('Alertas')).toBe(1);
-    expect(getEmittedValue('No usables')).toBe(3);
-    expect(getEmittedValue('Importe total')).toBe(11000);
+    expect(getEmittedValue('Semáforo: Usables')).toBe(2);
+    expect(getEmittedValue('Semáforo: Con alerta')).toBe(1);
+    expect(getEmittedValue('Semáforo: No usables')).toBe(3);
+    expect(getEmittedValue('Ingresos I (MXN, sin cancelados ni REP)')).toBe(11000);
+    expect(getEmittedValue('Conciliación SAT: Vigente')).toBe(5);
+    expect(getEmittedValue('Conciliación SAT: Cancelado')).toBe(1);
+    expect(getEmittedValue('Conciliación SAT: Suma = total de CFDI')).toBe('CUADRA (6)');
+    const alertRows = XLSX.utils.sheet_to_json(workbook.Sheets['Alertas']) as any[];
+    const emittedUuids = new Set(companyCfdis.map(cfdi => cfdi.uuid));
+    expect(getEmittedValue('Alertas (hoja Alertas)')).toBe(alertRows.filter(row => emittedUuids.has(row.UUID)).length);
     expect(getEmittedValue('Semáforo de riesgo')).toBe('ROJO');
   });
 });

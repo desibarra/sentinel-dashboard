@@ -235,7 +235,17 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     expect(metric('CFDI no validados SAT')).toBe(1);
     expect(metric('REP y CFDI cancelados excluidos de importes')).toBe(2);
     expect(metric('Alertas en hoja Alertas')).toBe(alertRows.length);
-    expect(metric('Importe total')).toBe(1066);
+    const emitted = summary.slice(summary.findIndex(row => row.Indicador === '=== CFDI EMITIDAS ==='));
+    const emittedMetric = (name: string) => emitted.find(row => row.Indicador === name)?.Valor;
+    expect(emittedMetric('Ingresos I (MXN, sin cancelados ni REP)')).toBe(316);
+    expect(emittedMetric('Egresos E (MXN, sin cancelados ni REP)')).toBe(50);
+    expect(emittedMetric('Nómina N (MXN, sin cancelados ni REP)')).toBe(700);
+    expect(emittedMetric('Conciliación SAT: Vigente')).toBe(3);
+    expect(emittedMetric('Conciliación SAT: Cancelado')).toBe(1);
+    expect(emittedMetric('Conciliación SAT: No validado')).toBe(1);
+    expect(emittedMetric('Conciliación SAT: No aplica (REP)')).toBe(1);
+    expect(emittedMetric('Conciliación SAT: Suma = total de CFDI')).toBe('CUADRA (6)');
+    expect(emittedMetric('Alertas (hoja Alertas)')).toBe(alertRows.length);
   });
 
   it('excluye nómina y REP de clientes/proveedores y consolida nómina por empleado', async () => {
