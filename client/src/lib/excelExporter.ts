@@ -3344,6 +3344,7 @@ const MAIN_REPORT_SHEETS = [
   '69-B - EFOS',
   'Clientes',
   'Proveedores',
+  'Nómina por empleado',
   'Cédula IVA',
   'Detalle IVA por CFDI',
   'Conciliación PPD-REP emitidas',
@@ -3635,7 +3636,9 @@ export async function buildMainReportWorkbook(
 
   const buildCounterpartyRows = (directionRows: ValidationResult[], role: 'Cliente' | 'Proveedor') => {
     const groups = new Map<string, { nombre: string; cantidad: number; subtotal: number; iva: number; total: number; importesSinTipoCambio: number }>();
-    directionRows.forEach(result => {
+    directionRows
+      .filter(result => !['N', 'P'].includes(String(result.tipoCFDI || '').toUpperCase()))
+      .forEach(result => {
       const rfc = role === 'Cliente' ? result.rfcReceptor : result.rfcEmisor;
       const nombre = role === 'Cliente' ? result.nombreReceptor : result.nombreEmisor;
       const group = groups.get(rfc) || { nombre, cantidad: 0, subtotal: 0, iva: 0, total: 0, importesSinTipoCambio: 0 };
@@ -3660,8 +3663,98 @@ export async function buildMainReportWorkbook(
       Importes_sin_tipo_de_cambio: group.importesSinTipoCambio,
     }));
   };
+  const payrollResults = validResults.filter(result =>
+    String(result.tipoCFDI || '').toUpperCase() === 'N' && result.esNomina === 'SÍ'
+  );
+  const payrollGroups = new Map<string, {
+    rfc: string;
+    nombre: string;
+    curp: string;
+    numEmpleado: string;
+    departamento: string;
+    puesto: string;
+    periodicidad: string;
+    fechaInicio: string;
+    fechaFin: string;
+    cfdi: number;
+    uuid: string[];
+    percepciones: number;
+    deducciones: number;
+    otrosPagos: number;
+    isrRetenido: number;
+    total: number;
+    conversionesPendientes: number;
+  }>();
+  payrollResults.forEach(result => {
+    const doc = parseXml(result);
+    const nomina = nodes(doc, 'Nomina')[0];
+    const employeeNode = nomina ? nodes(nomina, 'Receptor')[0] : undefined;
+    const cfdiReceiver = nodes(doc, 'Receptor').find(node => node.parentElement !== nomina);
+    const rfc = cfdiReceiver?.getAttribute('Rfc') || result.rfcReceptor || '';
+    const nombre = cfdiReceiver?.getAttribute('Nombre') || result.nombreReceptor || 'NO DISPONIBLE';
+    const curp = employeeNode?.getAttribute('Curp') || '';
+    const numEmpleado = employeeNode?.getAttribute('NumEmpleado') || '';
+    const identidad = numEmpleado || curp || rfc || result.uuid;
+    const key = identidad.trim().toUpperCase();
+    const group = payrollGroups.get(key) || {
+      rfc,
+      nombre,
+      curp,
+      numEmpleado,
+      departamento: employeeNode?.getAttribute('Departamento') || '',
+      puesto: employeeNode?.getAttribute('Puesto') || '',
+      periodicidad: employeeNode?.getAttribute('PeriodicidadPago') || '',
+      fechaInicio: result.fechaEmision,
+      fechaFin: result.fechaEmision,
+      cfdi: 0,
+      uuid: [],
+      percepciones: 0,
+      deducciones: 0,
+      otrosPagos: 0,
+      isrRetenido: 0,
+      total: 0,
+      conversionesPendientes: 0,
+    };
+    const amounts = [
+      amountInMXN(result, result.totalPercepciones || 0),
+      amountInMXN(result, result.totalDeducciones || 0),
+      amountInMXN(result, result.totalOtrosPagos || 0),
+      amountInMXN(result, result.isrRetenidoNomina || 0),
+      amountInMXN(result, result.total || 0),
+    ];
+    if (amounts.some(value => value === null)) group.conversionesPendientes++;
+    group.percepciones += amounts[0] || 0;
+    group.deducciones += amounts[1] || 0;
+    group.otrosPagos += amounts[2] || 0;
+    group.isrRetenido += amounts[3] || 0;
+    group.total += amounts[4] || 0;
+    group.fechaInicio = result.fechaEmision < group.fechaInicio ? result.fechaEmision : group.fechaInicio;
+    group.fechaFin = result.fechaEmision > group.fechaFin ? result.fechaEmision : group.fechaFin;
+    group.cfdi++;
+    group.uuid.push(result.uuid);
+    payrollGroups.set(key, group);
+  });
+  const payrollRows = Array.from(payrollGroups.values()).map(group => ({
+    RFC_Empleado: group.rfc,
+    Nombre_Empleado: group.nombre,
+    CURP: group.curp,
+    Num_Empleado: group.numEmpleado,
+    Departamento: group.departamento,
+    Puesto: group.puesto,
+    Periodicidad_Pago: group.periodicidad,
+    Periodo_CFDI: `${group.fechaInicio} — ${group.fechaFin}`,
+    CFDI_Nómina: group.cfdi,
+    Percepciones_MXN: roundCurrency(group.percepciones),
+    Deducciones_MXN: roundCurrency(group.deducciones),
+    Otros_Pagos_MXN: roundCurrency(group.otrosPagos),
+    ISR_Retenido_MXN: roundCurrency(group.isrRetenido),
+    Total_CFDI_MXN: roundCurrency(group.total),
+    UUIDs: group.uuid.join(' | '),
+    CFDI_sin_tipo_de_cambio: group.conversionesPendientes,
+  }));
   await appendMainReportSheet(workbook, 'Clientes', buildCounterpartyRows(issued, 'Cliente'), onProgress, 6, cancelToken);
   await appendMainReportSheet(workbook, 'Proveedores', buildCounterpartyRows(received, 'Proveedor'), onProgress, 7, cancelToken);
+  await appendMainReportSheet(workbook, 'Nómina por empleado', payrollRows, onProgress, 8, cancelToken);
 
   const reconciliation = reconciliarPagosPPD(validResults);
   const paymentByInvoice = new Map(reconciliation.facturas.map(invoice => [invoice.uuid.toUpperCase(), invoice]));
@@ -3841,8 +3934,8 @@ export async function buildMainReportWorkbook(
       ISR_retenido_MXN: roundCurrency(group.ISR_retenido_MXN),
     };
   });
-  await appendMainReportSheet(workbook, 'Cédula IVA', ivaTotals, onProgress, 8, cancelToken);
-  await appendMainReportSheet(workbook, 'Detalle IVA por CFDI', ivaDetailRows, onProgress, 9, cancelToken);
+  await appendMainReportSheet(workbook, 'Cédula IVA', ivaTotals, onProgress, 9, cancelToken);
+  await appendMainReportSheet(workbook, 'Detalle IVA por CFDI', ivaDetailRows, onProgress, 10, cancelToken);
 
   const reconciliationRows = (direction: 'EMITIDO' | 'RECIBIDO') => [
     ...buildConciliacionPagosRows(validResults).filter(row => row.Direccion_CFDI === direction).map(row => ({ Tipo: 'Factura', ...row })),
@@ -3851,9 +3944,9 @@ export async function buildMainReportWorkbook(
       return rep?.direccionCFDI === direction;
     }).map(row => ({ Tipo: 'REP', ...row })),
   ];
-  await appendMainReportSheet(workbook, 'Conciliación PPD-REP emitidas', reconciliationRows('EMITIDO'), onProgress, 10, cancelToken);
-  await appendMainReportSheet(workbook, 'Conciliación PPD-REP recibidas', reconciliationRows('RECIBIDO'), onProgress, 11, cancelToken);
-  await appendMainReportSheet(workbook, 'Errores de lectura', buildReadErrorRows(results), onProgress, 12, cancelToken);
+  await appendMainReportSheet(workbook, 'Conciliación PPD-REP emitidas', reconciliationRows('EMITIDO'), onProgress, 11, cancelToken);
+  await appendMainReportSheet(workbook, 'Conciliación PPD-REP recibidas', reconciliationRows('RECIBIDO'), onProgress, 12, cancelToken);
+  await appendMainReportSheet(workbook, 'Errores de lectura', buildReadErrorRows(results), onProgress, 13, cancelToken);
 
   const unexpectedSheetNames = workbook.SheetNames.filter((name: string) => !MAIN_REPORT_SHEETS.includes(name as typeof MAIN_REPORT_SHEETS[number]));
   if (unexpectedSheetNames.length || workbook.SheetNames.length !== MAIN_REPORT_SHEETS.length) {

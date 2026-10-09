@@ -109,7 +109,7 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
       { company: { name: 'Empresa de prueba', rfc: COMPANY_RFC } }
     );
 
-    expect(workbook.SheetNames).toHaveLength(12);
+    expect(workbook.SheetNames).toHaveLength(13);
     expect(XLSX.writeFile).toHaveBeenCalledTimes(1);
     expect(XLSX.writeFile).toHaveBeenCalledWith(workbook, 'SentinelExpress_Reporte_test.xlsx');
   });
@@ -155,6 +155,7 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
       '69-B - EFOS',
       'Clientes',
       'Proveedores',
+      'Nómina por empleado',
       'Cédula IVA',
       'Detalle IVA por CFDI',
       'Conciliación PPD-REP emitidas',
@@ -234,6 +235,59 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     expect(metric('Importe total')).toBe(1066);
   });
 
+  it('excluye nómina y REP de clientes/proveedores y consolida nómina por empleado', async () => {
+    const employeeRfc = 'EMP010101ABC';
+    const makePayrollXml = (uuid: string) => `
+      <cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" xmlns:nomina12="http://www.sat.gob.mx/nomina12" Version="4.0" Folio="${uuid.slice(-3)}">
+        <cfdi:Emisor Rfc="${COMPANY_RFC}" Nombre="Empresa de prueba" RegimenFiscal="601"/>
+        <cfdi:Receptor Rfc="${employeeRfc}" Nombre="Ana Empleada" UsoCFDI="CN01"/>
+        <cfdi:Complemento>
+          <nomina12:Nomina Version="1.2" TipoNomina="O" FechaPago="2026-10-01" FechaInicialPago="2026-09-16" FechaFinalPago="2026-09-30" NumDiasPagados="15" TotalPercepciones="1200" TotalDeducciones="200" TotalOtrosPagos="0">
+            <nomina12:Receptor Curp="AABC900101MDFXXX01" NumEmpleado="EMP-007" Departamento="Ventas" Puesto="Analista" PeriodicidadPago="04"/>
+          </nomina12:Nomina>
+        </cfdi:Complemento>
+      </cfdi:Comprobante>`;
+    const payrollOne = result('00000000-0000-4000-8000-000000000041', {
+      tipoCFDI: 'N',
+      esNomina: 'SÍ',
+      rfcReceptor: employeeRfc,
+      nombreReceptor: 'Ana Empleada',
+      xmlContent: makePayrollXml('00000000-0000-4000-8000-000000000041'),
+      total: 1000,
+      totalPercepciones: 1200,
+      totalDeducciones: 200,
+      isrRetenidoNomina: 100,
+    });
+    const payrollTwo = result('00000000-0000-4000-8000-000000000042', {
+      tipoCFDI: 'N',
+      esNomina: 'SÍ',
+      rfcReceptor: employeeRfc,
+      nombreReceptor: 'Ana Empleada',
+      xmlContent: makePayrollXml('00000000-0000-4000-8000-000000000042'),
+      total: 1000,
+      totalPercepciones: 1300,
+      totalDeducciones: 300,
+      isrRetenidoNomina: 100,
+    });
+    const rep = result('00000000-0000-4000-8000-000000000043', {
+      tipoCFDI: 'P',
+      rfcEmisor: 'PRO010101PRO',
+      rfcReceptor: COMPANY_RFC,
+    });
+    const workbook = await buildMainReportWorkbook([payrollOne, payrollTwo, rep], { name: 'Empresa', rfc: COMPANY_RFC });
+    const payrollRows = rows(workbook, 'Nómina por empleado');
+
+    expect(rows(workbook, 'Clientes').some(row => row.RFC === employeeRfc)).toBe(false);
+    expect(rows(workbook, 'Proveedores').some(row => row.RFC === 'PRO010101PRO')).toBe(false);
+    expect(payrollRows).toHaveLength(1);
+    expect(payrollRows[0].Num_Empleado).toBe('EMP-007');
+    expect(payrollRows[0].CFDI_Nómina).toBe(2);
+    expect(payrollRows[0].Percepciones_MXN).toBe(2500);
+    expect(payrollRows[0].Deducciones_MXN).toBe(500);
+    expect(payrollRows[0].ISR_Retenido_MXN).toBe(200);
+    expect(payrollRows[0].Total_CFDI_MXN).toBe(2000);
+  });
+
   it('reconcilia al centavo el IVA de cédula contra las cédulas actuales y separa el IVA no pagado', async () => {
     const issued = result('00000000-0000-4000-8000-000000000011', {
       direccionCFDI: 'EMITIDO',
@@ -286,7 +340,7 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
     const elapsedMs = performance.now() - startedAt;
 
-    expect(workbook.SheetNames).toHaveLength(12);
+    expect(workbook.SheetNames).toHaveLength(13);
     expect(rows(workbook, 'CFDI Emitidos')).toHaveLength(4_000);
     expect(buffer.byteLength).toBeLessThan(10 * 1024 * 1024);
     console.info(`[main report benchmark] 4000 CFDI: ${(elapsedMs / 1000).toFixed(2)}s, ${(buffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
