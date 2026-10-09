@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { Zip, ZipDeflate, strToU8 } from 'fflate';
 import { ValidationResult, contarEstatusSAT, reconciliarPagosPPD } from '@/lib/cfdiEngine';
 import { normalizarRFC } from '@/lib/direccionCFDI';
 import { sentinelStageLog } from '@/lib/stageLog';
@@ -3633,29 +3634,251 @@ export async function exportToExcel(
   return wb;
 }
 
-const TECHNICAL_ANNEX_SHEETS = new Set([
-  'DETALLE CONCEPTOS XML',
-  'DETALLE CARTA PORTE MERCANCIAS',
-  'DETALLE CP UBICACIONES',
-  'DETALLE CARTA PORTE FIGURAS',
-  'EXTRACCION CRUDA XML',
-]);
+type TechnicalSheetRows = (results: ValidationResult[]) => PlainRow[];
+type TechnicalSheetDefinition = { name: string; buildRows: TechnicalSheetRows };
 
-export async function exportTechnicalAnnex(
+const TECHNICAL_SHEET_DEFINITIONS: TechnicalSheetDefinition[] = [
+  { name: 'DETALLE CONCEPTOS XML', buildRows: buildConceptRows },
+  { name: 'DETALLE CARTA PORTE MERCANCIAS', buildRows: buildCartaPorteMercancias },
+  { name: 'DETALLE CP UBICACIONES', buildRows: buildCartaPorteUbicaciones },
+  { name: 'DETALLE CARTA PORTE FIGURAS', buildRows: buildCartaPorteFiguras },
+  { name: 'EXTRACCION CRUDA XML', buildRows: results => extractRawXmlRows(results) },
+];
+
+export function isTechnicalAnnexRelevant(result: ValidationResult): boolean {
+  const status = String(result.resultado || '').toUpperCase();
+  return status.includes('ALERTA') || status.includes('NO USABLE');
+}
+
+const rowsForTechnicalSheet = (definition: TechnicalSheetDefinition, results: ValidationResult[]): PlainRow[] => {
+  try {
+    return definition.buildRows(results);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Falló la hoja "${definition.name}": ${reason}`, { cause: error });
+  }
+};
+
+async function exportTechnicalAnnexWorkbook(
   results: ValidationResult[],
-  onProgress?: ExportProgressCallback
+  onProgress?: ExportProgressCallback,
+  cancelToken?: ExportCancelToken
 ): Promise<void> {
-  const fullWorkbook = await buildDiagnosticoWorkbook(results, onProgress);
   const workbook = (XLSX as any).utils.book_new();
-  fullWorkbook.SheetNames.filter((name: string) => TECHNICAL_ANNEX_SHEETS.has(name)).forEach((name: string) => {
-    (XLSX as any).utils.book_append_sheet(workbook, fullWorkbook.Sheets[name], name);
-  });
-  if (workbook.SheetNames.length !== TECHNICAL_ANNEX_SHEETS.size) {
-    const missing = Array.from(TECHNICAL_ANNEX_SHEETS).filter(name => !workbook.SheetNames.includes(name));
-    throw new Error(`No se pudieron generar todas las hojas del anexo técnico: ${missing.join(', ')}`);
+  for (let index = 0; index < TECHNICAL_SHEET_DEFINITIONS.length; index++) {
+    const definition = TECHNICAL_SHEET_DEFINITIONS[index];
+    if (cancelToken?.cancelled) throw new Error('Exportación del anexo cancelada antes de completar el reporte.');
+    onProgress?.({ sheet: definition.name, stage: 'building', sheetIndex: index + 1, totalSheets: TECHNICAL_SHEET_DEFINITIONS.length });
+    await yieldToMain();
+    const rows = rowsForTechnicalSheet(definition, results);
+    try {
+      const sheetRows = rows.length ? rows : [{ Estado: 'SIN REGISTROS' }];
+      const sheet = (XLSX as any).utils.json_to_sheet(sheetRows);
+      applySheetDefaults(sheet);
+      (XLSX as any).utils.book_append_sheet(workbook, sheet, definition.name);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`Falló la hoja "${definition.name}": ${reason}`, { cause: error });
+    }
+    onProgress?.({ sheet: definition.name, stage: 'done', sheetIndex: index + 1, totalSheets: TECHNICAL_SHEET_DEFINITIONS.length, affectedRows: rows.length });
   }
   const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
   (XLSX as any).writeFile(workbook, `SentinelExpress_Anexo_Tecnico_${dateStr}.xlsx`);
+}
+
+export async function exportTechnicalAnnex(
+  results: ValidationResult[],
+  onProgress?: ExportProgressCallback,
+  cancelToken?: ExportCancelToken
+): Promise<void> {
+  const relevantResults = results.filter(isTechnicalAnnexRelevant);
+  if (!relevantResults.length) {
+    throw new Error('No hay CFDI con alertas o no usables para incluir en el anexo técnico.');
+  }
+  await exportTechnicalAnnexWorkbook(relevantResults, onProgress, cancelToken);
+}
+
+export async function exportSingleCfdiTechnicalAnnex(
+  result: ValidationResult,
+  onProgress?: ExportProgressCallback,
+  cancelToken?: ExportCancelToken
+): Promise<void> {
+  await exportTechnicalAnnexWorkbook([result], onProgress, cancelToken);
+}
+
+type TechnicalAnnexZipResult = { byteLength: number; elapsedMs: number; chunks: Uint8Array[] };
+type TechnicalRowsBuilder = (result: ValidationResult) => PlainRow[];
+
+async function* technicalRowsInChunks(
+  results: ValidationResult[],
+  buildRows: TechnicalRowsBuilder,
+  cancelToken?: ExportCancelToken,
+  batchSize = 256
+): AsyncGenerator<PlainRow[]> {
+  let batch: PlainRow[] = [];
+  let lastYield = performance.now();
+  for (let index = 0; index < results.length; index++) {
+    if (cancelToken?.cancelled) throw new Error('Exportación del anexo completo cancelada antes de terminar el ZIP.');
+    batch.push(...buildRows(results[index]));
+    if (batch.length >= batchSize) {
+      yield batch;
+      batch = [];
+    }
+    if (performance.now() - lastYield >= 16) {
+      await yieldToMain();
+      lastYield = performance.now();
+    }
+  }
+  if (batch.length) yield batch;
+}
+
+const csvValue = (value: unknown): string => {
+  if (value === null || value === undefined) return '';
+  const text = String(value);
+  const safeText = typeof value === 'string' && /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+  return /[",\r\n]/.test(safeText) ? `"${safeText.replace(/"/g, '""')}"` : safeText;
+};
+
+function csvLines(rows: PlainRow[], headers: string[]): string[] {
+  return rows.map(row => `${headers.map(header => csvValue(row[header])).join(',')}\r\n`);
+}
+
+export async function buildTechnicalAnnexZip(
+  results: ValidationResult[],
+  onProgress?: ExportProgressCallback,
+  onArchiveChunk?: (chunk: Uint8Array) => void,
+  cancelToken?: ExportCancelToken
+): Promise<TechnicalAnnexZipResult> {
+  const startedAt = performance.now();
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+  let zipErrorMessage = '';
+  const zip = new Zip((error, chunk) => {
+    if (error) {
+      zipErrorMessage = error.message;
+      return;
+    }
+    if (onArchiveChunk) onArchiveChunk(chunk);
+    else chunks.push(chunk);
+    byteLength += chunk.byteLength;
+  });
+
+  for (let sheetIndex = 0; sheetIndex < TECHNICAL_SHEET_DEFINITIONS.length; sheetIndex++) {
+    const definition = TECHNICAL_SHEET_DEFINITIONS[sheetIndex];
+    if (cancelToken?.cancelled) throw new Error(`Exportación cancelada antes de generar la hoja "${definition.name}".`);
+    onProgress?.({ sheet: definition.name, stage: 'building', sheetIndex: sheetIndex + 1, totalSheets: TECHNICAL_SHEET_DEFINITIONS.length });
+    try {
+      const stream = new ZipDeflate(`${definition.name}.csv`, { level: 6 });
+      zip.add(stream);
+      let headers: string[] | null = null;
+      let csvBuffer = '';
+      let pendingRows: PlainRow[] = [];
+      let headerWritten = false;
+
+      const flushRows = () => {
+        if (!headers && pendingRows.length) headers = Object.keys(pendingRows[0]);
+        if (headers && pendingRows.length) {
+          if (!headerWritten) {
+            csvBuffer += `\uFEFF${headers.map(csvValue).join(',')}\r\n`;
+            headerWritten = true;
+          }
+          csvBuffer += csvLines(pendingRows, headers).join('');
+          stream.push(strToU8(csvBuffer), false);
+          csvBuffer = '';
+          pendingRows = [];
+        }
+      };
+
+      for await (const rows of technicalRowsInChunks(results, result => definition.buildRows([result]), cancelToken)) {
+        pendingRows.push(...rows);
+        flushRows();
+      }
+      if (!headers) {
+        headers = ['Estado'];
+      }
+      if (!headerWritten) {
+        csvBuffer = `\uFEFF${headers.map(csvValue).join(',')}\r\n`;
+        headerWritten = true;
+        stream.push(strToU8(csvBuffer), false);
+        csvBuffer = '';
+      }
+      if (pendingRows.length) {
+        csvBuffer += csvLines(pendingRows, headers).join('');
+        stream.push(strToU8(csvBuffer), false);
+      }
+      stream.push(new Uint8Array(0), true);
+      if (zipErrorMessage) throw new Error(zipErrorMessage);
+      onProgress?.({ sheet: definition.name, stage: 'done', sheetIndex: sheetIndex + 1, totalSheets: TECHNICAL_SHEET_DEFINITIONS.length });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`Falló la hoja "${definition.name}": ${reason}`, { cause: error });
+    }
+  }
+  zip.end();
+  if (zipErrorMessage) {
+    const lastSheet = TECHNICAL_SHEET_DEFINITIONS[TECHNICAL_SHEET_DEFINITIONS.length - 1].name;
+    throw new Error(`Falló la hoja "${lastSheet}": ${zipErrorMessage}`);
+  }
+  return { byteLength, elapsedMs: performance.now() - startedAt, chunks };
+}
+
+export async function exportCompleteTechnicalAnnexZip(
+  results: ValidationResult[],
+  onProgress?: ExportProgressCallback,
+  cancelToken?: ExportCancelToken
+): Promise<{ byteLength: number; elapsedMs: number }> {
+  const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
+  const archiveName = `SentinelExpress_Anexo_Completo_${dateStr}.zip`;
+  const pickerWindow = window as Window & {
+    showSaveFilePicker?: (options: { suggestedName: string; types: { description: string; accept: Record<string, string[]> }[] }) => Promise<{
+      createWritable: () => Promise<{ write: (chunk: Uint8Array) => Promise<void>; close: () => Promise<void>; abort?: (reason?: unknown) => Promise<void> }>;
+    }>;
+  };
+  if (pickerWindow.showSaveFilePicker) {
+    const fileHandle = await pickerWindow.showSaveFilePicker({
+      suggestedName: archiveName,
+      types: [{ description: 'Archivo ZIP', accept: { 'application/zip': ['.zip'] } }],
+    });
+    const writable = await fileHandle.createWritable();
+    try {
+      let writeQueue = Promise.resolve();
+      let writeError: unknown;
+      const archive = await buildTechnicalAnnexZip(results, onProgress, chunk => {
+        writeQueue = writeQueue.then(() => writable.write(chunk)).catch(error => {
+          writeError = error;
+        });
+      }, cancelToken);
+      await writeQueue;
+      if (writeError) {
+        throw new Error(`No se pudo escribir el ZIP del anexo completo: ${writeError instanceof Error ? writeError.message : String(writeError)}`, { cause: writeError });
+      }
+      await writable.close();
+      return { byteLength: archive.byteLength, elapsedMs: archive.elapsedMs };
+    } catch (error) {
+      try {
+        await writable.abort?.(error);
+      } catch (abortError) {
+        throw new Error(
+          `Falló la exportación del anexo y no se pudo cancelar la escritura incompleta: ${abortError instanceof Error ? abortError.message : String(abortError)}`,
+          { cause: error }
+        );
+      }
+      throw error;
+    }
+  }
+
+  const archive = await buildTechnicalAnnexZip(results, onProgress, undefined, cancelToken);
+  const blob = new Blob(archive.chunks, { type: 'application/zip' });
+  const url = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = archiveName;
+    anchor.click();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  return { byteLength: archive.byteLength, elapsedMs: archive.elapsedMs };
 }
 
 // Escribe UN workbook a disco/descarga. Si se proveyó `directoryHandle`

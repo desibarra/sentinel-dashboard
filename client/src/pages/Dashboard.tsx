@@ -4,12 +4,12 @@ import { CFDISATStatus } from "@/components/CFDISATStatus";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
-import { CheckCircle2, AlertCircle, XCircle, TrendingUp, FileText, DollarSign, Download, Moon, Sun, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Settings, BookOpen, Clock, MessageCircle, Zap } from "lucide-react";
+import { CheckCircle2, AlertCircle, XCircle, TrendingUp, FileText, DollarSign, Download, FileArchive, Moon, Sun, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Settings, BookOpen, Clock, MessageCircle, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import UploadZone, { UploadedFile } from "@/components/UploadZone";
 import { useXMLValidator } from "@/hooks/useXMLValidator";
 import { ValidationResult, contarEstatusSAT, aplicarConciliacionPagos, reconciliarPagosPPD, mergeAndReconcileResults } from "@/lib/cfdiEngine";
-import { exportToExcel, exportTechnicalAnnex, ExportProgressEvent, ExportCancelToken } from "@/lib/excelExporter";
+import { exportToExcel, exportTechnicalAnnex, exportSingleCfdiTechnicalAnnex, exportCompleteTechnicalAnnexZip, isTechnicalAnnexRelevant, ExportProgressEvent, ExportProgressCallback, ExportCancelToken } from "@/lib/excelExporter";
 import { resolverClasificacionDireccion } from "@/lib/direccionCFDI";
 import { toast } from "sonner";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -499,30 +499,61 @@ export default function Dashboard() {
     }
   };
 
-  const handleExportTechnicalAnnex = async () => {
+  const runAnnexExport = async (
+    action: (onProgress: ExportProgressCallback, cancelToken: ExportCancelToken) => Promise<void | { byteLength: number; elapsedMs: number }>,
+    successMessage: string
+  ) => {
     if (isExporting) return;
+    const cancelToken: ExportCancelToken = { cancelled: false };
+    exportCancelTokenRef.current = cancelToken;
     setIsExporting(true);
     setExportProgress({ sheet: 'Preparando anexo técnico...', sheetIndex: 0, totalSheets: 5 });
     try {
-      await exportTechnicalAnnex(results, event => setExportProgress({
+      const metrics = await action(event => setExportProgress({
         sheet: event.sheet,
         sheetIndex: event.sheetIndex,
         totalSheets: event.totalSheets,
-      }));
-      toast.success('Anexo técnico exportado.');
+      }), cancelToken);
+      if (metrics && 'byteLength' in metrics) {
+        toast.success(`${successMessage} ${(metrics.byteLength / (1024 * 1024)).toFixed(2)} MB · ${(metrics.elapsedMs / 1000).toFixed(1)} s.`);
+      } else {
+        toast.success(successMessage);
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Error al exportar el anexo técnico.');
       console.error('Technical annex export error:', error);
     } finally {
       setIsExporting(false);
       setExportProgress(null);
+      exportCancelTokenRef.current = null;
     }
+  };
+
+  const handleExportTechnicalAnnex = () => {
+    void runAnnexExport(
+      (onProgress, cancelToken) => exportTechnicalAnnex(results, onProgress, cancelToken),
+      `Anexo técnico de ${results.filter(isTechnicalAnnexRelevant).length} CFDI exportado.`
+    );
+  };
+
+  const handleExportCompleteTechnicalAnnex = () => {
+    void runAnnexExport(
+      (onProgress, cancelToken) => exportCompleteTechnicalAnnexZip(results, onProgress, cancelToken),
+      'Anexo completo ZIP exportado.'
+    );
+  };
+
+  const handleExportSingleCfdiAnnex = (result: ValidationResult) => {
+    void runAnnexExport(
+      (onProgress, cancelToken) => exportSingleCfdiTechnicalAnnex(result, onProgress, cancelToken),
+      `Anexo del CFDI ${result.uuid || result.fileName} exportado.`
+    );
   };
 
   const handleCancelExport = () => {
     if (exportCancelTokenRef.current) {
       exportCancelTokenRef.current.cancelled = true;
-      toast.info("Cancelando exportación… el reporte único no se descargará.");
+      toast.info("Cancelando exportación… no se descargará un archivo incompleto.");
     }
   };
 
@@ -2040,7 +2071,18 @@ export default function Dashboard() {
                 size="sm"
               >
                 <FileText className="w-4 h-4" />
-                Anexo técnico
+                Anexo técnico ({results.filter(isTechnicalAnnexRelevant).length})
+              </Button>
+              <Button
+                onClick={handleExportCompleteTechnicalAnnex}
+                disabled={isExporting}
+                variant="outline"
+                className="gap-2 rounded-xl disabled:opacity-60 disabled:cursor-not-allowed"
+                size="sm"
+                title="Exporta todos los CFDI como archivos CSV dentro de un ZIP."
+              >
+                <FileArchive className="w-4 h-4" />
+                Anexo completo (ZIP)
               </Button>
               {isExporting && (
                 <Button
@@ -2048,7 +2090,7 @@ export default function Dashboard() {
                   variant="outline"
                   className="gap-2 rounded-xl"
                   size="sm"
-                  title="Cancela la exportación antes de descargar el reporte único."
+                  title="Cancela la exportación actual antes de finalizar el archivo."
                 >
                   Cancelar exportación
                 </Button>
@@ -2418,6 +2460,16 @@ export default function Dashboard() {
                           <td className="py-4 px-4">
 
                             <div className="flex flex-col gap-1">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleExportSingleCfdiAnnex(result)}
+                                disabled={isExporting}
+                                className="text-sky-600 hover:text-sky-800 hover:bg-sky-50 dark:hover:bg-sky-900/30 rounded-full h-8 w-8 p-0"
+                                title={`Descargar anexo técnico de ${result.uuid || result.fileName}`}
+                              >
+                                <Download className="w-4 h-4" />
+                              </Button>
                               <Button
                                 variant="ghost"
                                 size="sm"
