@@ -6,6 +6,7 @@ export interface BlacklistValidation {
     is69B: boolean;
     found: boolean;
     notSynced?: boolean; // true cuando la base local no está cargada
+    fechaCorte?: string | null;
     tipo?: 'EFOS' | '69B';
     fechaPublicacion?: string;
     razonSocial?: string;
@@ -44,23 +45,27 @@ export async function checkRFCBlacklist(rfc: string): Promise<BlacklistValidatio
     const rfcNorm = rfc.trim().toUpperCase();
 
     try {
-        // Verificar primero si la base local tiene datos
-        const synced = await isBlacklistSynced();
+        const metadata = await getMetadata();
+        const synced = Boolean(metadata && ((metadata.efosCount || 0) + (metadata.list69BCount || 0) > 0));
+        const withCutoff = <T extends BlacklistValidation>(result: T): T => ({
+            ...result,
+            fechaCorte: metadata?.fechaOficial ?? null,
+        });
         if (!synced) {
-            return {
+            return withCutoff({
                 rfc: rfcNorm,
                 isEFOS: false,
                 is69B: false,
                 found: false,
                 notSynced: true,
-            };
+            });
         }
 
         // Consultar IndexedDB local (puede haber varios registros por RFC — historial completo)
         const records = await getBlacklistsByRFC(rfcNorm);
 
         if (!records || records.length === 0) {
-            return { rfc: rfcNorm, isEFOS: false, is69B: false, found: false, notSynced: false };
+            return withCutoff({ rfc: rfcNorm, isEFOS: false, is69B: false, found: false, notSynced: false });
         }
 
         const is69B = records.some((r) => r.tipo === '69B');
@@ -85,7 +90,7 @@ export async function checkRFCBlacklist(rfc: string): Promise<BlacklistValidatio
             if (withDates.length === 0) {
                 // Ninguna fecha disponible → no se puede determinar
                 const primerRazon = records.find((r) => r.razonSocial)?.razonSocial;
-                return {
+                return withCutoff({
                     rfc: rfcNorm,
                     isEFOS,
                     is69B,
@@ -96,7 +101,7 @@ export async function checkRFCBlacklist(rfc: string): Promise<BlacklistValidatio
                     situacion: "Situación múltiple; requiere revisión",
                     razonSocial: primerRazon,
                     source: 'IndexedDB local — Fecha oficial no verificada',
-                };
+                });
             }
 
             // Encontrar la fecha máxima
@@ -109,7 +114,7 @@ export async function checkRFCBlacklist(rfc: string): Promise<BlacklistValidatio
             if (latestSituaciones.length > 1) {
                 // Empate en la fecha máxima con situaciones distintas → ambiguo
                 const primerRazon = records.find((r) => r.razonSocial)?.razonSocial;
-                return {
+                return withCutoff({
                     rfc: rfcNorm,
                     isEFOS,
                     is69B,
@@ -120,12 +125,12 @@ export async function checkRFCBlacklist(rfc: string): Promise<BlacklistValidatio
                     situacion: "Situación múltiple; requiere revisión",
                     razonSocial: primerRazon,
                     source: 'IndexedDB local — Fecha oficial no verificada',
-                };
+                });
             }
 
             // Resolución vigente determinada: usar la situación con la fecha más reciente
             const vigente = latest[0];
-            return {
+            return withCutoff({
                 rfc: rfcNorm,
                 isEFOS,
                 is69B,
@@ -137,13 +142,13 @@ export async function checkRFCBlacklist(rfc: string): Promise<BlacklistValidatio
                 razonSocial: vigente.razon,
                 fechaPublicacion: vigente.fecha,
                 source: 'IndexedDB local — Fecha oficial no verificada',
-            };
+            });
         }
 
         // Situación única (o todas iguales)
         const first = records[0];
 
-        return {
+        return withCutoff({
             rfc: first.rfc,
             isEFOS,
             is69B,
@@ -154,7 +159,7 @@ export async function checkRFCBlacklist(rfc: string): Promise<BlacklistValidatio
             razonSocial: first.razonSocial,
             fechaPublicacion: first.fechaPublicacion,
             source: 'IndexedDB local — Fecha oficial no verificada',
-        };
+        });
     } catch (error) {
         console.error('[BlacklistValidator] Error consultando IndexedDB:', error);
         // Ante error, no afirmar "sin coincidencia" — marcar como no consultado

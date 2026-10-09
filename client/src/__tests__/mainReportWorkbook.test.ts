@@ -165,6 +165,47 @@ describe('reporte principal XLSX, dirección e IVA conciliado', () => {
     expect(rows(workbook, 'Alertas').some(row => row.Motivo === 'CFDI ajeno a la empresa' && row.UUID === foreign.uuid)).toBe(true);
   });
 
+  it('distingue una lista 69-B no cargada de una lista cargada sin coincidencias e informa el corte', async () => {
+    const notLoaded = {
+      rfc: 'PRO010101PRO',
+      isEFOS: false,
+      is69B: false,
+      found: false,
+      notSynced: true,
+      fechaCorte: null,
+    };
+    const loadedNoMatch = {
+      ...notLoaded,
+      notSynced: false,
+      fechaCorte: '2020-01-01',
+    };
+    const reportNotLoaded = await buildMainReportWorkbook([
+      result('00000000-0000-4000-8000-000000000021', {
+        rfcEmisorBlacklist: notLoaded,
+        rfcReceptorBlacklist: notLoaded,
+      }),
+    ], { name: 'Empresa de prueba', rfc: COMPANY_RFC });
+    const notLoadedRows = rows(reportNotLoaded, 'Resumen');
+    const notLoadedMetric = (metric: string) => notLoadedRows.find(row => row.Indicador === metric)?.Valor;
+
+    expect(notLoadedMetric('Estado de validación 69-B')).toBe('LISTA NO CARGADA');
+    expect(notLoadedMetric('Cruces 69-B sin coincidencia (lista cargada)')).toBe(0);
+
+    const reportLoaded = await buildMainReportWorkbook([
+      result('00000000-0000-4000-8000-000000000022', {
+        rfcEmisorBlacklist: loadedNoMatch,
+        rfcReceptorBlacklist: loadedNoMatch,
+      }),
+    ], { name: 'Empresa de prueba', rfc: COMPANY_RFC });
+    const loadedRows = rows(reportLoaded, 'Resumen');
+    const loadedMetric = (metric: string) => loadedRows.find(row => row.Indicador === metric)?.Valor;
+
+    expect(loadedMetric('Estado de validación 69-B')).toBe('LISTA CARGADA');
+    expect(loadedMetric('Cruces 69-B sin coincidencia (lista cargada)')).toBe(2);
+    expect(loadedMetric('Fecha de corte 69-B')).toBe('2020-01-01');
+    expect(String(loadedMetric('Antigüedad de lista 69-B'))).toContain('más de 30 días');
+  });
+
   it('reconcilia al centavo el IVA de cédula contra las cédulas actuales y separa el IVA no pagado', async () => {
     const issued = result('00000000-0000-4000-8000-000000000011', {
       direccionCFDI: 'EMITIDO',

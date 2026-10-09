@@ -3430,6 +3430,21 @@ export async function buildMainReportWorkbook(
   const issued = validResults.filter(result => result.direccionCFDI === 'EMITIDO');
   const received = validResults.filter(result => result.direccionCFDI === 'RECIBIDO');
   const foreign = validResults.filter(result => classifyForCompany(result, companyRfc) === 'AJENO');
+  const blacklistStates = validResults
+    .flatMap(result => [result.rfcEmisorBlacklist, result.rfcReceptorBlacklist])
+    .filter((state): state is NonNullable<typeof state> => Boolean(state));
+  const blacklistCutoff = blacklistStates.find(state => state.fechaCorte)?.fechaCorte || null;
+  const cutoffTime = blacklistCutoff ? Date.parse(blacklistCutoff) : Number.NaN;
+  const blacklistStale = Number.isFinite(cutoffTime) && Date.now() - cutoffTime > 30 * 24 * 60 * 60 * 1000;
+  const blacklistStatus = blacklistStates.some(state => state.notSynced)
+    ? 'LISTA NO CARGADA'
+    : blacklistStates.some(state => state.notSynced === false)
+      ? 'LISTA CARGADA'
+      : 'SIN DATOS DE VALIDACIÓN';
+  const blacklistNoMatches = blacklistStates.filter(state => state.notSynced === false && !state.found).length;
+  const cfdiWithoutBlacklistData = validResults.filter(result =>
+    result.rfcEmisorBlacklist?.notSynced || result.rfcReceptorBlacklist?.notSynced
+  ).length;
   const workbook = (XLSX as any).utils.book_new();
   const dateValues = validResults.map(result => result.fechaEmision).filter(Boolean).sort();
   const period = dateValues.length ? `${dateValues[0]} — ${dateValues[dateValues.length - 1]}` : 'Sin fechas de emisión';
@@ -3440,6 +3455,11 @@ export async function buildMainReportWorkbook(
     { Indicador: 'Periodo analizado', Valor: period },
     { Indicador: 'Fecha del análisis', Valor: new Date().toISOString() },
     { Indicador: 'Moneda de presentación de importes', Valor: 'MXN; importes sin tipo de cambio disponible se excluyen y se alertan' },
+    { Indicador: 'Estado de validación 69-B', Valor: blacklistStatus },
+    { Indicador: 'Fecha de corte 69-B', Valor: blacklistCutoff || 'NO VERIFICADA' },
+    { Indicador: 'Antigüedad de lista 69-B', Valor: blacklistStale ? 'DESACTUALIZADA: más de 30 días; actualizar antes de confiar en el cruce' : blacklistCutoff ? 'Dentro de 30 días' : 'NO VERIFICABLE SIN FECHA DE CORTE' },
+    { Indicador: 'CFDI sin consulta 69-B (lista no cargada)', Valor: cfdiWithoutBlacklistData },
+    { Indicador: 'Cruces 69-B sin coincidencia (lista cargada)', Valor: blacklistNoMatches },
   ];
   for (const [label, directionRows] of [['Emitidas', issued], ['Recibidas', received]] as const) {
     const usable = directionRows.filter(result => result.resultado?.includes('🟢')).length;
