@@ -1,4 +1,4 @@
-import { buildMainReportVat } from './mainReportVat';
+import { buildMainReportVat, REP_ALERT_RULES } from './mainReportVat';
 import * as XLSX from 'xlsx';
 import { Zip, ZipDeflate, strToU8 } from 'fflate';
 import { ValidationResult, contarEstatusSAT, reconciliarPagosPPD } from '@/lib/cfdiEngine';
@@ -3442,7 +3442,7 @@ function groupAlertsByCounterparty(alertRows: PlainRow[]): PlainRow[] {
   for (const alert of alertRows) {
     const key = [alert.RFC_Contraparte, alert.Severidad, alert.Tipo, alert.Regla || alert.Motivo].join('|');
     const group = groups.get(key) || {
-      row: { RFC_Contraparte: alert.RFC_Contraparte, Severidad: alert.Severidad, Tipo: alert.Tipo, Regla: alert.Regla, Motivo: alert.Motivo, Recomendación: alert.Recomendación },
+      row: { RFC_Contraparte: alert.RFC_Contraparte, Severidad: alert.Severidad, Tipo: alert.Tipo, Regla: alert.Regla, Motivo: REP_ALERT_RULES[alert.Regla] || alert.Motivo, Recomendación: alert.Recomendación },
       uuids: new Set<string>(), importe: 0,
     };
     if (!group.uuids.has(String(alert.UUID))) {
@@ -3453,10 +3453,11 @@ function groupAlertsByCounterparty(alertRows: PlainRow[]): PlainRow[] {
   }
   return Array.from(groups.values())
     .map(({ row, uuids, importe }): PlainRow => {
-      const list = Array.from(uuids);
+      const list = Array.from(uuids).sort();
       return { ...row, CFDI: list.length, Importe_MXN: roundCurrency(importe), UUIDs: list.slice(0, 20).join(' | ') + (list.length > 20 ? ` | … (+${list.length - 20})` : '') };
     })
-    .sort((a, b) => severityRank(a.Severidad) - severityRank(b.Severidad) || b.CFDI - a.CFDI);
+    .sort((a, b) => severityRank(a.Severidad) - severityRank(b.Severidad) || b.CFDI - a.CFDI
+      || String(a.RFC_Contraparte).localeCompare(String(b.RFC_Contraparte)) || String(a.Regla).localeCompare(String(b.Regla)));
 }
 
 function vatSummaryRows(vat: ReturnType<typeof buildMainReportVat>): PlainRow[] {
@@ -3598,7 +3599,8 @@ export async function buildMainReportWorkbook(
     if (seenAlerts.has(key)) return false;
     seenAlerts.add(key);
     return true;
-  }).sort((a, b) => severityRank(a.Severidad) - severityRank(b.Severidad));
+  }).sort((a, b) => severityRank(a.Severidad) - severityRank(b.Severidad)
+    || String(a.Regla).localeCompare(String(b.Regla)) || String(a.UUID).localeCompare(String(b.UUID)) || String(a.Motivo).localeCompare(String(b.Motivo)));
   const activeFinancialResults = validResults.filter(result =>
     !/cancelad/i.test(String(result.estatusSAT || '')) &&
     !/cancelad/i.test(String(result.trazabilidadInfo?.observacionSAT || '')) &&

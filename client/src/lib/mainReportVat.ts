@@ -25,6 +25,16 @@ export type RepReconciliation = {
   duplicados: { UUID_REP_excluido: string; UUID_REP_conservado: string; UUID_factura: string; NumParcialidad: string; ImpPagado: string; FechaPago: string; IVA_excluido_MXN: number }[];
 };
 
+/** Descripción genérica de cada regla de alerta de REP, para agrupar alertas cuyo texto incluye UUID o importes. */
+export const REP_ALERT_RULES: Record<string, string> = {
+  'REP-01': 'REP con datos de pago incompletos; IVA no cuantificable.',
+  'REP-02': 'REP relacionado con CFDI incompatible; excluido para evitar doble conteo.',
+  'REP-03': 'Pago duplicado en otro REP; IVA excluido.',
+  'REP-04': 'REP con FechaPago de un mes anterior a su emisión.',
+};
+const repAlertRule = (reason: string) =>
+  /^Pago duplicado/.test(reason) ? 'REP-03' : /incompatible/.test(reason) ? 'REP-02' : /FechaPago de un mes anterior/.test(reason) ? 'REP-04' : 'REP-01';
+
 /** Flujo mensual: PUE y NC por emisión; REP por FechaPago e impuestos DR, sin prorratear la factura. */
 export function buildMainReportVat(results: ValidationResult[]): { detail: Row[]; totals: Row[]; alerts: Row[]; repNotes: Map<string, string>; reconciliation: RepReconciliation } {
   const detail: Row[] = [];
@@ -45,7 +55,7 @@ export function buildMainReportVat(results: ValidationResult[]): { detail: Row[]
   // solo se cuenta la primera vez, por orden de emisión del REP.
   const seenPayments = new Map<string, string>();
   const alert = (r: ValidationResult, reason: string, level = 'NARANJA', recommendation = 'Revisar los impuestos y monedas del REP en el XML; no se estiman importes ausentes.') =>
-    alerts.push({ UUID: r.uuid, Tipo_Alerta: 'IVA', Nivel_Riesgo: level, Descripcion_Tecnica: reason, Evidencia_XML: r.fileName, Recomendacion: recommendation });
+    alerts.push({ UUID: r.uuid, Tipo_Alerta: 'IVA', Regla: repAlertRule(reason), Nivel_Riesgo: level, Descripcion_Tecnica: reason, Evidencia_XML: r.fileName, Recomendacion: recommendation });
   const observation = (r: ValidationResult, period: string, source: string, invoice: ValidationResult | undefined, quantified: boolean) => {
     let note: string;
     if (source === 'REP') {

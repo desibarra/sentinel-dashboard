@@ -152,4 +152,22 @@ describe('pagos duplicados, IVA sin factura y conciliación de fuente', () => {
     expect(sheet('Alertas por contraparte').every(r => typeof r.CFDI === 'number')).toBe(true);
     expect(sheet('Resumen').find(r => r.Indicador === 'IVA excluido por pagos duplicados (MXN)')?.Valor).toBe(8);
   });
+  it('agrupa las alertas de REP por regla y da el mismo libro sin importar el orden de los XML', async () => {
+    const base = { rfcEmisor: 'EMP010101EMP', rfcReceptor: 'CLI010101CLI', fileName: 'test.xml', total: 0, resultado: '🟢 USABLE', esNomina: 'NO' } as Partial<ValidationResult>;
+    const ids = ['91', '92', '93', '94'].map(n => `00000000-0000-4000-8000-0000000000${n}`);
+    const lot = [
+      withPayment(ids[0], 'ABSENT', base), withPayment(ids[1], 'ABSENT', base), withPayment(ids[2], 'ABSENT', base),
+      invoice(ids[3], { ...base, metodoPago: 'PPD' }),
+    ];
+    const build = async (rows: ValidationResult[]) => {
+      const wb = await buildMainReportWorkbook(rows.map(r => ({ ...r })), { rfc: 'EMP010101EMP' });
+      return Object.fromEntries(['Cédula IVA', 'Conciliación fuente', 'Alertas', 'Alertas altas', 'Alertas por contraparte']
+        .map(name => [name, XLSX.utils.sheet_to_json<any>(wb.Sheets[name])]));
+    };
+    const forward = await build(lot);
+    expect(await build([...lot].reverse())).toEqual(forward);
+    const duplicates = forward['Alertas por contraparte'].filter((r: any) => r.Regla === 'REP-03');
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0]).toMatchObject({ CFDI: 2, Motivo: 'Pago duplicado en otro REP; IVA excluido.' });
+  });
 });
