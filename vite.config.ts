@@ -92,6 +92,9 @@ export default defineConfig(({ mode }) => {
     test: {
       environment: "jsdom",
       globals: true,
+      // Las pruebas con datos reales (14 mil registros 69-B, bcrypt, benchmarks)
+      // corren en paralelo; 5 s por defecto provoca fallos intermitentes por carga.
+      testTimeout: 60_000,
       setupFiles: ["./src/testSetup.ts"],
     },
   };

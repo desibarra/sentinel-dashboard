@@ -16,13 +16,8 @@ import {
 } from "lucide-react";
 import { PolarAngleAxis, RadialBar, RadialBarChart, ResponsiveContainer } from "recharts";
 import { toast } from 'sonner';
-import {
-    getMetadata,
-    updateMetadata,
-    replaceBlacklistRecordsBulk,
-    BlacklistRecord,
-    BlacklistMetadata,
-} from "@/db/blacklistDB";
+import { descargarListado69B, cargarListado69B } from "@/utils/blacklist69BLoader";
+import { getMetadata, BlacklistMetadata } from "@/db/blacklistDB";
 
 // Nota honesta: los archivos vienen incluidos en la app, sin timestamp oficial comprobado
 const DATA_SOURCE_NOTE = "Versión local: fecha oficial no verificada";
@@ -91,134 +86,33 @@ export function BlacklistManager() {
         } catch { /* sin metadata previa */ }
 
         try {
-            // 1. Descargar /69b.json — fuente única de verdad (contiene todos los registros 69-B)
-            addLog("FETCH: /69b.json …");
-            const res69b = await fetch('/69b.json');
+            // 1. Lista que mantiene el servidor (actualizada del SAT); si no, la incluida en la app.
+            addLog("FETCH: listado 69-B del servidor …");
+            const servidor = await fetch('/api/blacklist/69b/meta', { cache: 'no-store' })
+                .then(r => r.ok && (r.headers.get('content-type') || '').includes('json') ? r.json() : null)
+                .catch(() => null);
+            const payload = await descargarListado69B();
+            addLog(`OK: ${payload.registros.length.toLocaleString()} líneas leídas de ${payload.fuente}`);
 
-            if (!res69b.ok) {
-                throw new Error(`HTTP ${res69b.status} al obtener /69b.json`);
-            }
-
-            const contentType = res69b.headers.get('content-type') || '';
-            if (!contentType.includes('application/json') && !contentType.includes('text/')) {
-                throw new Error(`Respuesta inesperada de /69b.json (${contentType}). Se esperaba JSON.`);
-            }
-
-            let raw69b: any[];
-            let fechaOficialRaw: string | null = null;
-            try {
-                const parsed = await res69b.json();
-                if (Array.isArray(parsed)) {
-                    // Formato antiguo: arreglo de registros
-                    raw69b = parsed;
-                } else if (parsed && Array.isArray(parsed.registros)) {
-                    // Formato actual: { fechaOficial, fuente, registros }
-                    raw69b = parsed.registros;
-                    fechaOficialRaw = typeof parsed.fechaOficial === 'string' && parsed.fechaOficial ? parsed.fechaOficial : null;
-                } else {
-                    throw new Error("El archivo /69b.json no tiene la estructura esperada (se requiere un arreglo de registros).");
-                }
-            } catch (e: any) {
-                if (e?.message?.includes('no es JSON válido') || e instanceof SyntaxError) {
-                    throw new Error("El archivo /69b.json no es JSON válido o está corrupto.");
-                }
-                throw e;
-            }
-
-            if (raw69b.length === 0) {
-                throw new Error("El archivo /69b.json está vacío o tiene estructura incorrecta.");
-            }
-
-            addLog(`OK: ${raw69b.length.toLocaleString()} líneas leídas de /69b.json`);
-
-            // 2. Validar y normalizar registros. Se conservan múltiples filas por RFC
-            //    cuando hay distintas situaciones (para detectar "Situación múltiple").
-            const rfcPattern = /^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/;
-            const seenPair = new Set<string>(); // rfc + situacion
-            const rfcSet = new Set<string>();   // RFC únicos
-            const records: BlacklistRecord[] = [];
-            let skipped = 0;
-
-            // Contadores por situación (una sola vez por RFC, aunque repita estado)
-            const conPresunto = new Set<string>();
-            const conDefinitivo = new Set<string>();
-            const conDesvirtuado = new Set<string>();
-            const conSentencia = new Set<string>();
-
-            const clasificar = (rfc: string, situacion: string) => {
-                const sit = situacion.toLowerCase();
-                if (sit.includes('presunto')) conPresunto.add(rfc);
-                else if (sit.includes('definitivo')) conDefinitivo.add(rfc);
-                else if (sit.includes('desvirtuado')) conDesvirtuado.add(rfc);
-                else if (sit.includes('sentencia')) conSentencia.add(rfc);
-            };
-
-            for (const row of raw69b) {
-                if (!row || typeof row.rfc !== 'string') { skipped++; continue; }
-
-                const rfcNorm = row.rfc.trim().toUpperCase();
-                if (!rfcPattern.test(rfcNorm)) { skipped++; continue; }
-
-                const situacion = (row.situacion || '').trim();
-                const pairKey = `${rfcNorm}::${situacion.toUpperCase()}`;
-                if (seenPair.has(pairKey)) { skipped++; continue; }
-                seenPair.add(pairKey);
-
-                rfcSet.add(rfcNorm);
-                clasificar(rfcNorm, situacion);
-
-                const tipo: 'EFOS' | '69B' = row.tipo === 'EFOS' ? 'EFOS' : '69B';
-
-                records.push({
-                    rfc: rfcNorm,
-                    tipo,
-                    razonSocial: row.razonSocial || undefined,
-                    situacion: situacion || undefined,
-                    fechaPublicacion: row.fechaPublicacion || undefined,
-                });
-            }
-
-            addLog(`NORM: ${records.length.toLocaleString()} registros válidos (${rfcSet.size.toLocaleString()} RFC únicos). ${skipped} omitidos.`);
-
-            if (records.length === 0) {
-                throw new Error("Ningún registro pasó la validación de formato. El archivo puede estar corrupto.");
-            }
-
-            // 3. Reemplazo atómico en IndexedDB: si algo falla, se conserva la copia anterior válida
+            // 2-3. Normalizar y reemplazar en IndexedDB (transacción atómica).
             addLog("DB: Reemplazando registros en IndexedDB (transacción atómica)…");
-            const inserted = await replaceBlacklistRecordsBulk(records);
+            const carga = await cargarListado69B(payload, payload.fuente.startsWith('/api/') ? servidor?.verificadoEl ?? null : null);
+            addLog(`NORM: ${carga.registros.toLocaleString()} registros válidos (${carga.rfcUnicos.toLocaleString()} RFC únicos). ${carga.omitidos} omitidos.`);
+            addLog(`OK: Presuntos: ${carga.presuntos} | Definitivos: ${carga.definitivos} | Desvirtuados: ${carga.desvirtuados} | Sentencia favorable: ${carga.sentenciaFavorable}`, "#10b981");
 
-            // 4. Guardar metadata: fecha de carga del dispositivo + fecha oficial si el archivo la trae
-            const now = new Date().toISOString();
-            await updateMetadata({
-                key: 'lastUpdate',
-                cargadoEl: now,
-                fechaOficial: fechaOficialRaw,
-                efosCount: 0,
-                list69BCount: records.length,
-                totalRFC: rfcSet.size,
-                presuntos: conPresunto.size,
-                definitivos: conDefinitivo.size,
-                desvirtuados: conDesvirtuado.size,
-                sentenciaFavorable: conSentencia.size,
-            });
-
-            addLog(`OK: ${inserted.toLocaleString()} registros cargados correctamente.`, "#10b981");
-            addLog(`OK: Presuntos: ${conPresunto.size} | Definitivos: ${conDefinitivo.size} | Desvirtuados: ${conDesvirtuado.size} | Sentencia favorable: ${conSentencia.size}`, "#10b981");
-
-            // 5. Actualizar UI
+            // 4. Actualizar UI
             setLocalMeta({
-                presuntos: conPresunto.size,
-                definitivos: conDefinitivo.size,
-                desvirtuados: conDesvirtuado.size,
-                sentenciaFavorable: conSentencia.size,
-                total: rfcSet.size,
-                cargadoEl: now,
-                fechaOficial: fechaOficialRaw,
+                presuntos: carga.presuntos,
+                definitivos: carga.definitivos,
+                desvirtuados: carga.desvirtuados,
+                sentenciaFavorable: carga.sentenciaFavorable,
+                total: carga.rfcUnicos,
+                cargadoEl: new Date().toISOString(),
+                fechaOficial: carga.fechaOficial,
             });
 
             toast.success(
-                `${rfcSet.size.toLocaleString()} RFC únicos cargados en este dispositivo`,
+                `${carga.rfcUnicos.toLocaleString()} RFC únicos cargados en este dispositivo`,
                 { id: toastId }
             );
 
@@ -291,7 +185,7 @@ export function BlacklistManager() {
                     {/* Metadatos honestos */}
                     <div className="text-right space-y-0.5">
                         <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">
-                            Fuente: Archivos locales incluidos en la app
+                            Fuente: listado oficial del SAT, actualizado automáticamente por el servidor
                         </p>
                         {hasData && !localMeta.fechaOficial && (
                             <p className="text-[10px] text-amber-600 dark:text-amber-400 font-bold italic">

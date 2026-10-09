@@ -7,6 +7,7 @@ export interface BlacklistValidation {
     found: boolean;
     notSynced?: boolean; // true cuando la base local no está cargada
     fechaCorte?: string | null;
+    listaVerificadaEl?: string | null; // última confirmación (servidor ↔ SAT) de que el corte es el más reciente
     tipo?: 'EFOS' | '69B';
     fechaPublicacion?: string;
     razonSocial?: string;
@@ -50,6 +51,7 @@ export async function checkRFCBlacklist(rfc: string): Promise<BlacklistValidatio
         const withCutoff = <T extends BlacklistValidation>(result: T): T => ({
             ...result,
             fechaCorte: metadata?.fechaOficial ?? null,
+            listaVerificadaEl: metadata?.verificadoEl ?? null,
         });
         if (!synced) {
             return withCutoff({

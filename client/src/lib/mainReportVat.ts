@@ -54,8 +54,8 @@ export function buildMainReportVat(results: ValidationResult[]): { detail: Row[]
   // Un mismo pago (factura + parcialidad + importe + FechaPago) puede venir en dos REP distintos;
   // solo se cuenta la primera vez, por orden de emisión del REP.
   const seenPayments = new Map<string, string>();
-  const alert = (r: ValidationResult, reason: string, level = 'NARANJA', recommendation = 'Revisar los impuestos y monedas del REP en el XML; no se estiman importes ausentes.') =>
-    alerts.push({ UUID: r.uuid, Tipo_Alerta: 'IVA', Regla: repAlertRule(reason), Nivel_Riesgo: level, Descripcion_Tecnica: reason, Evidencia_XML: r.fileName, Recomendacion: recommendation });
+  const alert = (r: ValidationResult, reason: string, level = 'NARANJA', recommendation = 'Revisar los impuestos y monedas del REP en el XML; no se estiman importes ausentes.', importe?: number) =>
+    alerts.push({ UUID: r.uuid, Tipo_Alerta: 'IVA', Regla: repAlertRule(reason), Nivel_Riesgo: level, Descripcion_Tecnica: reason, Evidencia_XML: r.fileName, Recomendacion: recommendation, ...(importe === undefined ? {} : { Importe_MXN: importe }) });
   const observation = (r: ValidationResult, period: string, source: string, invoice: ValidationResult | undefined, quantified: boolean) => {
     let note: string;
     if (source === 'REP') {
@@ -207,7 +207,7 @@ export function buildMainReportVat(results: ValidationResult[]): { detail: Row[]
           rec.duplicados.push({ UUID_REP_excluido: r.uuid, UUID_REP_conservado: duplicateOf, UUID_factura: related, NumParcialidad: dr.getAttribute('NumParcialidad') || '',
             ImpPagado: dr.getAttribute('ImpPagado') || '', FechaPago: date, IVA_excluido_MXN: duplicateVat });
           alert(r, `Pago duplicado de la factura ${related} (parcialidad ${dr.getAttribute('NumParcialidad') || 'N/D'}, ImpPagado ${dr.getAttribute('ImpPagado') || 'N/D'}, FechaPago ${date.slice(0, 10)}) ya incluido en el REP ${duplicateOf}; IVA ${money(duplicateVat)} excluido.`,
-            'NARANJA', 'Confirmar con el emisor cuál REP es el válido y solicitar la cancelación del duplicado.');
+            'NARANJA', 'Confirmar con el emisor cuál REP es el válido y solicitar la cancelación del duplicado.', duplicateVat);
         }
       }
     }

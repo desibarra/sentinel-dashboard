@@ -114,6 +114,7 @@ describe('Integración flujo real 69-B: XML → análisis → clasificación →
       condicionesDePago: 'NO VIENE EN XML',
       rfcEmisorBlacklist: {
         rfc: 'RAS050131EC5',
+        fechaCorte: '2025-12-31',
         isEFOS: false,
         is69B: true,
         found: true,

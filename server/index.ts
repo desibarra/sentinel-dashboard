@@ -7,6 +7,7 @@ import cookieParser from "cookie-parser";
 import { apiRouter } from "./api.js";
 import { functionRoutes } from "./functionRoutes.js";
 import { getDB } from "./db.js";
+import { createBlacklistSync } from "./blacklistSync.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,14 +25,21 @@ async function startServer() {
   app.use(express.urlencoded({ extended: false, limit: "50mb" }));
   app.use(cookieParser());
 
-  app.use("/api/functions", functionRoutes);
-  app.use("/.netlify/functions", functionRoutes);
-  app.use("/api", apiRouter);
-
   const staticPath =
     process.env.NODE_ENV === "production"
       ? path.resolve(__dirname, "public")
       : path.resolve(__dirname, "..", "dist", "public");
+
+  // Listado 69-B actualizado automáticamente junto a la base de datos.
+  const blacklistSync = createBlacklistSync({
+    dataDir: path.join(path.dirname(process.env.DB_PATH || path.resolve(__dirname, "..", "data", "sentinel.db")), "blacklists"),
+    bundledJsonPath: path.join(staticPath, "69b.json"),
+  });
+
+  app.use("/api/functions", functionRoutes);
+  app.use("/.netlify/functions", functionRoutes);
+  app.use("/api/blacklist", blacklistSync.router);
+  app.use("/api", apiRouter);
 
   app.get("/", (_req, res) => {
     res.sendFile(path.join(staticPath, "sentinel-express-landing.html"));
@@ -46,6 +54,7 @@ async function startServer() {
 
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
+    blacklistSync.start();
   });
 }
 

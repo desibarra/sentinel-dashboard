@@ -22,6 +22,7 @@ export interface BlacklistMetadata {
     key: 'lastUpdate';
     cargadoEl: string;              // Fecha de carga en este dispositivo (ISO)
     fechaOficial: string | null;    // Fecha oficial del listado SAT (null si no está comprobada)
+    verificadoEl?: string | null;   // Última vez que el servidor confirmó con el SAT que es el corte más reciente
     efosCount: number;
     list69BCount: number;
     totalRFC: number;               // RFC únicos cargados

@@ -111,6 +111,7 @@ export interface ValidationResult {
     totalCalculadoNomina: number;
     observacionesContador?: string;
     resultadoMotor?: string; // Sin considerar SAT
+    nivelValidacionMotor?: string; // Nivel del motor sin ajuste de SAT ni 69-B
     comentarioMotor?: string; // Sin considerar SAT
     ultimoRefrescoSAT?: string; // ISO Date de cuándo se verificó por última vez
     giroEmpresa?: string; // ✅ Nuevo: Giro declarado de la empresa para análisis de materialidad

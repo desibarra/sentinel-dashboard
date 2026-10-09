@@ -86,6 +86,7 @@ export function evaluarHallazgo69BParte(
   const sit = bl.situacion || 'situación no especificada';
   const sitNorm = sit.toLowerCase();
   const rol = quien === 'Emisor' ? 'emisor' : 'receptor';
+  const corte = bl.fechaCorte ? `con fecha de corte ${bl.fechaCorte}` : 'sin fecha de corte verificada';
 
   if (bl.multiEstado) {
     return {
@@ -108,13 +109,13 @@ export function evaluarHallazgo69BParte(
   if (sitNorm.includes('desvirtuado')) {
     return {
       severidad: 'INFO',
-      texto: `[INFO — 69-B] RFC ${quien} estuvo en lista 69-B pero aclaró su situación (Desvirtuado). Sentencia favorable según el listado 69-B consultado, con fecha de corte 31/12/2025.`,
+      texto: `[INFO — 69-B] RFC ${quien} estuvo en lista 69-B pero aclaró su situación (Desvirtuado) según el listado 69-B consultado, ${corte}.`,
     };
   }
   if (sitNorm.includes('sentencia') || sitNorm.includes('favorable')) {
     return {
       severidad: 'INFO',
-      texto: `[INFO — 69-B] RFC ${quien} cuenta con sentencia favorable en lista 69-B. Sentencia favorable según el listado 69-B consultado, con fecha de corte 31/12/2025.`,
+      texto: `[INFO — 69-B] RFC ${quien} cuenta con sentencia favorable según el listado 69-B consultado, ${corte}.`,
     };
   }
   return {
@@ -952,6 +953,7 @@ export function useXMLValidator() {
         observacionesContador: "",
         resultadoMotor,
         comentarioMotor,
+        nivelValidacionMotor: nivelValidacion,
         ultimoRefrescoSAT,
         // ✅ FASE 2 - AUDIT FIX (Hallazgos #5, #9, #10): Campos fiscales del Comprobante
         descuentoGlobal,

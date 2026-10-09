@@ -24,6 +24,8 @@ import { History, RefreshCcw, Save } from "lucide-react";
 import { checkCFDIStatusSAT } from "@/utils/satStatusValidator";
 import { satQueue, SatQueueCounts } from "@/lib/satQueue";
 import { incrementXMLCount, getXMLCount } from "@/services/leadService";
+import { recomponerResultado, refrescarCruce69B } from "@/lib/recomposeResult";
+import { sincronizarListado69B } from "@/utils/blacklist69BLoader";
 import { saveSessionCache, loadSessionCache, clearSessionCache, getCacheAge, persistRevalidatedSession, SESSION_PARSER_VERSION } from "@/hooks/useSessionCache";
 import { useAuth } from "@/contexts/AuthContext";
 import { tokenService } from "@/services/tokenService";
@@ -51,25 +53,10 @@ export function revalidarFilaSAT(
   giroEmpresa: string,
   rfcEmpresa?: string
 ): DashboardResult {
-  const resBase = row.resultadoMotor || row.resultado;
-  const comBase = row.comentarioMotor || row.comentarioFiscal;
-
-  let nuevoResultado = resBase;
-  let nuevoComentario = comBase;
-
-  if (status.estado === "Cancelado") {
-    nuevoResultado = "🔴 NO USABLE";
-    nuevoComentario = `[CRÍTICO] CFDI CANCELADO en SAT. ${status.estatusCancelacion || ""}. No tiene efectos fiscales. ` + comBase;
-  } else if (status.estado === "No Encontrado") {
-    nuevoResultado = "No validado SAT";
-    nuevoComentario = `No validado: UUID no encontrado en SAT (puede ser muy reciente o apócrifo). Reintenta la consulta. ` + comBase;
-  } else if (status.estado === "Error Conexión") {
-    nuevoResultado = "No validado SAT";
-    nuevoComentario = `No validado: no se pudo confirmar el estatus del CFDI ante el SAT. Reintenta la consulta. ` + comBase;
-  } else if (status.estado === "Rate Limited") {
-    nuevoResultado = "🟡 CONSULTA SAT PENDIENTE";
-    nuevoComentario = `Consulta SAT temporalmente pendiente por límite de frecuencia. No es un estatus definitivo; reintenta más tarde. ` + comBase;
-  }
+  // Misma composición SAT × 69-B que la validación inicial: revalidar el SAT
+  // nunca descarta un hallazgo 69-B (antes un 69-B definitivo volvía a 🟢).
+  const recompuesto = recomponerResultado(row, { estatusSAT: status.estado, estatusCancelacion: status.estatusCancelacion });
+  const nuevoResultado = recompuesto.resultado;
 
   // ✅ Recalcular la dirección del CFDI tras revalidar (usa el RFC de la empresa,
   // nunca un valor hardcodeado) para mantener la coherencia de las cédulas.
@@ -83,7 +70,7 @@ export function revalidarFilaSAT(
   // ✅ Coherencia de riesgo: un hallazgo (NO USABLE / no validado) nunca queda VERDE.
   const nuevoRiskLevel: 'VERDE' | 'AMARILLO' | 'ROJO' =
     nuevoResultado.includes('NO USABLE') ? 'ROJO'
-    : nuevoResultado === 'No validado SAT' || nuevoResultado === '🟡 CONSULTA SAT PENDIENTE' ? 'AMARILLO'
+    : nuevoResultado === 'No validado SAT' || nuevoResultado.includes('🟡') ? 'AMARILLO'
     : (row.fiscalRiskLevel || 'VERDE');
 
   return {
@@ -93,7 +80,9 @@ export function revalidarFilaSAT(
     ultimoRefrescoSAT: status.validatedAt.toISOString(),
     giroEmpresa,
     resultado: nuevoResultado,
-    comentarioFiscal: nuevoComentario,
+    comentarioFiscal: recompuesto.comentarioFiscal,
+    nivelValidacion: recompuesto.nivelValidacion,
+    scoreInformativo: recompuesto.scoreInformativo,
     fiscalRiskLevel: nuevoRiskLevel,
     trazabilidadInfo: row.trazabilidadInfo
       ? { ...row.trazabilidadInfo, observacionSAT: status.estado }
@@ -117,6 +106,32 @@ export default function Dashboard() {
   useEffect(() => {
     latestResultsRef.current = results;
   }, [results]);
+
+  // Vuelve a cruzar los CFDI cargados contra la lista 69-B vigente de este
+  // dispositivo y recompone semáforo y conciliación (mismo resultado para la misma lista).
+  const refresh69BInResults = async (rows: ValidationResult[] = latestResultsRef.current) => {
+    if (!rows.length) return rows;
+    const refreshed = aplicarConciliacionPagos(await refrescarCruce69B(rows));
+    latestResultsRef.current = refreshed;
+    setResults(refreshed);
+    if (currentCompany?.id) await persistRevalidatedSession(currentCompany.id, refreshed);
+    return refreshed;
+  };
+
+  // Listado 69-B automático: al abrir la app se sincroniza con el que el
+  // servidor verifica contra el SAT; si cambió, se rehace el cruce.
+  useEffect(() => {
+    let cancelled = false;
+    sincronizarListado69B()
+      .then(async ({ cambio }) => {
+        if (cancelled || !cambio) return;
+        await refresh69BInResults();
+        toast.success('Lista 69-B actualizada con la última publicación del SAT.');
+      })
+      .catch(error => console.warn('[69-B] No se pudo sincronizar la lista:', error));
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // P0-A: progreso de exportación por hoja + bloqueo de doble ejecución
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<{ sheet: string; sheetIndex: number; totalSheets: number } | null>(null);
@@ -445,6 +460,8 @@ export default function Dashboard() {
     // Se recalcula con la función central al restaurar un histórico, para
     // que refleje siempre el mismo resultado que vería una carga nueva.
     setResults(aplicarConciliacionPagos(history.results || []));
+    // El cruce 69-B guardado puede ser de una lista anterior: se rehace con la vigente.
+    void refresh69BInResults(aplicarConciliacionPagos(history.results || []));
 
     setHasValidatedResults(true);
 
@@ -501,13 +518,15 @@ export default function Dashboard() {
       };
 
       sentinelStageLog("export_inicio", { count: results.length });
-      const wb = await exportToExcel(results, undefined, onProgress, {
+      // El reporte siempre refleja la lista 69-B vigente en este dispositivo.
+      const exportRows = await refresh69BInResults(latestResultsRef.current);
+      const wb = await exportToExcel(exportRows, undefined, onProgress, {
         cancelToken,
         company: { name: currentCompany?.name, rfc: currentCompany?.rfc },
       });
       sentinelStageLog("export_fin_workbook", { count: results.length });
       toast.success(`Reporte principal de ${wb.SheetNames.length} hojas exportado en un solo archivo.`);
-      const pendingSat = contarEstatusSAT(results).noConfirmados;
+      const pendingSat = contarEstatusSAT(exportRows).noConfirmados;
       if (pendingSat > 0) {
         toast.warning(`El reporte incluye ${pendingSat.toLocaleString()} CFDI sin estatus SAT confirmado (ver Resumen). Revalida el SAT para un reporte definitivo.`, { duration: 12000 });
       }
@@ -922,7 +941,8 @@ export default function Dashboard() {
 
 
   const applySatRevalidationUpdates = async (updates: Map<string, SATRevalidationStatus>) => {
-    const updatedResults = latestResultsRef.current.map(row => {
+    // La conciliación PPD↔REP depende del estatus (cancelados), así que se recalcula completa.
+    const updatedResults = aplicarConciliacionPagos(latestResultsRef.current.map(row => {
       const status = updates.get(row.uuid);
       if (!status) return row;
       return revalidarFilaSAT(
@@ -931,7 +951,7 @@ export default function Dashboard() {
         currentCompany?.giro || row.giroEmpresa || '',
         currentCompany?.rfc || row.rfcEmpresaEvaluada
       );
-    });
+    }));
     latestResultsRef.current = updatedResults;
     setResults(updatedResults);
     if (currentCompany?.id) {

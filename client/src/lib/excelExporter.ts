@@ -2389,7 +2389,7 @@ export async function buildDiagnosticoWorkbook(results: ValidationResult[], onPr
           Fecha_Publicacion_69B: bl?.fechaPublicacion || 'NO APLICA',
           Fecha_Corte_Listado: (() => {
             if (bl?.notSynced) return 'Lista no cargada';
-            return '2025-12-31';
+            return bl?.fechaCorte || 'NO VERIFICADA';
           })(),
           Historial_69B: bl?.multiEstado ? 'Situación múltiple; requiere revisión' : (bl?.situacion || 'Sin coincidencia'),
           Observacion_69B: bl?.notSynced
@@ -3402,7 +3402,8 @@ const mainReportStylePlans = new WeakMap<object, SheetStylePlan[]>();
 const textStyle = (value: string): CellStyle | undefined => {
   if (/^(NO CUADRA|NO CONCLUYENTE|DESACTUALIZADA|ROJO|🔴)/.test(value)) return 'alta';
   if (/^(AMARILLO|🟡|EXCLUIDO: PAGO DUPLICADO|NO VERIFICADO)/.test(value)) return 'mediaAlta';
-  if (/^(CUADRA|VERDE|🟢)/.test(value)) return 'ok';
+  if (/^(SIN VERIFICAR)/.test(value)) return 'mediaAlta';
+  if (/^(CUADRA|VERDE|VIGENTE|🟢)/.test(value)) return 'ok';
   return undefined;
 };
 
@@ -3507,10 +3508,11 @@ function groupAlertsByCounterparty(alertRows: PlainRow[]): PlainRow[] {
       row: { RFC_Contraparte: alert.RFC_Contraparte, Severidad: alert.Severidad, Tipo: alert.Tipo, Regla: alert.Regla, Motivo: REP_ALERT_RULES[alert.Regla] || alert.Motivo, Recomendación: alert.Recomendación },
       uuids: new Set<string>(), importe: 0,
     };
-    if (!group.uuids.has(String(alert.UUID))) {
-      group.uuids.add(String(alert.UUID));
-      group.importe += typeof alert.Importe_MXN === 'number' ? alert.Importe_MXN : 0;
-    }
+    const amount = typeof alert.Importe_MXN === 'number' ? alert.Importe_MXN : 0;
+    // Importe por alerta en reglas de REP (cada pago duplicado suma); por CFDI en las demás.
+    if (REP_ALERT_RULES[alert.Regla]) group.importe += amount;
+    else if (!group.uuids.has(String(alert.UUID))) group.importe += amount;
+    group.uuids.add(String(alert.UUID));
     groups.set(key, group);
   }
   return Array.from(groups.values())
@@ -3631,6 +3633,12 @@ export async function buildMainReportWorkbook(
   const blacklistCutoff = blacklistStates.find(state => state.fechaCorte)?.fechaCorte || null;
   const cutoffTime = blacklistCutoff ? Date.parse(blacklistCutoff) : Number.NaN;
   const blacklistStale = Number.isFinite(cutoffTime) && Date.now() - cutoffTime > 30 * 24 * 60 * 60 * 1000;
+  // El SAT publica el 69-B con poca frecuencia: un corte viejo sigue siendo válido si el
+  // servidor confirmó hace poco que es la publicación más reciente.
+  const blacklistVerifiedAt = blacklistStates.map(state => state.listaVerificadaEl || '').sort().pop() || null;
+  const verifiedTime = blacklistVerifiedAt ? Date.parse(blacklistVerifiedAt) : Number.NaN;
+  const blacklistRecentlyVerified = Number.isFinite(verifiedTime) && Date.now() - verifiedTime <= 7 * 24 * 60 * 60 * 1000;
+  const verifiedDay = blacklistVerifiedAt ? blacklistVerifiedAt.slice(0, 10) : '';
   const blacklistStatus = blacklistStates.some(state => state.notSynced)
     ? 'NO VERIFICADO — lista 69-B no cargada'
     : blacklistStates.some(state => state.notSynced === false)
@@ -3638,7 +3646,7 @@ export async function buildMainReportWorkbook(
       : 'SIN DATOS DE VALIDACIÓN';
   const blacklistNoMatches = blacklistStates.filter(state => state.notSynced === false && !state.found).length;
   // Sin coincidencia contra una lista vieja (o sin fecha de corte) no prueba nada: se reporta como no concluyente.
-  const blacklistInconclusive = blacklistStale || !blacklistCutoff;
+  const blacklistInconclusive = !blacklistCutoff || (blacklistStale && !blacklistRecentlyVerified);
   const inconclusiveLabel = blacklistCutoff
     ? `NO CONCLUYENTE — lista 69-B con corte ${blacklistCutoff} (más de 30 días); actualizarla`
     : 'NO CONCLUYENTE — lista 69-B sin fecha de corte verificada; actualizarla';
@@ -3667,7 +3675,8 @@ export async function buildMainReportWorkbook(
     const source = alertSources.get(alert.UUID);
     return ({
     RFC_Contraparte: source?.direccionCFDI === 'EMITIDO' ? source.rfcReceptor : source?.direccionCFDI === 'RECIBIDO' ? source.rfcEmisor : 'NO DETERMINADA',
-    Importe_MXN: source ? amountInMXN(source, source.total) ?? '' : '',
+    // Alertas de REP con importe propio (p. ej. IVA excluido por pago duplicado): un REP vale 0.
+    Importe_MXN: typeof alert.Importe_MXN === 'number' ? alert.Importe_MXN : source ? amountInMXN(source, source.total) ?? '' : '',
     UUID: alert.UUID || '',
     Severidad: alert.Severidad || (alert.Nivel_Riesgo === 'ROJO' ? 'Alta' : alert.Nivel_Riesgo === 'NARANJA' ? 'Media-alta' : alert.Nivel_Riesgo === 'AMARILLO' ? 'Media' : 'Informativa'),
     Tipo: alert.Tipo_Alerta || alert.Tipo || '',
@@ -3705,7 +3714,11 @@ export async function buildMainReportWorkbook(
     { Indicador: 'Moneda de presentación de importes', Valor: 'MXN; importes sin tipo de cambio disponible se excluyen y se alertan' },
     { Indicador: 'Estado de validación 69-B', Valor: blacklistStatus },
     { Indicador: 'Fecha de corte 69-B', Valor: blacklistCutoff || 'NO VERIFICADA' },
-    { Indicador: 'Antigüedad de lista 69-B', Valor: blacklistStale ? 'DESACTUALIZADA: más de 30 días; actualizar antes de confiar en el cruce' : blacklistCutoff ? 'Dentro de 30 días' : 'NO VERIFICABLE SIN FECHA DE CORTE' },
+    { Indicador: 'Antigüedad de lista 69-B', Valor: !blacklistCutoff ? 'NO VERIFICABLE SIN FECHA DE CORTE'
+      : blacklistRecentlyVerified ? `VIGENTE: es la publicación más reciente del SAT (verificada el ${verifiedDay})`
+      : blacklistStale ? 'DESACTUALIZADA: más de 30 días sin verificar contra el SAT; actualizar antes de confiar en el cruce'
+      : 'Dentro de 30 días' },
+    { Indicador: 'Última verificación de la lista 69-B contra el SAT', Valor: verifiedDay || 'SIN VERIFICAR' },
     { Indicador: 'CFDI sin consulta 69-B (lista no cargada)', Valor: cfdiWithoutBlacklistData },
     { Indicador: 'Cruces 69-B sin coincidencia (lista cargada)', Valor: blacklistInconclusive && blacklistNoMatches ? `${inconclusiveLabel} (${blacklistNoMatches} cruces)` : blacklistNoMatches },
     { Indicador: 'CFDI no validados SAT', Valor: satCount.noConfirmados },

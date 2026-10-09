@@ -204,7 +204,8 @@ describe('Flujo real de reintento SAT (revalidarFilaSAT + reducer por UUID + rec
     const after = antes.map(r => revalidarFilaSAT(r, { estado: 'Vigente', validatedAt: new Date() }, 'GIRO'));
     const wbDespues = await buildDiagnosticoWorkbook(after);
     const filaDespues = XLSX.utils.sheet_to_json(wbDespues.Sheets['Diagnostico_CFDI']) as any[];
-    expect(filaDespues[0].Resultado).toBe('🟢 USABLE');
+    // SAT Vigente no "limpia" un 69-B definitivo (precedencia 2 de combinarResultadoFinal).
+    expect(filaDespues[0].Resultado).toBe('🔴 NO USABLE');
     // Columnas 69-B siguen presentes tras el recálculo
     expect(Object.keys(filaDespues[0])).toContain('RFC_Evaluado_69B');
     expect(Object.keys(filaDespues[0])).toContain('Validacion_69B');

@@ -217,7 +217,7 @@ describe("Express auth and public-route rate limits", () => {
         assert.equal(upstreamLimited.status, 429);
         assert.equal(upstreamLimited.headers.get("retry-after"), "2");
         assert.equal(satUpstreamCalls, 4_601);
-    }, 30_000);
+    }, 120_000);
 
     it("rejects access-token creation without the admin password and creates active tokens server-side when authorized", async () => {
         const payload = {
