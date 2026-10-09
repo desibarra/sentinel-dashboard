@@ -169,9 +169,9 @@ describe('exportToExcel — reporte principal de archivo único', () => {
     mockedWriteFile.mockImplementation(() => undefined as any);
     try {
       const workbook = await exportToExcel(makeBatch(5000), 'dev-outputs/reporte-unico.xlsx');
-      expect(workbook.SheetNames).toHaveLength(11);
+      expect(workbook.SheetNames).toHaveLength(13);
       expect(mockedWriteFile).toHaveBeenCalledTimes(1);
-      expect(mockedWriteFile.mock.calls[0][0].SheetNames).toHaveLength(11);
+      expect(mockedWriteFile.mock.calls[0][0].SheetNames).toHaveLength(13);
     } finally {
       mockedWriteFile.mockRestore();
     }

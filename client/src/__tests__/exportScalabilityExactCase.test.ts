@@ -214,7 +214,7 @@ describe('reporte principal único para lote histórico 6,726', () => {
     const issuedRows = XLSX.utils.sheet_to_json<any>(workbook.Sheets['CFDI Emitidos']);
     const serialized = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
 
-    expect(workbook.SheetNames).toHaveLength(11);
+    expect(workbook.SheetNames).toHaveLength(13);
     expect(workbook.SheetNames).toContain('CFDI Emitidos');
     expect(workbook.SheetNames).toContain('CFDI Recibidos');
     expect(issuedRows).toHaveLength(TOTAL - NUM_REP_DUPLICADOS);

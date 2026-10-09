@@ -3950,7 +3950,7 @@ export async function buildMainReportWorkbook(
 
   const unexpectedSheetNames = workbook.SheetNames.filter((name: string) => !MAIN_REPORT_SHEETS.includes(name as typeof MAIN_REPORT_SHEETS[number]));
   if (unexpectedSheetNames.length || workbook.SheetNames.length !== MAIN_REPORT_SHEETS.length) {
-    throw new Error('Error de integridad: el reporte principal debe contener exclusivamente las 11 hojas acordadas.');
+    throw new Error(`Error de integridad: el reporte principal debe contener exclusivamente las ${MAIN_REPORT_SHEETS.length} hojas acordadas.`);
   }
   return workbook;
 }
