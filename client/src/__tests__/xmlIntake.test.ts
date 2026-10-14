@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { zipSync, strToU8, strFromU8 } from 'fflate';
-import { extractXmlFromZip, isXmlName, isZipName, readBytes, sourcesFromDataTransfer, sourcesFromFileList, zipIsEncrypted } from '../lib/xmlIntake';
+import { decodeXml, extractXmlFromZip, inspectXml, isXmlName, isZipName, readBytes, sourcesFromDataTransfer, sourcesFromFileList, zipIsEncrypted } from '../lib/xmlIntake';
 
 // Árbol simulado de la File and Directory Entries API (lo que entrega el navegador al arrastrar una carpeta).
 type Tree = { [name: string]: string | Tree };
@@ -119,5 +119,24 @@ describe('entrada de ZIP', () => {
 
   it('lee bytes de archivos aun sin Blob.arrayBuffer', async () => {
     expect(strFromU8(await readBytes(new File(['<a/>'], 'a.xml')))).toBe('<a/>');
+  });
+});
+
+describe('decodificación y UUID del timbre', () => {
+  const tfd = '<tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" UUID="abcdef01-2345-4789-8abc-def012345678"/>';
+  it('lee UTF-8 con y sin BOM, UTF-16 con BOM y Latin-1 declarado', () => {
+    const text = `<?xml version="1.0" encoding="UTF-8"?><r a="Construcción">${tfd}</r>`;
+    const utf8 = new TextEncoder().encode(text);
+    expect(decodeXml(utf8)).toBe(text);
+    expect(decodeXml(new Uint8Array([0xef, 0xbb, 0xbf, ...utf8]))).toBe(text);
+    const utf16 = new Uint8Array([0xff, 0xfe, ...Array.from(text).flatMap(c => [c.charCodeAt(0) & 0xff, c.charCodeAt(0) >> 8])]);
+    expect(decodeXml(utf16)).toBe(text);
+    const latin = `<?xml version="1.0" encoding="ISO-8859-1"?><r a="Construcción"/>`;
+    expect(decodeXml(new Uint8Array(Array.from(latin).map(c => c.charCodeAt(0))))).toBe(latin);
+  });
+  it('obtiene el UUID del timbre o el motivo del error', () => {
+    expect(inspectXml(`<r>${tfd}</r>`)).toEqual({ uuid: 'ABCDEF01-2345-4789-8ABC-DEF012345678' });
+    expect(inspectXml('<r><sin-timbre/></r>')).toEqual({ error: 'Sin UUID de TimbreFiscalDigital' });
+    expect(inspectXml('<r><roto')).toEqual({ error: 'XML mal formado o incompleto' });
   });
 });

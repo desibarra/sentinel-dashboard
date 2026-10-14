@@ -3,7 +3,7 @@ import { Upload, X, CheckCircle2, AlertCircle, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { extractXmlFromZip, isXmlName, isZipName, readBytes, sourcesFromDataTransfer, sourcesFromFileList, type IntakeSource } from "@/lib/xmlIntake";
+import { decodeXml, extractXmlFromZip, inspectXml, isXmlName, isZipName, readBytes, sourcesFromDataTransfer, sourcesFromFileList, type IntakeSource } from "@/lib/xmlIntake";
 
 export interface UploadedFile {
   id: string;
@@ -12,6 +12,10 @@ export interface UploadedFile {
   status: "pending" | "processing" | "success" | "error";
   error?: string;
   content?: string;
+  /** UUID del TimbreFiscalDigital (si se pudo leer). */
+  uuid?: string;
+  /** XML mal formado o sin UUID: se analiza igual y se reporta en el resumen. */
+  warning?: string;
 }
 
 interface UploadZoneProps {
@@ -23,27 +27,104 @@ interface UploadZoneProps {
 interface FileReadTask {
   file: File;
   uploadedFileId: string;
+  path: string;
 }
 
 const MAX_CONCURRENT_FILE_READS = 4;
+// Hasta este tamaño la lista se actualiza en cada archivo; arriba, en bloques
+// (cada 100 ms) para que 10,000+ XML no congelen la pantalla.
+const IMMEDIATE_UPDATE_LIMIT = 200;
+const VISIBLE_ROWS = 200;
 
-interface ZipStatus {
-  opened: string[];
-  failed: { path: string; reason: string }[];
-  ignoredNested: string[];
+/** Resumen de la carga: cada archivo encontrado cae en exactamente una categoría. */
+export interface IntakeSummary {
+  found: number;
+  valid: number;
+  duplicates: string[];
+  ignoredNonXml: number;
+  readErrors: { path: string; reason: string }[];
+  zipOpened: string[];
+  zipFailed: { path: string; reason: string }[];
+  zipNested: string[];
 }
-const EMPTY_ZIP_STATUS: ZipStatus = { opened: [], failed: [], ignoredNested: [] };
+const emptySummary = (): IntakeSummary => ({ found: 0, valid: 0, duplicates: [], ignoredNonXml: 0, readErrors: [], zipOpened: [], zipFailed: [], zipNested: [] });
 
 export default function UploadZone({ onFilesReady, isValidating, hasValidatedResults }: UploadZoneProps) {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [dragActive, setDragActive] = useState(false);
-  const [ignoredCount, setIgnoredCount] = useState(0);
-  const [zipStatus, setZipStatus] = useState<ZipStatus>(EMPTY_ZIP_STATUS);
+  const [summary, setSummary] = useState<IntakeSummary>(emptySummary);
+  const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [openingZips, setOpeningZips] = useState(0);
   const nextFileIdRef = useRef(0);
   const readQueueRef = useRef<FileReadTask[]>([]);
   const activeReadersRef = useRef(0);
   const pumpReadQueueRef = useRef<() => void>(() => {});
+  // Estado de la carga en curso: se actualiza por archivo en refs y se publica en bloque.
+  const summaryRef = useRef<IntakeSummary>(emptySummary());
+  const seenUuidsRef = useRef(new Map<string, string>()); // UUID → id del archivo que se conserva
+  const progressRef = useRef({ done: 0, total: 0 });
+  const updatesRef = useRef(new Map<string, Partial<UploadedFile> | "remove">());
+  const addedRef = useRef<UploadedFile[]>([]);
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deliveredRef = useRef(false);
+
+  const flush = useCallback(() => {
+    if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+    flushTimerRef.current = null;
+    const updates = updatesRef.current;
+    const added = addedRef.current;
+    updatesRef.current = new Map();
+    addedRef.current = [];
+    if (updates.size || added.length) {
+      setFiles((prev) => {
+        const next: UploadedFile[] = [];
+        for (const file of prev.concat(added)) {
+          const update = updates.get(file.id);
+          if (update === "remove") continue;
+          next.push(update ? { ...file, ...update } : file);
+        }
+        return next;
+      });
+    }
+    const current = summaryRef.current;
+    setSummary({ ...current, duplicates: [...current.duplicates], readErrors: [...current.readErrors], zipOpened: [...current.zipOpened], zipFailed: [...current.zipFailed], zipNested: [...current.zipNested] });
+    setProgress({ ...progressRef.current });
+  }, []);
+
+  const scheduleFlush = useCallback(() => {
+    if (progressRef.current.total <= IMMEDIATE_UPDATE_LIMIT) flush();
+    else if (!flushTimerRef.current) flushTimerRef.current = setTimeout(flush, 100);
+  }, [flush]);
+
+  // Una nueva selección después de validar empieza un resumen nuevo.
+  const startIntake = useCallback(() => {
+    if (!deliveredRef.current) return;
+    deliveredRef.current = false;
+    summaryRef.current = emptySummary();
+    progressRef.current = { done: 0, total: 0 };
+    seenUuidsRef.current.clear();
+  }, []);
+
+  /**
+   * Clasifica un XML ya decodificado: duplicado por UUID del timbre (se omite),
+   * válido, o con error de lectura (se cuenta con su nombre y se envía igual al
+   * análisis para que figure en la hoja "Errores de lectura" del reporte).
+   */
+  const classify = useCallback((id: string, path: string, content: string): Partial<UploadedFile> | "remove" => {
+    const info = inspectXml(content);
+    if ("error" in info) {
+      summaryRef.current.readErrors.push({ path, reason: info.error });
+      return { content, status: "pending", warning: info.error };
+    }
+    const kept = seenUuidsRef.current.get(info.uuid);
+    if (kept && kept !== id) {
+      summaryRef.current.duplicates.push(path);
+      return "remove";
+    }
+    seenUuidsRef.current.set(info.uuid, id);
+    summaryRef.current.valid++;
+    return { content, status: "pending", uuid: info.uuid };
+  }, []);
 
   const pumpReadQueue = useCallback(() => {
     while (
@@ -54,39 +135,40 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
       activeReadersRef.current++;
       const reader = new FileReader();
 
-      const finish = (update: (file: UploadedFile) => UploadedFile) => {
-        setFiles((prev) =>
-          prev.map((file) => file.id === task.uploadedFileId ? update(file) : file)
-        );
+      const finish = (update: Partial<UploadedFile> | "remove") => {
+        updatesRef.current.set(task.uploadedFileId, update);
+        progressRef.current.done++;
         activeReadersRef.current--;
+        // Al vaciarse la cola se publica todo de inmediato.
+        if (activeReadersRef.current === 0 && readQueueRef.current.length === 0) flush();
+        else scheduleFlush();
         pumpReadQueueRef.current();
+      };
+      const fail = (error: string) => {
+        summaryRef.current.readErrors.push({ path: task.path, reason: error });
+        finish({ status: "error", error });
       };
 
       reader.onload = (event) => {
-        const content = event.target?.result;
-        if (typeof content !== "string") {
-          finish((file) => ({ ...file, status: "error", error: "El archivo no se pudo leer como texto" }));
+        const bytes = event.target?.result;
+        if (!bytes || typeof bytes === "string") {
+          fail("El archivo no se pudo leer");
           return;
         }
-        finish((file) => ({ ...file, content, status: "pending" }));
+        finish(classify(task.uploadedFileId, task.path, decodeXml(new Uint8Array(bytes as ArrayBuffer))));
       };
 
-      reader.onerror = () => {
-        finish((file) => ({ ...file, status: "error", error: "Error al leer el archivo" }));
-      };
-
-      reader.onabort = () => {
-        finish((file) => ({ ...file, status: "error", error: "Lectura del archivo cancelada" }));
-      };
+      reader.onerror = () => fail("Error al leer el archivo");
+      reader.onabort = () => fail("Lectura del archivo cancelada");
 
       try {
-        reader.readAsText(task.file);
+        reader.readAsArrayBuffer(task.file);
       } catch (error) {
         console.error(`Error al iniciar la lectura de ${task.file.name}:`, error);
-        finish((file) => ({ ...file, status: "error", error: "No se pudo iniciar la lectura del archivo" }));
+        fail("No se pudo iniciar la lectura del archivo");
       }
     }
-  }, []);
+  }, [classify, flush, scheduleFlush]);
   pumpReadQueueRef.current = pumpReadQueue;
 
   // Abre cada ZIP en el navegador y agrega sus XML ya leídos a la lista.
@@ -100,38 +182,46 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
       } catch (error) {
         extraction = { xmls: [], opened: [], failed: [{ path, reason: `No se pudo leer el ZIP (${(error as Error)?.message || "error desconocido"})` }], ignoredNested: [], ignoredNonXml: 0 };
       }
-      const decoder = new TextDecoder("utf-8");
-      const zipFiles: UploadedFile[] = extraction.xmls.map(({ path: xmlPath, bytes }) => ({
-        id: `${Date.now()}-${nextFileIdRef.current++}`,
-        name: xmlPath,
-        size: bytes.length,
-        status: "pending",
-        content: decoder.decode(bytes),
-      }));
-      setFiles((prev) => [...prev, ...zipFiles]);
-      setIgnoredCount((prev) => prev + extraction.ignoredNonXml);
-      setZipStatus((prev) => ({
-        opened: [...prev.opened, ...extraction.opened],
-        failed: [...prev.failed, ...extraction.failed],
-        ignoredNested: [...prev.ignoredNested, ...extraction.ignoredNested],
-      }));
+      const current = summaryRef.current;
+      // Encontrados: cada ZIP (abierto o con error, incluidos los internos), sus XML,
+      // lo que no es XML dentro y los ZIP anidados ignorados.
+      current.found += extraction.opened.length + extraction.failed.length + extraction.xmls.length
+        + extraction.ignoredNonXml + extraction.ignoredNested.length;
+      current.ignoredNonXml += extraction.ignoredNonXml;
+      current.zipOpened.push(...extraction.opened);
+      current.zipFailed.push(...extraction.failed);
+      current.zipNested.push(...extraction.ignoredNested);
+      progressRef.current.total += extraction.xmls.length;
+      for (const { path: xmlPath, bytes } of extraction.xmls) {
+        const id = `${Date.now()}-${nextFileIdRef.current++}`;
+        const update = classify(id, xmlPath, decodeXml(bytes));
+        progressRef.current.done++;
+        if (update !== "remove") addedRef.current.push({ id, name: xmlPath, size: bytes.length, status: "pending", ...update });
+        // Cede el hilo cada 200 XML para que la barra de progreso avance.
+        if (progressRef.current.done % 200 === 0) {
+          scheduleFlush();
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      }
+      flush();
       setOpeningZips((prev) => prev - 1);
     }
-  }, []);
+  }, [classify, flush, scheduleFlush]);
 
   // Archivos sueltos, carpetas (con subcarpetas), ZIP o arrastre: solo se leen
   // los .xml (sin importar mayúsculas); lo demás (PDF, TXT…) se ignora y se cuenta.
   const handleFiles = useCallback(
     (sources: IntakeSource[]) => {
+      startIntake();
       const newFiles: UploadedFile[] = [];
       const readTasks: FileReadTask[] = [];
-      let ignored = 0;
+      const current = summaryRef.current;
 
-      void addZips(sources.filter(({ file }) => isZipName(file.name)));
       for (const { file, path } of sources) {
         if (isZipName(file.name)) continue;
+        current.found++;
         if (!isXmlName(file.name)) {
-          ignored++;
+          current.ignoredNonXml++;
           continue;
         }
         const fileId = `${Date.now()}-${nextFileIdRef.current++}`;
@@ -141,15 +231,17 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
           size: file.size,
           status: "pending",
         });
-        readTasks.push({ file, uploadedFileId: fileId });
+        readTasks.push({ file, uploadedFileId: fileId, path });
       }
 
-      setIgnoredCount((prev) => prev + ignored);
-      setFiles((prev) => [...prev, ...newFiles]);
+      progressRef.current.total += readTasks.length;
+      addedRef.current.push(...newFiles);
+      flush();
       readQueueRef.current.push(...readTasks);
       pumpReadQueueRef.current();
+      void addZips(sources.filter(({ file }) => isZipName(file.name)));
     },
-    [addZips]
+    [addZips, flush, startIntake]
   );
 
   const handleDrag = (e: React.DragEvent<HTMLDivElement>) => {
@@ -179,7 +271,23 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
   };
 
   const removeFile = (id: string) => {
+    const removed = files.find((f) => f.id === id);
+    if (removed?.uuid && seenUuidsRef.current.get(removed.uuid) === id) {
+      seenUuidsRef.current.delete(removed.uuid);
+      summaryRef.current.valid--;
+      setSummary((prev) => ({ ...prev, valid: prev.valid - 1 }));
+    }
     setFiles((prev) => prev.filter((f) => f.id !== id));
+  };
+
+  const resetIntake = () => {
+    summaryRef.current = emptySummary();
+    progressRef.current = { done: 0, total: 0 };
+    seenUuidsRef.current.clear();
+    deliveredRef.current = false;
+    setSummary(emptySummary());
+    setProgress({ done: 0, total: 0 });
+    setFiles([]);
   };
 
   const handleValidate = () => {
@@ -187,8 +295,8 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
     console.log("UploadZone handleValidate called! pendingFiles length:", pendingFiles.length);
     if (pendingFiles.length > 0) {
       onFilesReady(pendingFiles as UploadedFile[]);
-      setIgnoredCount(0);
-      setZipStatus(EMPTY_ZIP_STATUS);
+      // El resumen queda visible hasta la siguiente selección.
+      deliveredRef.current = true;
       // ✅ PRODUCCIÓN: Limpiar archivos después de enviarlos para liberar memoria
       // No mantener XMLs completos en memoria después de procesarlos
       setFiles([]);
@@ -245,7 +353,7 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
   // Ahora se exige que TODOS los archivos hayan terminado de leerse (contenido
   // listo o marcados en error) antes de habilitar el botón.
   const allFilesSettled = files.every((f) => f.status === "error" || !!f.content);
-  const readyToValidate = validFiles.length > 0 && allFilesSettled && openingZips === 0 && !isValidating;
+  const readyToValidate = validFiles.length > 0 && allFilesSettled && openingZips === 0 && progress.done >= progress.total && !isValidating;
   const shouldDisableValidate = !readyToValidate || (hasValidatedResults && files.length === 0);
 
   return (
@@ -316,30 +424,23 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
               </Button>
             </label>
           </div>
-          {openingZips > 0 && (
-            <p className="text-xs text-slate-500 mt-3">Abriendo {openingZips} ZIP…</p>
-          )}
-          {zipStatus.opened.length > 0 && (
-            <p className="text-xs text-slate-500 mt-3">
-              {zipStatus.opened.length.toLocaleString()} ZIP abierto{zipStatus.opened.length !== 1 ? "s" : ""}.
-            </p>
-          )}
-          {zipStatus.failed.length > 0 && (
-            <div className="text-xs text-red-700 mt-2">
-              {zipStatus.failed.map((zip) => <p key={zip.path}>ZIP con error: {zip.path} — {zip.reason}</p>)}
-            </div>
-          )}
-          {zipStatus.ignoredNested.length > 0 && (
-            <p className="text-xs text-amber-700 mt-2">
-              {zipStatus.ignoredNested.length} ZIP anidado{zipStatus.ignoredNested.length !== 1 ? "s" : ""} en más de un nivel ignorado{zipStatus.ignoredNested.length !== 1 ? "s" : ""}: {zipStatus.ignoredNested.join(", ")}
-            </p>
-          )}
-          {ignoredCount > 0 && (
-            <p className="text-xs text-slate-500 mt-3">
-              {ignoredCount.toLocaleString()} archivo{ignoredCount !== 1 ? "s" : ""} no XML (PDF, TXT…) ignorado{ignoredCount !== 1 ? "s" : ""}.
-            </p>
-          )}
         </div>
+
+        {/* Progreso de lectura */}
+        {(progress.total > 0 && progress.done < progress.total) || openingZips > 0 ? (
+          <div className="space-y-1">
+            <div className="flex justify-between text-xs text-slate-600">
+              <span>{openingZips > 0 ? `Abriendo ${openingZips} ZIP…` : "Leyendo XML…"}</span>
+              <span>{progress.done.toLocaleString()} de {progress.total.toLocaleString()}</span>
+            </div>
+            <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
+              <div className="h-full bg-primary transition-all" style={{ width: `${progress.total ? Math.round((progress.done / progress.total) * 100) : 0}%` }} />
+            </div>
+          </div>
+        ) : null}
+
+        {/* Resumen de carga */}
+        {summary.found > 0 && <IntakeSummaryPanel summary={summary} />}
 
         {/* Mensaje de idempotencia */}
         {hasValidatedResults && files.length === 0 && (
@@ -359,13 +460,13 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
               </h3>
               {files.length > 0 && (
                 <span className="text-xs text-slate-500">
-                  {validFiles.length} válido{validFiles.length !== 1 ? "s" : ""}
+                  {validFiles.length.toLocaleString()} listo{validFiles.length !== 1 ? "s" : ""} para analizar
                 </span>
               )}
             </div>
 
             <div className="space-y-2 max-h-48 overflow-y-auto">
-              {files.map((file) => (
+              {files.slice(0, VISIBLE_ROWS).map((file) => (
                 <div
                   key={file.id}
                   className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200"
@@ -379,6 +480,7 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
                       <p className="text-xs text-slate-500">
                         {formatFileSize(file.size)}
                         {file.error && ` • ${file.error}`}
+                        {file.warning && ` • ${file.warning}`}
                       </p>
                     </div>
                   </div>
@@ -398,6 +500,11 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
                 </div>
               ))}
             </div>
+            {files.length > VISIBLE_ROWS && (
+              <p className="text-xs text-slate-500">
+                Se muestran los primeros {VISIBLE_ROWS} de {files.length.toLocaleString()} XML; el resumen cuenta todos.
+              </p>
+            )}
           </div>
         )}
 
@@ -420,7 +527,7 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
             {files.length > 0 && (
               <Button
                 variant="outline"
-                onClick={() => { setFiles([]); setIgnoredCount(0); setZipStatus(EMPTY_ZIP_STATUS); }}
+                onClick={resetIntake}
                 disabled={isValidating}
               >
                 Limpiar
@@ -430,5 +537,51 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function IntakeSummaryPanel({ summary }: { summary: IntakeSummary }) {
+  const zipCount = summary.zipOpened.length + summary.zipFailed.length;
+  const accounted = summary.valid + summary.duplicates.length + summary.ignoredNonXml + summary.readErrors.length + zipCount + summary.zipNested.length;
+  const rows: [string, number, string?][] = [
+    ["Archivos encontrados", summary.found],
+    ["XML válidos", summary.valid],
+    ["Duplicados omitidos (mismo UUID)", summary.duplicates.length],
+    ["No-XML ignorados", summary.ignoredNonXml],
+    ["XML con error de lectura", summary.readErrors.length, summary.readErrors.length ? "text-red-700" : undefined],
+    ["ZIP abiertos", summary.zipOpened.length],
+    ["ZIP con error", summary.zipFailed.length, summary.zipFailed.length ? "text-red-700" : undefined],
+  ];
+  if (summary.zipNested.length) rows.push(["ZIP anidados ignorados (más de 1 nivel)", summary.zipNested.length, "text-amber-700"]);
+  const details = [
+    ...summary.readErrors.map((e) => `Error de lectura: ${e.path} — ${e.reason}`),
+    ...summary.zipFailed.map((z) => `ZIP con error: ${z.path} — ${z.reason}`),
+    ...summary.zipNested.map((z) => `ZIP anidado ignorado: ${z}`),
+    ...summary.duplicates.map((d) => `Duplicado omitido: ${d}`),
+  ];
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4" data-testid="intake-summary">
+      <h3 className="font-semibold text-slate-900 mb-2">Resumen de carga</h3>
+      <dl className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
+        {rows.map(([label, value, tone]) => (
+          <div key={label} className="rounded bg-white border border-slate-200 p-2">
+            <dt className="text-xs text-slate-500">{label}</dt>
+            <dd className={`font-bold ${tone || "text-slate-900"}`}>{value.toLocaleString()}</dd>
+          </div>
+        ))}
+      </dl>
+      {accounted !== summary.found && (
+        <p className="text-xs text-amber-700 mt-2">Leyendo… {(summary.found - accounted).toLocaleString()} por clasificar.</p>
+      )}
+      {details.length > 0 && (
+        <details className="mt-3 text-xs text-slate-700">
+          <summary className="cursor-pointer">Ver detalle ({details.length.toLocaleString()})</summary>
+          <ul className="mt-2 max-h-40 overflow-y-auto space-y-0.5">
+            {details.slice(0, 500).map((line, i) => <li key={i}>{line}</li>)}
+            {details.length > 500 && <li>… y {(details.length - 500).toLocaleString()} más</li>}
+          </ul>
+        </details>
+      )}
+    </div>
   );
 }

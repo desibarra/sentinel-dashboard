@@ -149,3 +149,27 @@ export async function extractXmlFromZip(bytes: Uint8Array, zipPath: string, dept
   }
   return result;
 }
+
+/**
+ * Texto de un XML a partir de sus bytes: UTF-8 con o sin BOM, UTF-16 con BOM,
+ * e ISO-8859-1 / Windows-1252 cuando así lo declara el encabezado <?xml ...?>.
+ */
+export function decodeXml(bytes: Uint8Array): string {
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder('utf-16le').decode(bytes);
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder('utf-16be').decode(bytes);
+  const prolog = new TextDecoder('latin1').decode(bytes.subarray(0, 200));
+  const declared = /<\?xml[^>]*encoding\s*=\s*["']([^"']+)["']/i.exec(prolog)?.[1].toLowerCase().replace(/[\s_]/g, '-');
+  const latin = declared && ['iso-8859-1', 'latin1', 'latin-1', 'windows-1252', 'cp1252'].includes(declared);
+  // TextDecoder quita el BOM de UTF-8 por omisión.
+  return new TextDecoder(latin ? 'windows-1252' : 'utf-8').decode(bytes);
+}
+
+const TFD_UUID = /<(?:[\w-]+:)?TimbreFiscalDigital\b[^>]*?\sUUID\s*=\s*["']([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})["']/;
+
+/** UUID del TimbreFiscalDigital si el XML está bien formado; si no, el motivo del error. */
+export function inspectXml(text: string): { uuid: string } | { error: string } {
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  if (!doc.documentElement || doc.getElementsByTagName('parsererror').length) return { error: 'XML mal formado o incompleto' };
+  const uuid = TFD_UUID.exec(text)?.[1];
+  return uuid ? { uuid: uuid.toUpperCase() } : { error: 'Sin UUID de TimbreFiscalDigital' };
+}

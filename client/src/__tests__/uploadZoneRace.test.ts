@@ -38,7 +38,7 @@ describe('UploadZone: no debe perder archivos por condición de carrera en FileR
       onload: ((ev: any) => void) | null = null;
       onerror: ((ev: any) => void) | null = null;
       result: string | null = null;
-      readAsText(file: File) {
+      readAsArrayBuffer(file: File) {
         // No resuelve de inmediato: queda "colgado" hasta que el test decida
         // completarlo, simulando un FileReader real en curso.
         const entry: PendingReader = {
@@ -48,8 +48,10 @@ describe('UploadZone: no debe perder archivos por condición de carrera en FileR
           onerror: null,
           resolve: (content: string) => {
             entry.completed = true;
-            this.result = content;
-            if (this.onload) this.onload({ target: { result: content } });
+            // UploadZone lee bytes (readAsArrayBuffer) y los decodifica.
+            const bytes = new TextEncoder().encode(content).buffer;
+            this.result = bytes as any;
+            if (this.onload) this.onload({ target: { result: bytes } });
           },
           reject: () => {
             entry.completed = true;
@@ -170,7 +172,7 @@ describe('UploadZone: no debe perder archivos por condición de carrera en FileR
     // Los no-XML no se listan: se ignoran y quedan contados en el aviso.
     expect(mostradosAlUsuario).toBe(seleccionados - rechazadosPorExtension); // ningún XML desaparece antes del clic
     expect(lecturasExitosas + erroresTotales).toBe(seleccionados); // invariante pedida
-    expect(container.textContent).toContain('1 archivo no XML (PDF, TXT…) ignorado');
+    expect(container.textContent).toContain('No-XML ignorados1');
     // El badge "Error" visible corresponde a b.xml (FileReader).
     const errorBadges = Array.from(container.querySelectorAll('span')).filter(s => s.textContent?.trim() === 'Error');
     expect(errorBadges.length).toBe(erroresFileReader);
