@@ -19,37 +19,48 @@ global.IS_REACT_ACT_ENVIRONMENT = true;
 // verificar el estado del botón en cada punto intermedio, sin depender de
 // temporizadores reales.
 
-type PendingReader = { onload: ((ev: any) => void) | null; onerror: ((ev: any) => void) | null; resolve: (content: string) => void; reject: () => void };
+type PendingReader = { file: File; completed: boolean; onload: ((ev: any) => void) | null; onerror: ((ev: any) => void) | null; resolve: (content: string) => void; reject: () => void };
 
 describe('UploadZone: no debe perder archivos por condición de carrera en FileReader', () => {
   let container: HTMLDivElement;
   let pendingReaders: PendingReader[];
   let OriginalFileReader: typeof FileReader;
+  let maxConcurrentReaders: number;
 
   beforeEach(() => {
     container = document.createElement('div');
     document.body.appendChild(container);
     pendingReaders = [];
+    maxConcurrentReaders = 0;
 
     OriginalFileReader = global.FileReader;
     class ControlledFileReader {
       onload: ((ev: any) => void) | null = null;
       onerror: ((ev: any) => void) | null = null;
       result: string | null = null;
-      readAsText(_file: File) {
+      readAsText(file: File) {
         // No resuelve de inmediato: queda "colgado" hasta que el test decida
         // completarlo, simulando un FileReader real en curso.
-        pendingReaders.push({
+        const entry: PendingReader = {
+          file,
+          completed: false,
           onload: null,
           onerror: null,
           resolve: (content: string) => {
+            entry.completed = true;
             this.result = content;
             if (this.onload) this.onload({ target: { result: content } });
           },
           reject: () => {
+            entry.completed = true;
             if (this.onerror) this.onerror({});
           },
-        });
+        };
+        pendingReaders.push(entry);
+        maxConcurrentReaders = Math.max(
+          maxConcurrentReaders,
+          pendingReaders.filter(reader => !reader.completed).length
+        );
         // Vincula los callbacks reales (asignados por UploadZone tras construir el reader)
         // usando un microtask, ya que UploadZone asigna onload/onerror DESPUÉS de `new FileReader()`.
         queueMicrotask(() => {
@@ -177,5 +188,58 @@ describe('UploadZone: no debe perder archivos por condición de carrera en FileR
     expect(enviadosAValidacion).toBe(lecturasExitosas); // enviados === exitosos leídos
     const names = delivered!.map((f: any) => f.name).sort();
     expect(names).toEqual(['a.xml', 'c.xml']);
+  });
+
+  it('asocia por identidad File aunque los nombres se repitan y limita las lecturas a cuatro', async () => {
+    let delivered: any[] | null = null;
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        React.createElement(UploadZone, {
+          onFilesReady: (files: any[]) => { delivered = files; },
+          isValidating: false,
+          hasValidatedResults: false,
+        })
+      );
+    });
+
+    const contents = new Map<File, string>();
+    const selectedFiles = Array.from({ length: 6 }, (_, index) => {
+      const file = new File([`<cfdi>${index}</cfdi>`], 'duplicado.xml', { type: 'text/xml' });
+      contents.set(file, `<cfdi>${index}</cfdi>`);
+      return file;
+    });
+
+    await act(async () => {
+      fireFilesSelected(selectedFiles);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(pendingReaders).toHaveLength(4);
+    expect(maxConcurrentReaders).toBeLessThanOrEqual(4);
+    expect(isValidateButtonDisabled()).toBe(true);
+
+    while (pendingReaders.some(reader => !reader.completed)) {
+      const reader = pendingReaders.find(candidate => !candidate.completed)!;
+      await act(async () => {
+        reader.resolve(contents.get(reader.file)!);
+        await Promise.resolve();
+      });
+      expect(maxConcurrentReaders).toBeLessThanOrEqual(4);
+    }
+
+    expect(pendingReaders).toHaveLength(selectedFiles.length);
+    expect(isValidateButtonDisabled()).toBe(false);
+
+    await act(async () => {
+      const button = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('Iniciar Validación'))!;
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(delivered).toHaveLength(selectedFiles.length);
+    expect(delivered!.map(file => file.content).sort()).toEqual(
+      Array.from(contents.values()).sort()
+    );
   });
 });

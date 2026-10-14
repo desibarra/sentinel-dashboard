@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { Upload, X, CheckCircle2, AlertCircle, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,20 +19,77 @@ interface UploadZoneProps {
   hasValidatedResults: boolean;
 }
 
+interface FileReadTask {
+  file: File;
+  uploadedFileId: string;
+}
+
+const MAX_CONCURRENT_FILE_READS = 4;
+
 export default function UploadZone({ onFilesReady, isValidating, hasValidatedResults }: UploadZoneProps) {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [dragActive, setDragActive] = useState(false);
+  const nextFileIdRef = useRef(0);
+  const readQueueRef = useRef<FileReadTask[]>([]);
+  const activeReadersRef = useRef(0);
+  const pumpReadQueueRef = useRef<() => void>(() => {});
+
+  const pumpReadQueue = useCallback(() => {
+    while (
+      activeReadersRef.current < MAX_CONCURRENT_FILE_READS &&
+      readQueueRef.current.length > 0
+    ) {
+      const task = readQueueRef.current.shift()!;
+      activeReadersRef.current++;
+      const reader = new FileReader();
+
+      const finish = (update: (file: UploadedFile) => UploadedFile) => {
+        setFiles((prev) =>
+          prev.map((file) => file.id === task.uploadedFileId ? update(file) : file)
+        );
+        activeReadersRef.current--;
+        pumpReadQueueRef.current();
+      };
+
+      reader.onload = (event) => {
+        const content = event.target?.result;
+        if (typeof content !== "string") {
+          finish((file) => ({ ...file, status: "error", error: "El archivo no se pudo leer como texto" }));
+          return;
+        }
+        finish((file) => ({ ...file, content, status: "pending" }));
+      };
+
+      reader.onerror = () => {
+        finish((file) => ({ ...file, status: "error", error: "Error al leer el archivo" }));
+      };
+
+      reader.onabort = () => {
+        finish((file) => ({ ...file, status: "error", error: "Lectura del archivo cancelada" }));
+      };
+
+      try {
+        reader.readAsText(task.file);
+      } catch (error) {
+        console.error(`Error al iniciar la lectura de ${task.file.name}:`, error);
+        finish((file) => ({ ...file, status: "error", error: "No se pudo iniciar la lectura del archivo" }));
+      }
+    }
+  }, []);
+  pumpReadQueueRef.current = pumpReadQueue;
 
   const handleFiles = useCallback(
     (fileList: FileList) => {
       const newFiles: UploadedFile[] = [];
+      const readTasks: FileReadTask[] = [];
 
       for (let i = 0; i < fileList.length; i++) {
         const file = fileList[i];
+        const fileId = `${Date.now()}-${nextFileIdRef.current++}`;
 
         if (!file.name.endsWith(".xml")) {
           newFiles.push({
-            id: `${file.name}-${Date.now()}-${i}`,
+            id: fileId,
             name: file.name,
             size: file.size,
             status: "error",
@@ -41,48 +98,18 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
           continue;
         }
 
-        const fileId = `${file.name}-${Date.now()}-${i}`;
-
         newFiles.push({
           id: fileId,
           name: file.name,
           size: file.size,
           status: "pending",
         });
+        readTasks.push({ file, uploadedFileId: fileId });
       }
 
       setFiles((prev) => [...prev, ...newFiles]);
-
-      for (let i = 0; i < fileList.length; i++) {
-        const file = fileList[i];
-        if (!file.name.endsWith(".xml")) continue;
-        
-        const fileId = newFiles.find(nf => nf.name === file.name)?.id;
-        if (!fileId) continue;
-
-        const reader = new FileReader();
-
-        reader.onload = (e) => {
-          const content = e.target?.result as string;
-          setFiles((prev) => {
-            return prev.map((f) =>
-              f.id === fileId ? { ...f, content, status: "pending" } : f
-            );
-          });
-        };
-
-        reader.onerror = () => {
-          setFiles((prev) =>
-            prev.map((f) =>
-              f.id === fileId
-                ? { ...f, status: "error", error: "Error al leer el archivo" }
-                : f
-            )
-          );
-        };
-
-        reader.readAsText(file);
-      }
+      readQueueRef.current.push(...readTasks);
+      pumpReadQueueRef.current();
     },
     []
   );
