@@ -227,12 +227,29 @@ export function useXMLValidator() {
   const [progress, setProgress] = useState({ current: 0, total: 0 });
 
   // ✅ PRODUCCIÓN: Procesamiento por LOTES para evitar congelamiento
-  const validateXMLFiles = async (files: UploadedFile[], giroEmpresa?: string, rfcEmpresa?: string, onProgressUpdate?: (current: number, total: number) => void) => {
+  // deferSat: analiza sin esperar al SAT (estatus "No verificado" salvo caché);
+  // el Dashboard consulta al SAT después, en segundo plano.
+  // Un lote comparte pocos RFC: el cruce 69-B (IndexedDB) se consulta una vez
+  // por RFC en cada carga, en lugar de dos veces por CFDI.
+  const blacklistMemoRef = { current: new Map<string, Promise<BlacklistValidation>>() };
+  const cachedBlacklist = (rfc: string) => {
+    const key = rfc.trim().toUpperCase();
+    let pending = blacklistMemoRef.current.get(key);
+    if (!pending) {
+      pending = checkRFCBlacklist(key);
+      blacklistMemoRef.current.set(key, pending);
+    }
+    return pending;
+  };
+
+  const validateXMLFiles = async (files: UploadedFile[], giroEmpresa?: string, rfcEmpresa?: string, onProgressUpdate?: (current: number, total: number) => void, options: { deferSat?: boolean } = {}) => {
     setIsValidating(true);
     setProgress({ current: 0, total: files.length });
+    blacklistMemoRef.current = new Map(); // la lista 69-B pudo cambiar desde la carga anterior
 
-    const BATCH_SIZE = 20; // Procesar 20 XMLs por lote (motor local; la consulta SAT tiene su propia concurrencia acotada — ver satQueue.ts)
-    const BATCH_DELAY = 50; // 50ms entre lotes para no bloquear UI
+    // Sin SAT el lote solo es CPU local: lotes más grandes y solo se cede el hilo entre lotes.
+    const BATCH_SIZE = options.deferSat ? 100 : 20; // Con SAT, 20 por lote (la consulta SAT tiene su propia concurrencia acotada — ver satQueue.ts)
+    const BATCH_DELAY = options.deferSat ? 0 : 50; // ms entre lotes para no bloquear UI
     // P0-C: la consulta SAT ahora puede reintentar hasta 2 veces con backoff
     // (timeout 12s + backoff + 12s + backoff + 12s ≈ 39s en el peor caso).
     // Este límite por archivo debe quedar por encima de ese peor caso para no
@@ -255,7 +272,7 @@ export function useXMLValidator() {
         try {
           // Timeout de seguridad por XML
           const result = await Promise.race([
-            validateSingleXML(file.name, file.content, giroEmpresa, rfcEmpresa),
+            validateSingleXML(file.name, file.content, giroEmpresa, rfcEmpresa, options.deferSat),
             new Promise<ValidationResult>((_, reject) =>
               setTimeout(() => reject(new Error("Timeout: XML tomó demasiado tiempo")), XML_TIMEOUT)
             )
@@ -312,7 +329,8 @@ export function useXMLValidator() {
     fileName: string,
     xmlContent: string,
     giroEmpresa?: string,
-    rfcEmpresa?: string
+    rfcEmpresa?: string,
+    deferSat = false
   ): Promise<ValidationResult> => {
     try {
       // ✅ SKILL sentinel-express-pro v1.0.0 - BLOQUE 6 - Regla 6.1
@@ -763,10 +781,10 @@ export function useXMLValidator() {
 
       try {
         if (rfcEmisor && rfcEmisor.length >= 12) {
-          rfcEmisorBlacklist = await checkRFCBlacklist(rfcEmisor);
+          rfcEmisorBlacklist = await cachedBlacklist(rfcEmisor);
         }
         if (rfcReceptor && rfcReceptor.length >= 12) {
-          rfcReceptorBlacklist = await checkRFCBlacklist(rfcReceptor);
+          rfcReceptorBlacklist = await cachedBlacklist(rfcReceptor);
         }
       } catch (err) {
         console.error("Error validando listas negras:", err);
@@ -820,7 +838,7 @@ export function useXMLValidator() {
           }
         }
 
-        if (!shouldUseCache) {
+        if (!shouldUseCache && !deferSat) {
           let satStatus: any = null;
           try {
             // P0-C: checkCFDIStatusSAT ahora gestiona su propio timeout (12s,
@@ -841,7 +859,9 @@ export function useXMLValidator() {
           // agotada) NUNCA debe degradar un estatus SAT ya obtenido — si el
           // SAT respondió "Vigente", debe seguir siendo "Vigente" aunque no
           // se pueda cachear para la próxima consulta.
-          if (satStatus) {
+          // Solo se guardan estatus definitivos: un "Error Conexión" en caché
+          // impedía reintentar durante 24 h.
+          if (satStatus && (satStatus.estado === "Vigente" || satStatus.estado === "Cancelado")) {
             try {
               localStorage.setItem(cacheKey, JSON.stringify(satStatus));
             } catch (cacheError) {

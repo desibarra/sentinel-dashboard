@@ -338,7 +338,9 @@ export default function Dashboard() {
 
 
         sentinelStageLog("validacion_inicio", { total: files.length });
-        const validationResults = await validateXMLFiles(files, currentCompany.giro, currentCompany.rfc, onBatchProgress);
+        // El análisis local no espera al SAT: con miles de CFDI la consulta SAT
+        // (acotada por el proxy) tardaba horas. El estatus se consulta después.
+        const validationResults = await validateXMLFiles(files, currentCompany.giro, currentCompany.rfc, onBatchProgress, { deferSat: true });
         sentinelStageLog("validacion_fin", { count: validationResults.length });
       setProcessingPhase(null);
 
@@ -350,6 +352,7 @@ export default function Dashboard() {
       // viceversa). No existen dos motores con estados contradictorios — es
       // la MISMA función que usa el Excel y los resúmenes.
       const { combinado: newResults, agregados, omitidosPorDuplicado: skippedCount } = mergeAndReconcileResults(results, validationResults);
+      latestResultsRef.current = newResults; // la consulta SAT en segundo plano parte de aquí
       setResults(newResults);
       setHasValidatedResults(true);
 
@@ -369,8 +372,7 @@ export default function Dashboard() {
 
 
       // Guardar en histórico automáticamente
-
-      await saveToHistory(newResults);
+      lastHistoryIdRef.current = await saveToHistory(newResults);
 
 
 
@@ -381,16 +383,13 @@ export default function Dashboard() {
       const noUsable = validationResults.filter((r) => r.resultado.includes("🔴")).length;
 
       const noValidadosSAT = contarEstatusSAT(validationResults).noConfirmados;
-
-
-
       toast.success(
-
-        `Validación completada: ${usable} usables, ${alertas} con alertas, ${noUsable} no usables, ${noValidadosSAT} no validados SAT`,
-
-        { duration: 5000 }
-
+        noValidadosSAT > 0
+          ? `Análisis local completado: ${usable} usables, ${alertas} con alertas, ${noUsable} no usables. Consultando ${noValidadosSAT.toLocaleString()} CFDI ante el SAT en segundo plano.`
+          : `Validación completada: ${usable} usables, ${alertas} con alertas, ${noUsable} no usables.`,
+        { duration: 6000 }
       );
+      void runSatInBackground();
 
       if (skippedCount > 0) {
         toast.info(
@@ -411,15 +410,12 @@ export default function Dashboard() {
 
 
 
-  const saveToHistory = async (validationResults: ValidationResult[]) => {
+  const saveToHistory = async (validationResults: ValidationResult[], existingId?: string): Promise<string | undefined> => {
 
-    if (!currentCompany || validationResults.length === 0) return;
-
-
-
+    if (!currentCompany || validationResults.length === 0) return undefined;
     const historyEntry: ValidationHistory = {
 
-      id: crypto.randomUUID(),
+      id: existingId || crypto.randomUUID(),
 
       companyId: currentCompany.id,
 
@@ -446,6 +442,7 @@ export default function Dashboard() {
 
 
     await appDB.saveHistory(historyEntry);
+    return historyEntry.id;
 
   };
 
@@ -940,7 +937,7 @@ export default function Dashboard() {
 
 
 
-  const applySatRevalidationUpdates = async (updates: Map<string, SATRevalidationStatus>) => {
+  const applySatRevalidationUpdates = async (updates: Map<string, SATRevalidationStatus>, persist = true) => {
     // La conciliación PPD↔REP depende del estatus (cancelados), así que se recalcula completa.
     const updatedResults = aplicarConciliacionPagos(latestResultsRef.current.map(row => {
       const status = updates.get(row.uuid);
@@ -954,7 +951,7 @@ export default function Dashboard() {
     }));
     latestResultsRef.current = updatedResults;
     setResults(updatedResults);
-    if (currentCompany?.id) {
+    if (persist && currentCompany?.id) {
       await persistRevalidatedSession(currentCompany.id, updatedResults);
     }
   };
@@ -1042,51 +1039,77 @@ export default function Dashboard() {
 
   };
 
-  // P0-C: reintento masivo de SAT. Objetivo explícito: un timeout/error SAT no
-  // debe dejar un CFDI huérfano esperando un reintento manual fila por fila.
-  // Solo toca registros en estado NO concluyente ("No validado SAT" o consulta
-  // pendiente por límite de frecuencia); Vigente y Cancelado NUNCA se tocan
-  // aquí. Las llamadas reales pasan por satQueue (useXMLValidator.ts /
-  // satStatusValidator.ts), que ya acota la concurrencia — por eso es seguro
-  // lanzarlas todas juntas en vez de trocearlas manualmente aquí.
-  const handleRevalidateAllPending = async () => {
-    if (isBulkRevalidating) return; // evita doble ejecución
+  // Consulta SAT de todo lo que no tiene estatus definitivo (Vigente/Cancelado):
+  // después de cada carga (segundo plano) y con el botón "Reintentar". Va por
+  // bloques de 200: cada bloque se aplica y se ve de inmediato; la sesión se
+  // guarda cada 2,000 CFDI y al final, y al terminar se actualiza la misma
+  // entrada del historial. satQueue acota la concurrencia y los reintentos.
+  const SAT_CHUNK = 200;
+  const SAT_PERSIST_EVERY = 2000;
+  const satRunningRef = useRef(false);
+  const lastHistoryIdRef = useRef<string | undefined>(undefined);
+  const satPending = (rows: ValidationResult[], attempted: Set<string>) => rows.filter(r =>
+    r.uuid && r.uuid !== 'NO DISPONIBLE' && !attempted.has(r.uuid) &&
+    String(r.tipoCFDI || '').toUpperCase() !== 'P' && !r.deleted &&
+    !['Vigente', 'Cancelado', 'No Aplica (REP)'].includes(String(r.estatusSAT || ''))
+  );
 
-    const pendientes = results.filter(r =>
-      r.uuid && r.uuid !== 'NO DISPONIBLE' &&
-      (String(r.resultado || '').startsWith('No validado') || r.estatusSAT === 'Rate Limited')
-    );
+  const runSatQueue = async (manual: boolean) => {
+    if (satRunningRef.current) return;
+    const attempted = new Set<string>();
+    let pendientes = satPending(latestResultsRef.current, attempted);
     if (pendientes.length === 0) {
-      toast.info('No hay CFDI pendientes de validar con el SAT.');
+      if (manual) toast.info('No hay CFDI pendientes de validar con el SAT.');
       return;
     }
-
+    satRunningRef.current = true;
     setIsBulkRevalidating(true);
-    satQueue.resetCounts(pendientes.length);
-    const unsubscribe = satQueue.onCountsChange(counts => setSatBulkCounts({ ...counts }));
-    toast.loading(`Reintentando ${pendientes.length.toLocaleString()} CFDI pendientes ante el SAT...`, { id: 'bulk-sat-retry' });
-
+    let resueltos = 0;
+    let consultados = 0;
+    let sinPersistir = 0;
     try {
-      const outcomes = await Promise.all(pendientes.map(async (row) => {
-        const status = await checkCFDIStatusSAT(row.uuid, row.rfcEmisor, row.rfcReceptor, row.total);
-        return { uuid: row.uuid, status };
-      }));
-
-      const byUuid = new Map(outcomes.map(o => [o.uuid, o.status]));
-      await applySatRevalidationUpdates(byUuid);
-
-      const resueltos = outcomes.filter(o => o.status.estado === 'Vigente' || o.status.estado === 'Cancelado').length;
-      toast.success(`Reintento completado: ${resueltos}/${pendientes.length} CFDI obtuvieron un estatus definitivo del SAT.`, { id: 'bulk-sat-retry', duration: 8000 });
+      // Si llegan cargas nuevas mientras corre, sus pendientes se toman en la siguiente vuelta.
+      while (pendientes.length) {
+        satQueue.resetCounts(pendientes.length);
+        const unsubscribe = satQueue.onCountsChange(counts => setSatBulkCounts({ ...counts }));
+        try {
+          for (let i = 0; i < pendientes.length; i += SAT_CHUNK) {
+            const chunk = pendientes.slice(i, i + SAT_CHUNK);
+            chunk.forEach(row => attempted.add(row.uuid));
+            const outcomes = await Promise.all(chunk.map(async (row) => ({
+              uuid: row.uuid,
+              status: await checkCFDIStatusSAT(row.uuid, row.rfcEmisor, row.rfcReceptor, row.total),
+            })));
+            outcomes.forEach(({ uuid, status }) => {
+              if (status.estado !== 'Vigente' && status.estado !== 'Cancelado') return;
+              resueltos++;
+              try { localStorage.setItem(`cfdi-status-${uuid}`, JSON.stringify(status)); } catch { /* caché opcional */ }
+            });
+            consultados += chunk.length;
+            sinPersistir += chunk.length;
+            const persist = sinPersistir >= SAT_PERSIST_EVERY;
+            if (persist) sinPersistir = 0;
+            await applySatRevalidationUpdates(new Map(outcomes.map(o => [o.uuid, o.status])), persist);
+          }
+        } finally {
+          unsubscribe();
+        }
+        pendientes = satPending(latestResultsRef.current, attempted);
+      }
+      if (currentCompany?.id) await persistRevalidatedSession(currentCompany.id, latestResultsRef.current);
+      if (lastHistoryIdRef.current) await saveToHistory(latestResultsRef.current, lastHistoryIdRef.current);
+      toast.success(`Consulta SAT terminada: ${resueltos.toLocaleString()} de ${consultados.toLocaleString()} CFDI con estatus definitivo (Vigente o Cancelado).`, { duration: 8000 });
     } catch (error) {
       console.error('Bulk SAT revalidation error:', error);
-      toast.error('Error inesperado durante el reintento masivo.', { id: 'bulk-sat-retry' });
+      toast.error('Error inesperado durante la consulta SAT; los CFDI sin respuesta quedan como "No validado SAT".');
     } finally {
-      unsubscribe();
+      satRunningRef.current = false;
       setIsBulkRevalidating(false);
       setSatBulkCounts(null);
     }
-
   };
+  const runSatInBackground = () => runSatQueue(false);
+  const handleRevalidateAllPending = () => runSatQueue(true);
 
 
 
@@ -1596,6 +1619,21 @@ export default function Dashboard() {
 
 
         {/* ── Indicador de progreso masivo ── */}
+
+        {isBulkRevalidating && satBulkCounts && satBulkCounts.total > 0 && (
+          <div className="mb-6 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-4 shadow-sm" data-testid="sat-background">
+            <div className="flex justify-between text-sm font-semibold text-slate-700 dark:text-slate-200">
+              <span>Consultando estatus SAT en segundo plano · puedes revisar y exportar mientras tanto</span>
+              <span>{satBulkCounts.processed.toLocaleString()} / {satBulkCounts.total.toLocaleString()}</span>
+            </div>
+            <div className="mt-2 h-2 rounded-full bg-slate-100 dark:bg-slate-700 overflow-hidden">
+              <div className="h-full bg-primary transition-all" style={{ width: `${Math.round((satBulkCounts.processed / satBulkCounts.total) * 100)}%` }} />
+            </div>
+            <p className="mt-1 text-xs text-slate-500">
+              Vigentes {satBulkCounts.vigentes.toLocaleString()} · Cancelados {satBulkCounts.cancelados.toLocaleString()} · No encontrados {satBulkCounts.noEncontrados.toLocaleString()} · Sin respuesta {(satBulkCounts.timeoutOrError + satBulkCounts.rateLimited).toLocaleString()}
+            </p>
+          </div>
+        )}
 
         {isValidating && progress.total > 0 && (
 

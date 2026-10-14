@@ -16,26 +16,35 @@ global.IS_REACT_ACT_ENVIRONMENT = true;
 // Prueba de control: el MISMO conjunto de XML cargado como carpeta con
 // subcarpetas, como ZIP y como archivos sueltos debe dar exactamente los mismos
 // totales. Por omisión usa los XML de prueba del repo; con datos reales:
-//   CONTROL_XML_DIR=C:/ruta/XMLs CONTROL_MONTH=2026-07 CONTROL_RFC=XAXX010101000 npx vitest run intakeControl
-const REAL_DIR = process.env.CONTROL_XML_DIR;
+//   CONTROL_XML_DIR="C:/XMLs/emitidos/2026/07 JUL;C:/XMLs/recibidos/2026/07 JUL" CONTROL_RFC=XAXX010101000 npx vitest run intakeControl
+// (varias carpetas separadas por ";", se recorren con sus subcarpetas; CONTROL_MONTH=2026-07 filtra por Fecha).
+const REAL_DIRS = (process.env.CONTROL_XML_DIR || '').split(';').map(dir => dir.trim()).filter(Boolean);
 const MONTH = process.env.CONTROL_MONTH;
 const RFC = process.env.CONTROL_RFC || 'TME960709LR2';
 const FIXTURES = path.resolve(__dirname, '../../../tests/fixtures');
 
-function loadXmls(): { name: string; bytes: Uint8Array }[] {
-  if (REAL_DIR) {
+type Xml = { name: string; bytes: Uint8Array; rel?: string };
+const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true })
+  .flatMap(entry => entry.isDirectory() ? walk(path.join(dir, entry.name)) : [path.join(dir, entry.name)]);
+
+function loadXmls(): Xml[] {
+  if (REAL_DIRS.length) {
     const fecha = MONTH ? new RegExp(`\\sFecha\\s*=\\s*"${MONTH}`) : null;
-    return fs.readdirSync(REAL_DIR).filter(name => /\.xml$/i.test(name)).flatMap(name => {
-      const bytes = fs.readFileSync(path.join(REAL_DIR, name));
-      return !fecha || fecha.test(bytes.subarray(0, 4096).toString('latin1')) ? [{ name, bytes: new Uint8Array(bytes) }] : [];
-    });
+    return REAL_DIRS.flatMap(root => walk(root).filter(file => /\.xml$/i.test(file)).flatMap(file => {
+      const bytes = fs.readFileSync(file);
+      if (fecha && !fecha.test(bytes.subarray(0, 4096).toString('latin1'))) return [];
+      // Ruta real relativa: <carpeta elegida>/<subcarpetas>/archivo.xml
+      const rel = path.join(path.basename(path.dirname(root)), path.basename(root), path.relative(root, file)).split(path.sep).join('/');
+      return [{ name: path.basename(file), bytes: new Uint8Array(bytes), rel }];
+    }));
   }
   return ['stress-xmls', 'demo-xmls'].flatMap(dir => fs.readdirSync(path.join(FIXTURES, dir)).slice(0, 400)
     .map(name => ({ name, bytes: new Uint8Array(fs.readFileSync(path.join(FIXTURES, dir, name))) })));
 }
 
-// Carpeta de 3 niveles: empresa/año-mes/tipo/archivo.xml, a partir del propio XML.
-const folderPath = (name: string, bytes: Uint8Array) => {
+// Con datos reales se usa su ruta real; con fixtures, carpeta de 3 niveles a partir del propio XML.
+const folderPath = (name: string, bytes: Uint8Array, rel?: string) => {
+  if (rel) return rel;
   const head = Buffer.from(bytes.subarray(0, 4096)).toString('latin1');
   const month = /\sFecha\s*=\s*"(\d{4}-\d{2})/.exec(head)?.[1] || 'sin-fecha';
   const tipo = /\sTipoDeComprobante\s*=\s*"(\w)/.exec(head)?.[1] || 'X';
@@ -106,23 +115,33 @@ describe('prueba de control: carpeta vs ZIP vs archivos sueltos', () => {
     expect(xmls.length).toBeGreaterThan(0);
 
     const loose = xmls.map(({ name, bytes }) => new File([bytes], name));
-    const folder = xmls.map(({ name, bytes }) => {
+    const folder = xmls.map(({ name, bytes, rel }) => {
       const file = new File([bytes], name);
-      Object.defineProperty(file, 'webkitRelativePath', { value: folderPath(name, bytes) });
+      Object.defineProperty(file, 'webkitRelativePath', { value: folderPath(name, bytes, rel) });
       return file;
     });
-    const zip = new File([zipSync(Object.fromEntries(xmls.map(({ name, bytes }) => [folderPath(name, bytes), bytes])))], 'descarga-sat.zip');
+    const zip = new File([zipSync(Object.fromEntries(xmls.map(({ name, bytes, rel }) => [folderPath(name, bytes, rel), bytes])))], 'descarga-sat.zip');
 
+    const timed = async (label: string, run: () => Promise<UploadedFile[]>) => {
+      const started = Date.now();
+      const delivered = await run();
+      console.log(`[control] ${label}: carga leída en ${((Date.now() - started) / 1000).toFixed(1)} s`);
+      return delivered;
+    };
     const modes = {
-      sueltos: await intake('xml-upload', loose),
-      carpeta: await intake('xml-folder-upload', folder),
-      zip: await intake('xml-upload', [zip]),
+      sueltos: await timed('sueltos', () => intake('xml-upload', loose)),
+      carpeta: await timed('carpeta', () => intake('xml-folder-upload', folder)),
+      zip: await timed('zip', () => intake('xml-upload', [zip])),
     };
     const table: Record<string, ReturnType<typeof totals> & { entregados: number }> = {};
-    for (const [mode, delivered] of Object.entries(modes)) table[mode] = { entregados: delivered.length, ...totals(await validate(delivered)) };
+    for (const [mode, delivered] of Object.entries(modes)) {
+      const started = Date.now();
+      table[mode] = { entregados: delivered.length, ...totals(await validate(delivered)) };
+      console.log(`[control] ${mode}: validado en ${((Date.now() - started) / 1000).toFixed(1)} s`);
+    }
 
     const printable = Object.fromEntries(Object.entries(table).map(([k, { uuids, ...rest }]) => [k, rest]));
-    console.log(`[control] ${REAL_DIR ? `${REAL_DIR} ${MONTH || ''}` : 'fixtures del repo'} — ${xmls.length} XML`);
+    console.log(`[control] ${REAL_DIRS.length ? `${REAL_DIRS.join(' + ')} ${MONTH || ''}` : 'fixtures del repo'} — ${xmls.length} XML`);
     console.table(printable);
     expect(table.carpeta).toEqual(table.sueltos);
     expect(table.zip).toEqual(table.sueltos);
@@ -133,5 +152,5 @@ describe('prueba de control: carpeta vs ZIP vs archivos sueltos', () => {
     const satBodies = requests.filter(r => r.url.includes('sat-proxy'));
     expect(satBodies.every(r => !/Comprobante|Concepto/.test(r.body))).toBe(true);
     console.log(`[control] solicitudes a la red: ${requests.length} (${satBodies.length} consultas SAT, ${requests.length - satBodies.length} otras); con contenido XML: ${leaks.length}`);
-  }, 900_000);
+  }, Number(process.env.CONTROL_TIMEOUT_MS) || 900_000);
 });
