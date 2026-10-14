@@ -1,6 +1,7 @@
 // Entrada de archivos para el análisis: archivos sueltos, carpetas con
-// subcarpetas (selector o arrastre). Todo ocurre en el navegador; nada se
-// envía a la red.
+// subcarpetas (selector o arrastre) y ZIP. Todo ocurre en el navegador; nada
+// se envía a la red.
+import { unzip, unzipSync } from 'fflate';
 
 /** Archivo encontrado en la selección, con su ruta relativa (carpeta/subcarpeta/archivo). */
 export interface IntakeSource {
@@ -68,4 +69,83 @@ export async function sourcesFromDataTransfer(dt: DataTransfer): Promise<{ sourc
   const unreadable: string[] = [];
   for (const entry of entries) await walk(entry!, '', sources, unreadable);
   return { sources, unreadable };
+}
+
+export const isZipName = (name: string) => /\.zip$/i.test(name);
+
+/** Bytes de un archivo; usa FileReader donde Blob.arrayBuffer no existe. */
+export function readBytes(file: Blob): Promise<Uint8Array> {
+  if (typeof file.arrayBuffer === 'function') return file.arrayBuffer().then(buffer => new Uint8Array(buffer));
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+/** true si alguna entrada del directorio central tiene el bit de cifrado (ZIP con contraseña). */
+export function zipIsEncrypted(bytes: Uint8Array): boolean {
+  const u16 = (i: number) => bytes[i] | (bytes[i + 1] << 8);
+  const u32 = (i: number) => (u16(i) | (u16(i + 2) << 16)) >>> 0;
+  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i--) {
+    if (u32(i) !== 0x06054b50) continue;
+    let p = u32(i + 16);
+    for (let n = u16(i + 10); n > 0 && p + 46 <= bytes.length && u32(p) === 0x02014b50; n--) {
+      if (u16(p + 8) & 1) return true;
+      p += 46 + u16(p + 28) + u16(p + 30) + u16(p + 32);
+    }
+    return false;
+  }
+  return false;
+}
+
+export interface ZipExtraction {
+  xmls: { path: string; bytes: Uint8Array }[];
+  opened: string[];
+  failed: { path: string; reason: string }[];
+  ignoredNested: string[];
+  ignoredNonXml: number;
+}
+
+const unzipEntries = (bytes: Uint8Array, filter: (file: { name: string }) => boolean) =>
+  // Asíncrono (Worker interno de fflate) para no congelar la pantalla; síncrono donde no hay Worker.
+  typeof Worker === 'undefined'
+    ? Promise.resolve(unzipSync(bytes, { filter }))
+    : new Promise<Record<string, Uint8Array>>((resolve, reject) => unzip(bytes, { filter }, (err, data) => (err ? reject(err) : resolve(data))));
+
+/**
+ * XML de un ZIP, incluidas sus subcarpetas internas. Un ZIP dentro del ZIP se
+ * abre un nivel más; más profundo se reporta como ignorado. Un ZIP dañado o
+ * cifrado no detiene la carga: queda en `failed` con el motivo.
+ */
+export async function extractXmlFromZip(bytes: Uint8Array, zipPath: string, depth = 0, out?: ZipExtraction): Promise<ZipExtraction> {
+  const result = out ?? { xmls: [], opened: [], failed: [], ignoredNested: [], ignoredNonXml: 0 };
+  if (zipIsEncrypted(bytes)) {
+    result.failed.push({ path: zipPath, reason: 'ZIP protegido con contraseña' });
+    return result;
+  }
+  let entries: Record<string, Uint8Array>;
+  try {
+    entries = await unzipEntries(bytes, file => {
+      if (file.name.endsWith('/')) return false;
+      if (isXmlName(file.name)) return true;
+      if (isZipName(file.name)) {
+        if (depth === 0) return true;
+        result.ignoredNested.push(`${zipPath}/${file.name}`);
+        return false;
+      }
+      result.ignoredNonXml++;
+      return false;
+    });
+  } catch (error) {
+    result.failed.push({ path: zipPath, reason: `ZIP dañado o ilegible (${(error as Error)?.message || 'error desconocido'})` });
+    return result;
+  }
+  result.opened.push(zipPath);
+  for (const [name, data] of Object.entries(entries).sort(([a], [b]) => a.localeCompare(b))) {
+    if (isXmlName(name)) result.xmls.push({ path: `${zipPath}/${name}`, bytes: data });
+    else await extractXmlFromZip(data, `${zipPath}/${name}`, depth + 1, result);
+  }
+  return result;
 }

@@ -3,7 +3,7 @@ import { Upload, X, CheckCircle2, AlertCircle, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { isXmlName, sourcesFromDataTransfer, sourcesFromFileList, type IntakeSource } from "@/lib/xmlIntake";
+import { extractXmlFromZip, isXmlName, isZipName, readBytes, sourcesFromDataTransfer, sourcesFromFileList, type IntakeSource } from "@/lib/xmlIntake";
 
 export interface UploadedFile {
   id: string;
@@ -27,10 +27,19 @@ interface FileReadTask {
 
 const MAX_CONCURRENT_FILE_READS = 4;
 
+interface ZipStatus {
+  opened: string[];
+  failed: { path: string; reason: string }[];
+  ignoredNested: string[];
+}
+const EMPTY_ZIP_STATUS: ZipStatus = { opened: [], failed: [], ignoredNested: [] };
+
 export default function UploadZone({ onFilesReady, isValidating, hasValidatedResults }: UploadZoneProps) {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const [ignoredCount, setIgnoredCount] = useState(0);
+  const [zipStatus, setZipStatus] = useState<ZipStatus>(EMPTY_ZIP_STATUS);
+  const [openingZips, setOpeningZips] = useState(0);
   const nextFileIdRef = useRef(0);
   const readQueueRef = useRef<FileReadTask[]>([]);
   const activeReadersRef = useRef(0);
@@ -80,15 +89,47 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
   }, []);
   pumpReadQueueRef.current = pumpReadQueue;
 
-  // Archivos sueltos, carpetas (con subcarpetas) o arrastre: solo se leen los
-  // .xml (sin importar mayúsculas); lo demás (PDF, TXT…) se ignora y se cuenta.
+  // Abre cada ZIP en el navegador y agrega sus XML ya leídos a la lista.
+  const addZips = useCallback(async (zips: IntakeSource[]) => {
+    if (!zips.length) return;
+    setOpeningZips((prev) => prev + zips.length);
+    for (const { file, path } of zips) {
+      let extraction;
+      try {
+        extraction = await extractXmlFromZip(await readBytes(file), path);
+      } catch (error) {
+        extraction = { xmls: [], opened: [], failed: [{ path, reason: `No se pudo leer el ZIP (${(error as Error)?.message || "error desconocido"})` }], ignoredNested: [], ignoredNonXml: 0 };
+      }
+      const decoder = new TextDecoder("utf-8");
+      const zipFiles: UploadedFile[] = extraction.xmls.map(({ path: xmlPath, bytes }) => ({
+        id: `${Date.now()}-${nextFileIdRef.current++}`,
+        name: xmlPath,
+        size: bytes.length,
+        status: "pending",
+        content: decoder.decode(bytes),
+      }));
+      setFiles((prev) => [...prev, ...zipFiles]);
+      setIgnoredCount((prev) => prev + extraction.ignoredNonXml);
+      setZipStatus((prev) => ({
+        opened: [...prev.opened, ...extraction.opened],
+        failed: [...prev.failed, ...extraction.failed],
+        ignoredNested: [...prev.ignoredNested, ...extraction.ignoredNested],
+      }));
+      setOpeningZips((prev) => prev - 1);
+    }
+  }, []);
+
+  // Archivos sueltos, carpetas (con subcarpetas), ZIP o arrastre: solo se leen
+  // los .xml (sin importar mayúsculas); lo demás (PDF, TXT…) se ignora y se cuenta.
   const handleFiles = useCallback(
     (sources: IntakeSource[]) => {
       const newFiles: UploadedFile[] = [];
       const readTasks: FileReadTask[] = [];
       let ignored = 0;
 
+      void addZips(sources.filter(({ file }) => isZipName(file.name)));
       for (const { file, path } of sources) {
+        if (isZipName(file.name)) continue;
         if (!isXmlName(file.name)) {
           ignored++;
           continue;
@@ -108,7 +149,7 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
       readQueueRef.current.push(...readTasks);
       pumpReadQueueRef.current();
     },
-    []
+    [addZips]
   );
 
   const handleDrag = (e: React.DragEvent<HTMLDivElement>) => {
@@ -147,6 +188,7 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
     if (pendingFiles.length > 0) {
       onFilesReady(pendingFiles as UploadedFile[]);
       setIgnoredCount(0);
+      setZipStatus(EMPTY_ZIP_STATUS);
       // ✅ PRODUCCIÓN: Limpiar archivos después de enviarlos para liberar memoria
       // No mantener XMLs completos en memoria después de procesarlos
       setFiles([]);
@@ -203,7 +245,7 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
   // Ahora se exige que TODOS los archivos hayan terminado de leerse (contenido
   // listo o marcados en error) antes de habilitar el botón.
   const allFilesSettled = files.every((f) => f.status === "error" || !!f.content);
-  const readyToValidate = validFiles.length > 0 && allFilesSettled && !isValidating;
+  const readyToValidate = validFiles.length > 0 && allFilesSettled && openingZips === 0 && !isValidating;
   const shouldDisableValidate = !readyToValidate || (hasValidatedResults && files.length === 0);
 
   return (
@@ -231,7 +273,7 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
         >
           <Upload className="w-12 h-12 mx-auto mb-3 text-slate-400" />
           <p className="text-slate-700 font-medium mb-2">
-            {isValidating ? "Procesando XMLs..." : "Arrastra tus archivos XML o carpetas aquí"}
+            {isValidating ? "Procesando XMLs..." : "Arrastra tus archivos XML, ZIP o carpetas aquí"}
           </p>
           <p className="text-slate-500 text-sm mb-4">o</p>
           <div className="flex flex-wrap justify-center gap-3">
@@ -239,7 +281,7 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
               id="xml-upload"
               type="file"
               multiple
-              accept=".xml"
+              accept=".xml,.zip"
               onChange={handleFileInput}
               className="hidden"
               disabled={isValidating}
@@ -251,7 +293,7 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
                 asChild
                 disabled={isValidating}
               >
-                <span>Seleccionar archivos XML</span>
+                <span>Seleccionar archivos XML o ZIP</span>
               </Button>
             </label>
             <input
@@ -274,6 +316,24 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
               </Button>
             </label>
           </div>
+          {openingZips > 0 && (
+            <p className="text-xs text-slate-500 mt-3">Abriendo {openingZips} ZIP…</p>
+          )}
+          {zipStatus.opened.length > 0 && (
+            <p className="text-xs text-slate-500 mt-3">
+              {zipStatus.opened.length.toLocaleString()} ZIP abierto{zipStatus.opened.length !== 1 ? "s" : ""}.
+            </p>
+          )}
+          {zipStatus.failed.length > 0 && (
+            <div className="text-xs text-red-700 mt-2">
+              {zipStatus.failed.map((zip) => <p key={zip.path}>ZIP con error: {zip.path} — {zip.reason}</p>)}
+            </div>
+          )}
+          {zipStatus.ignoredNested.length > 0 && (
+            <p className="text-xs text-amber-700 mt-2">
+              {zipStatus.ignoredNested.length} ZIP anidado{zipStatus.ignoredNested.length !== 1 ? "s" : ""} en más de un nivel ignorado{zipStatus.ignoredNested.length !== 1 ? "s" : ""}: {zipStatus.ignoredNested.join(", ")}
+            </p>
+          )}
           {ignoredCount > 0 && (
             <p className="text-xs text-slate-500 mt-3">
               {ignoredCount.toLocaleString()} archivo{ignoredCount !== 1 ? "s" : ""} no XML (PDF, TXT…) ignorado{ignoredCount !== 1 ? "s" : ""}.
@@ -360,7 +420,7 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
             {files.length > 0 && (
               <Button
                 variant="outline"
-                onClick={() => { setFiles([]); setIgnoredCount(0); }}
+                onClick={() => { setFiles([]); setIgnoredCount(0); setZipStatus(EMPTY_ZIP_STATUS); }}
                 disabled={isValidating}
               >
                 Limpiar
