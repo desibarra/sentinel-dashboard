@@ -3,6 +3,7 @@ import { Upload, X, CheckCircle2, AlertCircle, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { isXmlName, sourcesFromDataTransfer, sourcesFromFileList, type IntakeSource } from "@/lib/xmlIntake";
 
 export interface UploadedFile {
   id: string;
@@ -29,6 +30,7 @@ const MAX_CONCURRENT_FILE_READS = 4;
 export default function UploadZone({ onFilesReady, isValidating, hasValidatedResults }: UploadZoneProps) {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [dragActive, setDragActive] = useState(false);
+  const [ignoredCount, setIgnoredCount] = useState(0);
   const nextFileIdRef = useRef(0);
   const readQueueRef = useRef<FileReadTask[]>([]);
   const activeReadersRef = useRef(0);
@@ -78,35 +80,30 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
   }, []);
   pumpReadQueueRef.current = pumpReadQueue;
 
+  // Archivos sueltos, carpetas (con subcarpetas) o arrastre: solo se leen los
+  // .xml (sin importar mayúsculas); lo demás (PDF, TXT…) se ignora y se cuenta.
   const handleFiles = useCallback(
-    (fileList: FileList) => {
+    (sources: IntakeSource[]) => {
       const newFiles: UploadedFile[] = [];
       const readTasks: FileReadTask[] = [];
+      let ignored = 0;
 
-      for (let i = 0; i < fileList.length; i++) {
-        const file = fileList[i];
-        const fileId = `${Date.now()}-${nextFileIdRef.current++}`;
-
-        if (!file.name.endsWith(".xml")) {
-          newFiles.push({
-            id: fileId,
-            name: file.name,
-            size: file.size,
-            status: "error",
-            error: "Solo se aceptan archivos .xml",
-          });
+      for (const { file, path } of sources) {
+        if (!isXmlName(file.name)) {
+          ignored++;
           continue;
         }
-
+        const fileId = `${Date.now()}-${nextFileIdRef.current++}`;
         newFiles.push({
           id: fileId,
-          name: file.name,
+          name: path,
           size: file.size,
           status: "pending",
         });
         readTasks.push({ file, uploadedFileId: fileId });
       }
 
+      setIgnoredCount((prev) => prev + ignored);
       setFiles((prev) => [...prev, ...newFiles]);
       readQueueRef.current.push(...readTasks);
       pumpReadQueueRef.current();
@@ -124,17 +121,20 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
     }
   };
 
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+  const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    handleFiles(e.dataTransfer.files);
+    // Recorre carpetas arrastradas a cualquier profundidad.
+    const { sources } = await sourcesFromDataTransfer(e.dataTransfer);
+    handleFiles(sources);
   };
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
-      handleFiles(e.target.files);
+      handleFiles(sourcesFromFileList(e.target.files));
     }
+    e.target.value = ""; // permite volver a elegir la misma carpeta o archivo
   };
 
   const removeFile = (id: string) => {
@@ -146,6 +146,7 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
     console.log("UploadZone handleValidate called! pendingFiles length:", pendingFiles.length);
     if (pendingFiles.length > 0) {
       onFilesReady(pendingFiles as UploadedFile[]);
+      setIgnoredCount(0);
       // ✅ PRODUCCIÓN: Limpiar archivos después de enviarlos para liberar memoria
       // No mantener XMLs completos en memoria después de procesarlos
       setFiles([]);
@@ -230,10 +231,10 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
         >
           <Upload className="w-12 h-12 mx-auto mb-3 text-slate-400" />
           <p className="text-slate-700 font-medium mb-2">
-            {isValidating ? "Procesando XMLs..." : "Arrastra tus archivos XML aquí"}
+            {isValidating ? "Procesando XMLs..." : "Arrastra tus archivos XML o carpetas aquí"}
           </p>
           <p className="text-slate-500 text-sm mb-4">o</p>
-          <div>
+          <div className="flex flex-wrap justify-center gap-3">
             <input
               id="xml-upload"
               type="file"
@@ -253,7 +254,31 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
                 <span>Seleccionar archivos XML</span>
               </Button>
             </label>
+            <input
+              id="xml-folder-upload"
+              type="file"
+              multiple
+              {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+              onChange={handleFileInput}
+              className="hidden"
+              disabled={isValidating}
+            />
+            <label htmlFor="xml-folder-upload">
+              <Button
+                variant="outline"
+                className="cursor-pointer"
+                asChild
+                disabled={isValidating}
+              >
+                <span>Seleccionar carpeta</span>
+              </Button>
+            </label>
           </div>
+          {ignoredCount > 0 && (
+            <p className="text-xs text-slate-500 mt-3">
+              {ignoredCount.toLocaleString()} archivo{ignoredCount !== 1 ? "s" : ""} no XML (PDF, TXT…) ignorado{ignoredCount !== 1 ? "s" : ""}.
+            </p>
+          )}
         </div>
 
         {/* Mensaje de idempotencia */}
@@ -335,7 +360,7 @@ export default function UploadZone({ onFilesReady, isValidating, hasValidatedRes
             {files.length > 0 && (
               <Button
                 variant="outline"
-                onClick={() => setFiles([])}
+                onClick={() => { setFiles([]); setIgnoredCount(0); }}
                 disabled={isValidating}
               >
                 Limpiar

@@ -167,11 +167,13 @@ describe('UploadZone: no debe perder archivos por condición de carrera en FileR
     const erroresTotales = erroresFileReader + rechazadosPorExtension;
     const mostradosAlUsuario = container.querySelectorAll('.space-y-2.max-h-48 > div').length;
 
-    expect(mostradosAlUsuario).toBe(seleccionados); // ninguno desaparece antes del clic
+    // Los no-XML no se listan: se ignoran y quedan contados en el aviso.
+    expect(mostradosAlUsuario).toBe(seleccionados - rechazadosPorExtension); // ningún XML desaparece antes del clic
     expect(lecturasExitosas + erroresTotales).toBe(seleccionados); // invariante pedida
-    // Los 2 badges "Error" visibles corresponden a b.xml (FileReader) y nota.txt (extensión).
+    expect(container.textContent).toContain('1 archivo no XML (PDF, TXT…) ignorado');
+    // El badge "Error" visible corresponde a b.xml (FileReader).
     const errorBadges = Array.from(container.querySelectorAll('span')).filter(s => s.textContent?.trim() === 'Error');
-    expect(errorBadges.length).toBe(erroresTotales);
+    expect(errorBadges.length).toBe(erroresFileReader);
 
     // Clic en "Iniciar Validación": debe entregar EXACTAMENTE los archivos con
     // contenido listo (a.xml y c.xml) — ninguno de los 4 originales debe
